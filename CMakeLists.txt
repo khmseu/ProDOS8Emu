@@ -36,7 +36,7 @@ target_compile_options(prodos8emu PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
 )
 
-# Test executable
+# Test executable - smoke tests
 add_executable(prodos8emu_tests
     tests/smoke_test.cpp
 )
@@ -48,3 +48,15 @@ target_link_libraries(prodos8emu_tests
 
 # Register tests with CTest
 add_test(NAME prodos8emu_tests COMMAND prodos8emu_tests)
+
+# Test executable - memory tests
+add_executable(prodos8emu_memory_tests
+    tests/memory_test.cpp
+)
+
+target_link_libraries(prodos8emu_memory_tests 
+    PRIVATE 
+        prodos8emu
+)
+
+add_test(NAME prodos8emu_memory_tests COMMAND prodos8emu_memory_tests)
