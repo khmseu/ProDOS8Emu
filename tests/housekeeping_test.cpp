@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <iostream>
 
+#include "prodos8emu/access_byte.hpp"
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/mli.hpp"
@@ -825,6 +826,210 @@ int main() {
 
     // Restore permissions for cleanup
     fs::permissions(readOnlyVol, fs::perms::owner_all, fs::perm_options::replace);
+  }
+
+  // Test: Access byte codec - format and parse
+  {
+    std::cout << "\n=== Access Byte Codec Tests ===\n";
+
+    // Test: Format byte to string - example cases from requirements
+    {
+      std::cout << "Test: Format 0xC3 => \"dn-..-wr\"\n";
+      std::string result = prodos8emu::format_access_byte(0xC3);
+      if (result != "dn-..-wr") {
+        std::cerr << "FAIL: Expected \"dn-..-wr\", got \"" << result << "\"\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Format 0xC3\n";
+      }
+    }
+
+    {
+      std::cout << "Test: Format 0xE3 => \"dnb..-wr\"\n";
+      std::string result = prodos8emu::format_access_byte(0xE3);
+      if (result != "dnb..-wr") {
+        std::cerr << "FAIL: Expected \"dnb..-wr\", got \"" << result << "\"\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Format 0xE3\n";
+      }
+    }
+
+    // Test: Format all bits clear
+    {
+      std::cout << "Test: Format 0x00 => \"---..---\"\n";
+      std::string result = prodos8emu::format_access_byte(0x00);
+      if (result != "---..---") {
+        std::cerr << "FAIL: Expected \"---..---\", got \"" << result << "\"\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Format 0x00\n";
+      }
+    }
+
+    // Test: Format all defined bits set (bits 7,6,5,2,1,0)
+    {
+      std::cout << "Test: Format 0xE7 => \"dnb..iwr\"\n";
+      std::string result = prodos8emu::format_access_byte(0xE7);
+      if (result != "dnb..iwr") {
+        std::cerr << "FAIL: Expected \"dnb..iwr\", got \"" << result << "\"\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Format 0xE7\n";
+      }
+    }
+
+    // Test: Format with reserved bits set (should still show as '.')
+    {
+      std::cout << "Test: Format 0xFF => \"dnb..iwr\" (reserved bits ignored in display)\n";
+      std::string result = prodos8emu::format_access_byte(0xFF);
+      if (result != "dnb..iwr") {
+        std::cerr << "FAIL: Expected \"dnb..iwr\", got \"" << result << "\"\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Format 0xFF\n";
+      }
+    }
+
+    // Test: Parse valid string - "dn-..-wr" => 0xC3
+    {
+      std::cout << "Test: Parse \"dn-..-wr\" => 0xC3\n";
+      uint8_t result;
+      bool    ok = prodos8emu::parse_access_byte("dn-..-wr", result);
+      if (!ok) {
+        std::cerr << "FAIL: Parse failed\n";
+        failures++;
+      } else if (result != 0xC3) {
+        std::cerr << "FAIL: Expected 0xC3, got 0x" << std::hex << (int)result << "\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Parse \"dn-..-wr\"\n";
+      }
+    }
+
+    // Test: Parse valid string - "dnb..-wr" => 0xE3
+    {
+      std::cout << "Test: Parse \"dnb..-wr\" => 0xE3\n";
+      uint8_t result;
+      bool    ok = prodos8emu::parse_access_byte("dnb..-wr", result);
+      if (!ok) {
+        std::cerr << "FAIL: Parse failed\n";
+        failures++;
+      } else if (result != 0xE3) {
+        std::cerr << "FAIL: Expected 0xE3, got 0x" << std::hex << (int)result << "\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Parse \"dnb..-wr\"\n";
+      }
+    }
+
+    // Test: Parse all bits clear
+    {
+      std::cout << "Test: Parse \"---..---\" => 0x00\n";
+      uint8_t result;
+      bool    ok = prodos8emu::parse_access_byte("---..---", result);
+      if (!ok) {
+        std::cerr << "FAIL: Parse failed\n";
+        failures++;
+      } else if (result != 0x00) {
+        std::cerr << "FAIL: Expected 0x00, got 0x" << std::hex << (int)result << "\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Parse \"---..---\"\n";
+      }
+    }
+
+    // Test: Parse all defined bits set
+    {
+      std::cout << "Test: Parse \"dnb..iwr\" => 0xE7\n";
+      uint8_t result;
+      bool    ok = prodos8emu::parse_access_byte("dnb..iwr", result);
+      if (!ok) {
+        std::cerr << "FAIL: Parse failed\n";
+        failures++;
+      } else if (result != 0xE7) {
+        std::cerr << "FAIL: Expected 0xE7, got 0x" << std::hex << (int)result << "\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Parse \"dnb..iwr\"\n";
+      }
+    }
+
+    // Test: Roundtrip various values
+    {
+      std::cout << "Test: Roundtrip tests\n";
+      uint8_t testValues[] = {0x00, 0xC3, 0xE3, 0xE7, 0x01, 0x80, 0x43, 0x18};
+      for (uint8_t val : testValues) {
+        std::string formatted = prodos8emu::format_access_byte(val);
+        uint8_t     parsed;
+        bool        ok = prodos8emu::parse_access_byte(formatted, parsed);
+        // Note: reserved bits (3,4) should be cleared after roundtrip
+        uint8_t expected = val & 0xE7;  // Clear bits 3 and 4
+        if (!ok) {
+          std::cerr << "FAIL: Roundtrip parse failed for 0x" << std::hex << (int)val << "\n";
+          failures++;
+        } else if (parsed != expected) {
+          std::cerr << "FAIL: Roundtrip mismatch for 0x" << std::hex << (int)val
+                    << " (formatted: \"" << formatted << "\"), expected 0x" << (int)expected
+                    << ", got 0x" << (int)parsed << "\n";
+          failures++;
+        }
+      }
+      std::cout << "PASS: Roundtrip tests\n";
+    }
+
+    // Test: Parse invalid inputs - wrong length
+    {
+      std::cout << "Test: Parse invalid - wrong length\n";
+      uint8_t result;
+      bool    ok = prodos8emu::parse_access_byte("dn-..-w", result);  // 7 chars
+      if (ok) {
+        std::cerr << "FAIL: Parse should reject string with wrong length\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Rejects wrong length\n";
+      }
+    }
+
+    // Test: Parse invalid inputs - wrong character at defined position
+    {
+      std::cout << "Test: Parse invalid - wrong character\n";
+      uint8_t result;
+      bool    ok = prodos8emu::parse_access_byte("xn-..-wr", result);  // 'x' instead of 'd' or '-'
+      if (ok) {
+        std::cerr << "FAIL: Parse should reject invalid character\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Rejects invalid character\n";
+      }
+    }
+
+    // Test: Parse with lowercase (should reject - be strict)
+    {
+      std::cout << "Test: Parse invalid - lowercase\n";
+      uint8_t result;
+      bool    ok = prodos8emu::parse_access_byte("Dn-..-wr", result);  // capital D, lowercase n
+      if (ok) {
+        std::cerr << "FAIL: Parse should reject wrong case\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Rejects wrong case\n";
+      }
+    }
+
+    // Test: Parse reserved positions - must be '.', reject '-'
+    {
+      std::cout << "Test: Parse invalid - '-' in reserved positions\n";
+      uint8_t result;
+      // Try with '-' in reserved positions (bits 4 and 3) - should reject
+      bool ok = prodos8emu::parse_access_byte("dn---wr-", result);
+      if (ok) {
+        std::cerr << "FAIL: Should reject '-' in reserved positions\n";
+        failures++;
+      } else {
+        std::cout << "PASS: Rejects '-' in reserved positions\n";
+      }
+    }
   }
 
   // Clean up
