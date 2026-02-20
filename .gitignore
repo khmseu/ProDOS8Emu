@@ -27,3 +27,6 @@ CTestTestfile.cmake
 
 # Executables
 prodos8emu_tests
+
+#other
+third_party_docs/

@@ -3,6 +3,7 @@
 Phase 4 adds ProDOS 8 MLI housekeeping calls (CREATE/DESTROY/RENAME/SET_FILE_INFO/GET_FILE_INFO/ON_LINE) implemented against the banked-memory parameter blocks, backed by the host filesystem and ProDOS metadata xattrs.
 
 **Files created/changed:**
+
 - CMakeLists.txt
 - include/prodos8emu/mli.hpp
 - src/mli_housekeeping.cpp
@@ -10,6 +11,7 @@ Phase 4 adds ProDOS 8 MLI housekeeping calls (CREATE/DESTROY/RENAME/SET_FILE_INF
 - tests/housekeeping_test.cpp
 
 **Functions created/changed:**
+
 - prodos8emu::MLIContext::createCall
 - prodos8emu::MLIContext::destroyCall
 - prodos8emu::MLIContext::renameCall
@@ -19,6 +21,7 @@ Phase 4 adds ProDOS 8 MLI housekeeping calls (CREATE/DESTROY/RENAME/SET_FILE_INF
 - prodos8emu::prodos8_set_xattr (errno mapping improvement)
 
 **Tests created/changed:**
+
 - prodos8emu_housekeeping_tests
 
 **Review Status:** APPROVED with minor recommendations
