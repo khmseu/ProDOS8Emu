@@ -17,8 +17,8 @@ Phase 3 implements ProDOS pathname parsing/mapping foundations, adds `SET_PREFIX
 
 - prodos8emu::MLIContext::setPrefixCall
 - prodos8emu::MLIContext::getPrefixCall
-- prodos8emu::path::* (pathname normalize/validate/resolve helpers)
-- prodos8emu::xattr::*(user.prodos8.* helpers)
+- prodos8emu::path::\* (pathname normalize/validate/resolve helpers)
+- prodos8emu::xattr::\* (user.prodos8.\* helpers)
 
 **Tests created/changed:**
 
@@ -31,4 +31,4 @@ feat: add pathname, prefix, and xattr helpers
 
 - Implement SET_PREFIX/GET_PREFIX MLI calls with param blocks
 - Add ProDOS pathname normalization and host path mapping
-- Add mandatory user.prodos8.* xattr helper backend
+- Add mandatory user.prodos8.\* xattr helper backend

@@ -30,5 +30,5 @@ Phase 4 adds ProDOS 8 MLI housekeeping calls (CREATE/DESTROY/RENAME/SET_FILE_INF
 feat: implement ProDOS housekeeping MLI calls
 
 - Add CREATE/DESTROY/RENAME/SET_FILE_INFO/GET_FILE_INFO/ON_LINE calls
-- Persist ProDOS metadata via user.prodos8.* xattrs with safe defaults
+- Persist ProDOS metadata via user.prodos8.\* xattrs with safe defaults
 - Add housekeeping test suite and wire into CTest
