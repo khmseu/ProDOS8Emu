@@ -51,3 +51,5 @@ ctest --test-dir build     # Run all tests
 - Only commit redistributable content; see [third_party_docs/README.md](../third_party_docs/README.md)
 - If you fetch docs from the internet and it seems plausible you’ll need them again (or you already did), keep a copy here for future work (prefer URL-derived paths like existing content)
 - When you need information from the net, check `third_party_docs/` first to see if it’s already available locally
+- Catalog cached docs in [third_party_docs/index.txt](../third_party_docs/index.txt) so it’s easy to see what’s available at a glance
+- When adding new third-party docs, update [third_party_docs/index.txt](../third_party_docs/index.txt) with the new paths
