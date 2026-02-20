@@ -36,6 +36,8 @@ uint8_t prodos8_set_xattr(const std::string& path, const std::string& attrName, 
     // Map errno to ProDOS error
     if (errno == EACCES || errno == EPERM) {
         return ERR_ACCESS_ERROR;
+    } else if (errno == ENOSPC) {
+        return ERR_VOLUME_FULL;
     } else if (errno == ENOTSUP || errno == EOPNOTSUPP) {
         return ERR_IO_ERROR;
     } else {

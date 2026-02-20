@@ -17,6 +17,7 @@ enable_testing()
 # Library target
 add_library(prodos8emu 
     src/mli.cpp
+    src/mli_housekeeping.cpp
     src/path.cpp
     src/xattr.cpp
 )
@@ -74,3 +75,15 @@ target_link_libraries(prodos8emu_path_prefix_tests
 )
 
 add_test(NAME prodos8emu_path_prefix_tests COMMAND prodos8emu_path_prefix_tests)
+
+# Test executable - housekeeping tests
+add_executable(prodos8emu_housekeeping_tests
+    tests/housekeeping_test.cpp
+)
+
+target_link_libraries(prodos8emu_housekeeping_tests 
+    PRIVATE 
+        prodos8emu
+)
+
+add_test(NAME prodos8emu_housekeeping_tests COMMAND prodos8emu_housekeeping_tests)
