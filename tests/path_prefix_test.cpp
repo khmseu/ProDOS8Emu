@@ -1,7 +1,6 @@
 #include "prodos8emu/mli.hpp"
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/errors.hpp"
-#include "prodos8emu/path.hpp"
 #include "prodos8emu/xattr.hpp"
 #include <iostream>
 #include <cstdlib>

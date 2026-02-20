@@ -6,6 +6,9 @@ project(ProDOS8Emu
     LANGUAGES CXX
 )
 
+# Export compile_commands.json for tooling (clangd, editors, static analysis)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Use C++20
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

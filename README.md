@@ -37,7 +37,7 @@ ctest --output-on-failure
 
 ## Project Structure
 
-```
+```text
 ProDOS8Emu/
 ├── include/prodos8emu/   # Public headers
 │   └── mli.hpp           # Main MLI interface
