@@ -22,6 +22,7 @@ add_library(prodos8emu
     src/mli.cpp
     src/mli_housekeeping.cpp
     src/mli_filing.cpp
+    src/mli_system.cpp
     src/path.cpp
     src/xattr.cpp
 )
@@ -103,3 +104,15 @@ target_link_libraries(prodos8emu_filing_tests
 )
 
 add_test(NAME prodos8emu_filing_tests COMMAND prodos8emu_filing_tests)
+
+# Test executable - system tests
+add_executable(prodos8emu_system_tests
+    tests/system_test.cpp
+)
+
+target_link_libraries(prodos8emu_system_tests 
+    PRIVATE 
+        prodos8emu
+)
+
+add_test(NAME prodos8emu_system_tests COMMAND prodos8emu_system_tests)

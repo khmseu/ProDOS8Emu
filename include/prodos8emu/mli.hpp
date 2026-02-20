@@ -368,6 +368,120 @@ namespace prodos8emu {
      */
     uint8_t getEofCall(MemoryBanks& banks, uint16_t paramBlockAddr);
 
+    /**
+     * MLI Call: SET_BUF ($D2)
+     *
+     * Set the I/O buffer address for an open file.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 2
+     *   +1: ref_num (1 byte)
+     *   +2: io_buffer pointer (2 bytes, little-endian)
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t setBufCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: GET_BUF ($D3)
+     *
+     * Get the I/O buffer address for an open file.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 2
+     *   +1: ref_num (1 byte)
+     *   +2: io_buffer pointer (2 bytes, little-endian) - result
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t getBufCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: GET_TIME ($82)
+     *
+     * Read the system clock and update the ProDOS global time locations
+     * at $BF90 (date) and $BF92 (time) in emulated memory.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 0
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t getTimeCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: ALLOC_INTERRUPT ($40)
+     *
+     * Allocate an interrupt handler slot (stub - validates parameters only).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 2
+     *   +1: int_num (1 byte) - result: assigned interrupt number (1-4)
+     *   +2: int_code pointer (2 bytes, little-endian) - pointer to handler routine
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t allocInterruptCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: DEALLOC_INTERRUPT ($41)
+     *
+     * Free an interrupt handler slot (stub - validates parameters only).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 1
+     *   +1: int_num (1 byte) - interrupt number to free (1-4)
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t deallocInterruptCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: READ_BLOCK ($80)
+     *
+     * Block-level read (not supported - returns ERR_IO_ERROR until a disk
+     * backend exists).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 3
+     *   +1: unit_num (1 byte)
+     *   +2: data_buffer pointer (2 bytes, little-endian)
+     *   +4: block_num (2 bytes, little-endian)
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t readBlockCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: WRITE_BLOCK ($81)
+     *
+     * Block-level write (not supported - returns ERR_IO_ERROR until a disk
+     * backend exists).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 3
+     *   +1: unit_num (1 byte)
+     *   +2: data_buffer pointer (2 bytes, little-endian)
+     *   +4: block_num (2 bytes, little-endian)
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t writeBlockCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
    private:
     struct OpenFile {
       int      fd;
@@ -382,6 +496,7 @@ namespace prodos8emu {
     std::string                           m_prefix;
     std::filesystem::path                 m_volumesRoot;
     std::unordered_map<uint8_t, OpenFile> m_openFiles;
+    uint16_t                              m_interruptHandlers[4] = {0, 0, 0, 0};
   };
 
   /**
