@@ -1,5 +1,7 @@
 #include "prodos8emu/mli.hpp"
 
+#include <unistd.h>
+
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/path.hpp"
@@ -15,7 +17,10 @@ namespace prodos8emu {
   }
 
   MLIContext::~MLIContext() {
-    // Placeholder destructor
+    // Close all open files
+    for (auto& [rn, of] : m_openFiles) {
+      ::close(of.fd);
+    }
   }
 
   bool MLIContext::isInitialized() const {

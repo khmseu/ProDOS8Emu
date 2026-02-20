@@ -21,6 +21,7 @@ enable_testing()
 add_library(prodos8emu 
     src/mli.cpp
     src/mli_housekeeping.cpp
+    src/mli_filing.cpp
     src/path.cpp
     src/xattr.cpp
 )
@@ -90,3 +91,15 @@ target_link_libraries(prodos8emu_housekeeping_tests
 )
 
 add_test(NAME prodos8emu_housekeeping_tests COMMAND prodos8emu_housekeeping_tests)
+
+# Test executable - filing tests
+add_executable(prodos8emu_filing_tests
+    tests/filing_test.cpp
+)
+
+target_link_libraries(prodos8emu_filing_tests 
+    PRIVATE 
+        prodos8emu
+)
+
+add_test(NAME prodos8emu_filing_tests COMMAND prodos8emu_filing_tests)
