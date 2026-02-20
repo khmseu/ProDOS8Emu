@@ -63,7 +63,10 @@ int main() {
 
     // Create a test file
     fs::path testFile = volume1 / "BUFFILE";
-    { std::ofstream out(testFile, std::ios::binary); out << "data"; }
+    {
+      std::ofstream out(testFile, std::ios::binary);
+      out << "data";
+    }
 
     // OPEN the file
     mem.writeCountedString(0x0400, "/V1/BUFFILE");
@@ -188,9 +191,9 @@ int main() {
     uint16_t paramBlock = 0x0300;
     prodos8emu::write_u8(mem.banks(), paramBlock, 0);  // param_count = 0
 
-    time_t   before = ::time(nullptr);
-    uint8_t  err    = ctx.getTimeCall(mem.banks(), paramBlock);
-    time_t   after  = ::time(nullptr);
+    time_t  before = ::time(nullptr);
+    uint8_t err    = ctx.getTimeCall(mem.banks(), paramBlock);
+    time_t  after  = ::time(nullptr);
 
     if (err != prodos8emu::ERR_NO_ERROR) {
       std::cerr << "FAIL: GET_TIME returned error 0x" << std::hex << (int)err << "\n";
@@ -259,7 +262,7 @@ int main() {
 
     // ALLOC_INTERRUPT
     prodos8emu::write_u8(mem.banks(), paramBlock, 2);
-    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0);       // int_num (result)
+    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0);           // int_num (result)
     prodos8emu::write_u16_le(mem.banks(), paramBlock + 2, 0x2000);  // int_code pointer
 
     uint8_t err = ctx.allocInterruptCall(mem.banks(), paramBlock);
@@ -357,9 +360,9 @@ int main() {
 
     uint16_t paramBlock = 0x0300;
     prodos8emu::write_u8(mem.banks(), paramBlock, 3);
-    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0x60);  // unit_num
+    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0x60);        // unit_num
     prodos8emu::write_u16_le(mem.banks(), paramBlock + 2, 0x0800);  // data_buffer
-    prodos8emu::write_u16_le(mem.banks(), paramBlock + 4, 0);  // block_num
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 4, 0);       // block_num
 
     uint8_t err = ctx.readBlockCall(mem.constBanks(), paramBlock);
     if (err != prodos8emu::ERR_IO_ERROR) {
@@ -378,9 +381,9 @@ int main() {
 
     uint16_t paramBlock = 0x0300;
     prodos8emu::write_u8(mem.banks(), paramBlock, 3);
-    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0x60);  // unit_num
+    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0x60);        // unit_num
     prodos8emu::write_u16_le(mem.banks(), paramBlock + 2, 0x0800);  // data_buffer
-    prodos8emu::write_u16_le(mem.banks(), paramBlock + 4, 0);  // block_num
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 4, 0);       // block_num
 
     uint8_t err = ctx.writeBlockCall(mem.constBanks(), paramBlock);
     if (err != prodos8emu::ERR_IO_ERROR) {
