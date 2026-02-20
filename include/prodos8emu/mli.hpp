@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 
 #include "memory.hpp"
 
@@ -203,10 +204,184 @@ namespace prodos8emu {
      */
     uint8_t onLineCall(MemoryBanks& banks, uint16_t paramBlockAddr);
 
+    /**
+     * MLI Call: OPEN ($C8)
+     *
+     * Open a file and allocate a reference number.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 3
+     *   +1: pathname pointer (2 bytes, little-endian)
+     *   +3: io_buffer pointer (2 bytes, little-endian)
+     *   +5: ref_num (1 byte) - result
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t openCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: NEWLINE ($C9)
+     *
+     * Set newline mode for an open file.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 3
+     *   +1: ref_num (1 byte)
+     *   +2: enable_mask (1 byte) - 0x00 disables newline mode
+     *   +3: newline_char (1 byte) - newline character (matched with mask)
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t newlineCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: READ ($CA)
+     *
+     * Read data from an open file.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 4
+     *   +1: ref_num (1 byte)
+     *   +2: data_buffer pointer (2 bytes, little-endian)
+     *   +4: request_count (2 bytes, little-endian)
+     *   +6: trans_count (2 bytes, little-endian) - result
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t readCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: WRITE ($CB)
+     *
+     * Write data to an open file.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 4
+     *   +1: ref_num (1 byte)
+     *   +2: data_buffer pointer (2 bytes, little-endian)
+     *   +4: request_count (2 bytes, little-endian)
+     *   +6: trans_count (2 bytes, little-endian) - result
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t writeCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: CLOSE ($CC)
+     *
+     * Close an open file (or all open files if ref_num is 0).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 1
+     *   +1: ref_num (1 byte) - 0 closes all open files
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t closeCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: FLUSH ($CD)
+     *
+     * Flush an open file (or all open files if ref_num is 0).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 1
+     *   +1: ref_num (1 byte) - 0 flushes all open files
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t flushCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: SET_MARK ($CE)
+     *
+     * Set the current file position (mark).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 2
+     *   +1: ref_num (1 byte)
+     *   +2: position (3 bytes, little-endian 24-bit)
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t setMarkCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: GET_MARK ($CF)
+     *
+     * Get the current file position (mark).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 2
+     *   +1: ref_num (1 byte)
+     *   +2: position (3 bytes, little-endian 24-bit) - result
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t getMarkCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: SET_EOF ($D0)
+     *
+     * Set the end-of-file marker (resizes the file).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 2
+     *   +1: ref_num (1 byte)
+     *   +2: eof (3 bytes, little-endian 24-bit)
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t setEofCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
+     * MLI Call: GET_EOF ($D1)
+     *
+     * Get the end-of-file marker (file size).
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 2
+     *   +1: ref_num (1 byte)
+     *   +2: eof (3 bytes, little-endian 24-bit) - result
+     *
+     * @param banks Memory banks (mutable)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t getEofCall(MemoryBanks& banks, uint16_t paramBlockAddr);
+
    private:
-    bool                  m_initialized;
-    std::string           m_prefix;
-    std::filesystem::path m_volumesRoot;
+    struct OpenFile {
+      int      fd;
+      uint32_t mark;      // current file position (24-bit, max 0x00FFFFFF)
+      uint16_t ioBuffer;  // io_buffer pointer in emulated memory
+      bool     newlineEnabled;
+      uint8_t  newlineMask;
+      uint8_t  newlineChar;
+    };
+
+    bool                                  m_initialized;
+    std::string                           m_prefix;
+    std::filesystem::path                 m_volumesRoot;
+    std::unordered_map<uint8_t, OpenFile> m_openFiles;
   };
 
   /**
