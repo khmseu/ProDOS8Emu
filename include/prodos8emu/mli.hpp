@@ -83,23 +83,6 @@ namespace prodos8emu {
     }
 
     /**
-     * Top-level MLI dispatcher.
-     *
-     * Routes an MLI call number to the corresponding MLIContext method.
-     * The dispatcher builds a ConstMemoryBanks view from the provided
-     * MemoryBanks so that const-only calls can still operate on the same
-     * underlying memory.
-     *
-     * @param ctx MLI context
-     * @param banks Emulated memory banks (mutable)
-     * @param callNumber ProDOS MLI call number (e.g. 0xC8 for OPEN)
-     * @param paramBlockAddr Address of parameter block
-     * @return ProDOS error code
-     */
-    uint8_t mli_dispatch(MLIContext& ctx, MemoryBanks& banks, uint8_t callNumber,
-                         uint16_t paramBlockAddr);
-
-    /**
      * Get the volumes root path (for testing).
      *
      * @return Volumes root path
@@ -526,9 +509,9 @@ namespace prodos8emu {
    *
    * Routes an MLI call number to the corresponding MLIContext method.
    *
-   * Convention for ProDOS MLI entry (commonly used by emulated callers):
-   * - callNumber in A
-   * - paramBlockAddr in X/Y (little-endian)
+    * Convention for ProDOS MLI entry (commonly used by emulated callers):
+    * - code executes `JSR $BF00`
+    * - immediately following the JSR: `.byte callNumber` then `.word paramBlockAddr`
    *
    * @param ctx MLI context
    * @param banks Emulated memory banks (mutable)

@@ -24,7 +24,8 @@ int main() {
   fs::remove_all(tempDir);
   fs::create_directories(tempDir);
 
-  // Test 1: JSR $BF00 triggers MLI dispatch using A=call number and X/Y=param addr
+  // Test 1: JSR $BF00 triggers MLI dispatch using inline call encoding
+  //         (byte callNumber, word paramBlockAddr) immediately after the JSR.
   {
     std::cout << "Test 1: JSR $BF00 MLI trap\n";
 
