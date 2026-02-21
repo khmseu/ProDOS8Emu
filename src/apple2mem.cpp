@@ -5,8 +5,14 @@
 namespace prodos8emu {
 
   Apple2Memory::Apple2Memory()
-      : m_mainRam{}, m_lcBank2{}, m_romArea{}, m_lcReadEnabled(false), m_lcWriteEnabled(false),
-        m_lcBank1(true), m_lcWritePrequalified(false) {
+      : m_mainRam{},
+        m_lcBank2{},
+        m_romArea{},
+        m_writeSink{},
+        m_lcReadEnabled(false),
+        m_lcWriteEnabled(false),
+        m_lcBank1(true),
+        m_lcWritePrequalified(false) {
     updateBanks();
   }
 
@@ -16,6 +22,7 @@ namespace prodos8emu {
     }
     m_lcBank2.fill(0);
     // m_romArea is always zero (never written); no need to re-zero it.
+    m_writeSink.fill(0);
     m_lcReadEnabled       = false;
     m_lcWriteEnabled      = false;
     m_lcBank1             = true;
@@ -31,7 +38,10 @@ namespace prodos8emu {
   }
 
   void Apple2Memory::setLCWriteEnabled(bool enable) {
-    m_lcWriteEnabled = enable;
+    if (m_lcWriteEnabled != enable) {
+      m_lcWriteEnabled = enable;
+      updateBanks();
+    }
   }
 
   void Apple2Memory::setLCBank1(bool bank1) {
@@ -48,28 +58,27 @@ namespace prodos8emu {
       m_constBanks[i] = m_mainRam[i].data();
     }
 
+    // READ mapping for $D000-$FFFF (constBanks): ROM vs LC RAM.
     if (m_lcReadEnabled) {
-      // Bank 13 ($D000-$DFFF): LC bank 1 or LC bank 2.
-      if (m_lcBank1) {
-        m_banks[LC_D000_BANK]      = m_mainRam[LC_D000_BANK].data();
-        m_constBanks[LC_D000_BANK] = m_mainRam[LC_D000_BANK].data();
-      } else {
-        m_banks[LC_D000_BANK]      = m_lcBank2.data();
-        m_constBanks[LC_D000_BANK] = m_lcBank2.data();
-      }
-      // Banks 14-15 ($E000-$FFFF): LC high RAM (single bank, stored in m_mainRam[14..15]).
-      m_banks[LC_E000_BANK]      = m_mainRam[LC_E000_BANK].data();
+      m_constBanks[LC_D000_BANK] = m_lcBank1 ? m_mainRam[LC_D000_BANK].data() : m_lcBank2.data();
       m_constBanks[LC_E000_BANK] = m_mainRam[LC_E000_BANK].data();
-      m_banks[LC_F000_BANK]      = m_mainRam[LC_F000_BANK].data();
       m_constBanks[LC_F000_BANK] = m_mainRam[LC_F000_BANK].data();
     } else {
-      // LC read disabled: $D000-$FFFF reads from the zero-filled ROM area.
-      m_banks[LC_D000_BANK]      = m_romArea.data();
       m_constBanks[LC_D000_BANK] = m_romArea.data();
-      m_banks[LC_E000_BANK]      = m_romArea.data() + BANK_SIZE;
       m_constBanks[LC_E000_BANK] = m_romArea.data() + BANK_SIZE;
-      m_banks[LC_F000_BANK]      = m_romArea.data() + BANK_SIZE * 2;
       m_constBanks[LC_F000_BANK] = m_romArea.data() + BANK_SIZE * 2;
+    }
+
+    // WRITE mapping for $D000-$FFFF (banks): LC RAM vs write-sink.
+    // This prevents accidentally writing into the ROM read area in ROMIN/RDROM modes.
+    if (m_lcWriteEnabled) {
+      m_banks[LC_D000_BANK] = m_lcBank1 ? m_mainRam[LC_D000_BANK].data() : m_lcBank2.data();
+      m_banks[LC_E000_BANK] = m_mainRam[LC_E000_BANK].data();
+      m_banks[LC_F000_BANK] = m_mainRam[LC_F000_BANK].data();
+    } else {
+      m_banks[LC_D000_BANK] = m_writeSink.data();
+      m_banks[LC_E000_BANK] = m_writeSink.data() + BANK_SIZE;
+      m_banks[LC_F000_BANK] = m_writeSink.data() + BANK_SIZE * 2;
     }
   }
 
@@ -80,7 +89,7 @@ namespace prodos8emu {
 
     uint8_t offset = static_cast<uint8_t>(addr & 0x000F);
     bool    bank1  = (offset & 0x08) != 0;  // bit 3: 1 = bank 1, 0 = bank 2
-    uint8_t cmd    = offset & 0x03;          // bits 1-0: command
+    uint8_t cmd    = offset & 0x03;         // bits 1-0: command
 
     // Select the $D000-$DFFF bank
     setLCBank1(bank1);

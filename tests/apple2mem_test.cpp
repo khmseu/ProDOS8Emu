@@ -1,7 +1,7 @@
-#include <array>
+#include "prodos8emu/apple2mem.hpp"
+
 #include <iostream>
 
-#include "prodos8emu/apple2mem.hpp"
 #include "prodos8emu/memory.hpp"
 
 int main() {
@@ -14,13 +14,13 @@ int main() {
 
     bool allZero = true;
     for (uint16_t addr = 0; addr <= 0xFFFE; addr++) {
-      if (prodos8emu::read_u8(mem.banks(), addr) != 0) {
+      if (prodos8emu::read_u8(mem.constBanks(), addr) != 0) {
         allZero = false;
         break;
       }
     }
     // Also check 0xFFFF
-    if (allZero && prodos8emu::read_u8(mem.banks(), 0xFFFF) != 0) {
+    if (allZero && prodos8emu::read_u8(mem.constBanks(), 0xFFFF) != 0) {
       allZero = false;
     }
 
@@ -56,10 +56,10 @@ int main() {
     prodos8emu::write_u8(mem.banks(), 0xBFFF, 0xCC);
     prodos8emu::write_u8(mem.banks(), 0xC000, 0xDD);
 
-    bool ok = prodos8emu::read_u8(mem.banks(), 0x0000) == 0xAA &&
-              prodos8emu::read_u8(mem.banks(), 0x0800) == 0xBB &&
-              prodos8emu::read_u8(mem.banks(), 0xBFFF) == 0xCC &&
-              prodos8emu::read_u8(mem.banks(), 0xC000) == 0xDD;
+    bool ok = prodos8emu::read_u8(mem.constBanks(), 0x0000) == 0xAA &&
+              prodos8emu::read_u8(mem.constBanks(), 0x0800) == 0xBB &&
+              prodos8emu::read_u8(mem.constBanks(), 0xBFFF) == 0xCC &&
+              prodos8emu::read_u8(mem.constBanks(), 0xC000) == 0xDD;
 
     if (!ok) {
       std::cerr << "FAIL: Main RAM not accessible\n";
@@ -75,10 +75,10 @@ int main() {
     prodos8emu::Apple2Memory mem;
     // LC read disabled by default
 
-    bool allZero = prodos8emu::read_u8(mem.banks(), 0xD000) == 0 &&
-                   prodos8emu::read_u8(mem.banks(), 0xDFFF) == 0 &&
-                   prodos8emu::read_u8(mem.banks(), 0xE000) == 0 &&
-                   prodos8emu::read_u8(mem.banks(), 0xFFFF) == 0;
+    bool allZero = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+                   prodos8emu::read_u8(mem.constBanks(), 0xDFFF) == 0 &&
+                   prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0 &&
+                   prodos8emu::read_u8(mem.constBanks(), 0xFFFF) == 0;
 
     if (!allZero) {
       std::cerr << "FAIL: ROM area not zero when LC disabled\n";
@@ -102,10 +102,10 @@ int main() {
     prodos8emu::write_u8(mem.banks(), 0xE000, 0x33);
     prodos8emu::write_u8(mem.banks(), 0xFFFF, 0x44);
 
-    bool ok = prodos8emu::read_u8(mem.banks(), 0xD000) == 0x11 &&
-              prodos8emu::read_u8(mem.banks(), 0xDFFF) == 0x22 &&
-              prodos8emu::read_u8(mem.banks(), 0xE000) == 0x33 &&
-              prodos8emu::read_u8(mem.banks(), 0xFFFF) == 0x44;
+    bool ok = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0x11 &&
+              prodos8emu::read_u8(mem.constBanks(), 0xDFFF) == 0x22 &&
+              prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0x33 &&
+              prodos8emu::read_u8(mem.constBanks(), 0xFFFF) == 0x44;
 
     if (!ok) {
       std::cerr << "FAIL: LC bank 1 read/write failed\n";
@@ -134,13 +134,13 @@ int main() {
     prodos8emu::write_u8(mem.banks(), 0xD100, 0x22);
 
     // Read bank 2 - should get the second set of values
-    bool bank2ok = prodos8emu::read_u8(mem.banks(), 0xD000) == 0x21 &&
-                   prodos8emu::read_u8(mem.banks(), 0xD100) == 0x22;
+    bool bank2ok = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0x21 &&
+                   prodos8emu::read_u8(mem.constBanks(), 0xD100) == 0x22;
 
     // Switch back to bank 1 and verify original values
     mem.setLCBank1(true);
-    bool bank1ok = prodos8emu::read_u8(mem.banks(), 0xD000) == 0x11 &&
-                   prodos8emu::read_u8(mem.banks(), 0xD100) == 0x12;
+    bool bank1ok = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0x11 &&
+                   prodos8emu::read_u8(mem.constBanks(), 0xD100) == 0x12;
 
     if (!bank1ok || !bank2ok) {
       std::cerr << "FAIL: LC banks not independent\n";
@@ -165,8 +165,8 @@ int main() {
 
     // Switch to bank 2 - high RAM should still be visible
     mem.setLCBank1(false);
-    bool ok = prodos8emu::read_u8(mem.banks(), 0xE000) == 0x55 &&
-              prodos8emu::read_u8(mem.banks(), 0xFFFF) == 0x66;
+    bool ok = prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0x55 &&
+              prodos8emu::read_u8(mem.constBanks(), 0xFFFF) == 0x66;
 
     if (!ok) {
       std::cerr << "FAIL: LC high RAM not shared across bank switches\n";
@@ -188,8 +188,8 @@ int main() {
 
     // Disable LC read - should see ROM area (zero) again
     mem.setLCReadEnabled(false);
-    bool ok = prodos8emu::read_u8(mem.banks(), 0xD000) == 0 &&
-              prodos8emu::read_u8(mem.banks(), 0xE800) == 0;
+    bool ok = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+              prodos8emu::read_u8(mem.constBanks(), 0xE800) == 0;
 
     if (!ok) {
       std::cerr << "FAIL: Disabling LC read did not hide LC data\n";
@@ -211,7 +211,7 @@ int main() {
     mem.setLCReadEnabled(false);
     mem.setLCReadEnabled(true);
 
-    bool ok = prodos8emu::read_u8(mem.banks(), 0xD400) == 0x99;
+    bool ok = prodos8emu::read_u8(mem.constBanks(), 0xD400) == 0x99;
     if (!ok) {
       std::cerr << "FAIL: Re-enabling LC read did not restore data\n";
       failures++;
@@ -238,14 +238,14 @@ int main() {
     bool lcStateOk = !mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && mem.isLCBank1();
 
     // Main RAM should be zero
-    bool mainRamZero = prodos8emu::read_u8(mem.banks(), 0x0100) == 0;
+    bool mainRamZero = prodos8emu::read_u8(mem.constBanks(), 0x0100) == 0;
 
     // LC data should be gone (LC is now disabled so we see ROM area = zero)
-    bool lcDataGone = prodos8emu::read_u8(mem.banks(), 0xD000) == 0;
+    bool lcDataGone = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0;
 
     // Enable LC to verify LC RAM is also zeroed
     mem.setLCReadEnabled(true);
-    bool lcRamZero = prodos8emu::read_u8(mem.banks(), 0xD000) == 0;
+    bool lcRamZero = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0;
 
     if (!lcStateOk || !mainRamZero || !lcDataGone || !lcRamZero) {
       std::cerr << "FAIL: reset() did not fully zero memory or LC state\n";
@@ -291,11 +291,11 @@ int main() {
     prodos8emu::write_u8(mem.banks(), 0xD800, 0xB2);
 
     // Verify bank 2 value
-    bool bank2ok = prodos8emu::read_u8(mem.banks(), 0xD800) == 0xB2;
+    bool bank2ok = prodos8emu::read_u8(mem.constBanks(), 0xD800) == 0xB2;
 
     // Switch to bank 1 and verify
     mem.setLCBank1(true);
-    bool bank1ok = prodos8emu::read_u8(mem.banks(), 0xD800) == 0xB1;
+    bool bank1ok = prodos8emu::read_u8(mem.constBanks(), 0xD800) == 0xB1;
 
     if (!bank1ok || !bank2ok) {
       std::cerr << "FAIL: Bank 2 writes not independent\n";
@@ -503,6 +503,94 @@ int main() {
       failures++;
     } else {
       std::cout << "PASS: reset() clears write-enable pre-qualification\n";
+    }
+  }
+
+  // Test 24: ROMIN2 mode reads ROM but writes LC RAM
+  {
+    std::cout << "Test 24: ROMIN2 reads ROM, writes LC RAM\n";
+    prodos8emu::Apple2Memory mem;
+
+    // ROMIN2: bank 2 selected, ROM reads, write-enable after two reads
+    mem.applySoftSwitch(0xC081, true);
+    mem.applySoftSwitch(0xC081, true);
+
+    bool stateOk = !mem.isLCReadEnabled() && mem.isLCWriteEnabled() && !mem.isLCBank1();
+
+    // Writes should go to LC RAM even though reads are from ROM
+    prodos8emu::write_u8(mem.banks(), 0xD000, 0x5A);
+    prodos8emu::write_u8(mem.banks(), 0xE000, 0x6B);
+    prodos8emu::write_u8(mem.banks(), 0xFFFF, 0x7C);
+
+    bool readsRomOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xFFFF) == 0;
+
+    // Enabling LC read should reveal the RAM that was written in ROMIN2
+    mem.setLCReadEnabled(true);
+    bool readsRamOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0x5A &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0x6B &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xFFFF) == 0x7C;
+
+    if (!stateOk || !readsRomOk || !readsRamOk) {
+      std::cerr << "FAIL: ROMIN2 did not behave as read-ROM/write-RAM\n";
+      failures++;
+    } else {
+      std::cout << "PASS: ROMIN2 reads ROM, writes LC RAM\n";
+    }
+  }
+
+  // Test 25: RDROM2 mode ignores writes
+  {
+    std::cout << "Test 25: RDROM2 ignores writes\n";
+    prodos8emu::Apple2Memory mem;
+
+    // RDROM2: bank 2 selected, ROM reads, write protected
+    mem.applySoftSwitch(0xC082, true);
+    bool stateOk = !mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && !mem.isLCBank1();
+
+    // Writes should be ignored (must not modify LC RAM)
+    prodos8emu::write_u8(mem.banks(), 0xD000, 0xAA);
+    prodos8emu::write_u8(mem.banks(), 0xE000, 0xBB);
+
+    bool readsRomOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0;
+
+    // Enable LC reads (bank 2) and confirm LC RAM remains unchanged
+    mem.setLCReadEnabled(true);
+    mem.setLCBank1(false);
+    bool readsRamOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0;
+
+    if (!stateOk || !readsRomOk || !readsRamOk) {
+      std::cerr << "FAIL: RDROM2 did not ignore writes\n";
+      failures++;
+    } else {
+      std::cout << "PASS: RDROM2 ignores writes\n";
+    }
+  }
+
+  // Test 26: LC read enabled with write protect ignores writes
+  {
+    std::cout << "Test 26: LC read + write protect ignores writes\n";
+    prodos8emu::Apple2Memory mem;
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+    mem.setLCBank1(true);
+
+    prodos8emu::write_u8(mem.banks(), 0xD000, 0x11);
+    bool baselineOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0x11;
+
+    mem.setLCWriteEnabled(false);
+    prodos8emu::write_u8(mem.banks(), 0xD000, 0x22);
+    bool protectedOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0x11;
+
+    if (!baselineOk || !protectedOk) {
+      std::cerr << "FAIL: LC write protect did not ignore writes\n";
+      failures++;
+    } else {
+      std::cout << "PASS: LC read + write protect ignores writes\n";
     }
   }
 

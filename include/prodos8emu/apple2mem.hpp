@@ -28,9 +28,17 @@ namespace prodos8emu {
    *   - LC read enabled:  $D000-$FFFF reads come from LC RAM (bank-selected).
    *   - LC read disabled: $D000-$FFFF reads come from the ROM area (zero-filled).
    *   - LC write enabled: $D000-$FFFF writes go to LC RAM (bank-selected).
-   *     Note: Write protection is tracked but cannot be enforced through the
-   *     MemoryBanks pointer interface. Callers must check isLCWriteEnabled()
-   *     before performing writes intended for the LC.
+   *   - LC write disabled: writes to $D000-$FFFF are ignored.
+   *
+   * Read-vs-write mapping note:
+   *   Real hardware can be in ROMIN mode where reads come from ROM but writes go
+   *   to language-card RAM. To model this, Apple2Memory exposes two bank views:
+   *
+   *   - constBanks(): read mapping ($D000-$FFFF reads follow LC read state)
+   *   - banks():      write mapping ($D000-$FFFF writes follow LC write state)
+   *
+   *   In ROMIN/RDROM modes, do not use banks() to perform reads from
+   *   $D000-$FFFF; use constBanks() instead.
    *
    * On construction and after reset():
    *   - All memory is zeroed.
@@ -81,10 +89,8 @@ namespace prodos8emu {
     /**
      * Enable or disable Language Card write.
      *
-     * Tracks whether writes to $D000-$FFFF should target LC RAM. Because the
-     * MemoryBanks interface uses raw pointers, write protection cannot be
-     * enforced at the memory level. Callers must check isLCWriteEnabled()
-     * before performing writes intended to be guarded.
+     * When disabled, writes to $D000-$FFFF are redirected to an internal
+     * write-sink buffer so they do not modify ROM or LC RAM.
      *
      * @param enable True to enable writes to LC RAM; false to protect LC RAM.
      */
@@ -179,6 +185,10 @@ namespace prodos8emu {
     // ROM area: zero-filled, used for $D000-$FFFF when LC read is disabled.
     // Sized to cover banks 13-15 (3 × 4KB).
     std::array<uint8_t, BANK_SIZE * 3> m_romArea;
+
+    // Write-sink area: used for $D000-$FFFF when LC write is disabled.
+    // Sized to cover banks 13-15 (3 × 4KB). Writes go here and are effectively ignored.
+    std::array<uint8_t, BANK_SIZE * 3> m_writeSink;
 
     MemoryBanks      m_banks;
     ConstMemoryBanks m_constBanks;
