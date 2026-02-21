@@ -72,12 +72,16 @@ namespace prodos8emu {
     uint16_t read16(uint16_t addr);
     uint16_t read16_zp(uint8_t zpAddr);
 
-    uint8_t fetch8();
+    // Bus quirks
+    void    dummyReadLastInstructionByte();
+    uint8_t read8_pageCrossed(uint16_t addr, bool pageCrossed);
+
+    uint8_t  fetch8();
     uint16_t fetch16();
 
-    void push8(uint8_t v);
-    uint8_t pull8();
-    void push16(uint16_t v);
+    void     push8(uint8_t v);
+    uint8_t  pull8();
+    void     push16(uint16_t v);
     uint16_t pull16();
 
     void setFlag(uint8_t mask, bool v);

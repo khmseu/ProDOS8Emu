@@ -55,6 +55,19 @@ namespace prodos8emu {
     return make_u16(lo, hi);
   }
 
+  void CPU65C02::dummyReadLastInstructionByte() {
+    // CMOS 65C02-family quirk: on page-crossing indexed reads, the extra bus read is of the
+    // last instruction byte (not an invalid effective address read as on NMOS 6502).
+    (void)read8(static_cast<uint16_t>(m_r.pc - 1));
+  }
+
+  uint8_t CPU65C02::read8_pageCrossed(uint16_t addr, bool pageCrossed) {
+    if (pageCrossed) {
+      dummyReadLastInstructionByte();
+    }
+    return read8(addr);
+  }
+
   uint8_t CPU65C02::fetch8() {
     uint8_t v = read8(m_r.pc);
     m_r.pc    = static_cast<uint16_t>(m_r.pc + 1);
@@ -283,9 +296,14 @@ namespace prodos8emu {
     if (!cond) {
       return;
     }
-    uint16_t oldPc = m_r.pc;
-    m_r.pc         = static_cast<uint16_t>(m_r.pc + rel);
-    (void)oldPc;
+    uint16_t from        = m_r.pc;
+    uint16_t to          = static_cast<uint16_t>(from + rel);
+    bool     pageCrossed = (from & 0xFF00) != (to & 0xFF00);
+    if (pageCrossed) {
+      // Model the 65C02 page-cross extra read.
+      dummyReadLastInstructionByte();
+    }
+    m_r.pc = to;
   }
 
   uint32_t CPU65C02::jsr_abs(uint16_t target) {
@@ -306,6 +324,9 @@ namespace prodos8emu {
       m_r.a = err;
       setFlag(FLAG_C, err != 0);
       setNZ(m_r.a);
+
+      // ProDOS MLI returns with decimal mode cleared.
+      setFlag(FLAG_D, false);
       return 6;
     }
 
@@ -337,7 +358,7 @@ namespace prodos8emu {
     // BBRn: 0F,1F,2F,3F,4F,5F,6F,7F (branch if bit n clear)
     // BBSn: 8F,9F,AF,BF,CF,DF,EF,FF (branch if bit n set)
     if ((op & 0x0F) == 0x0F) {
-      uint8_t bit = static_cast<uint8_t>((op >> 4) & 0x07);
+      uint8_t bit   = static_cast<uint8_t>((op >> 4) & 0x07);
       bool    isBBS = (op & 0x80) != 0;
       uint8_t zp    = fetch8();
       int8_t  rel   = static_cast<int8_t>(fetch8());
@@ -346,7 +367,13 @@ namespace prodos8emu {
       bool    bitSet = (m & static_cast<uint8_t>(1u << bit)) != 0;
       bool    take   = isBBS ? bitSet : !bitSet;
       if (take) {
-        m_r.pc = static_cast<uint16_t>(m_r.pc + rel);
+        uint16_t from        = m_r.pc;
+        uint16_t to          = static_cast<uint16_t>(from + rel);
+        bool     pageCrossed = (from & 0xFF00) != (to & 0xFF00);
+        if (pageCrossed) {
+          dummyReadLastInstructionByte();
+        }
+        m_r.pc = to;
       }
       return 5;
     }
@@ -550,14 +577,16 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 4;
       case 0xBD: {
-        bool pc = false;
-        m_r.a   = read8(addr_absx(pc));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.a       = read8_pageCrossed(a, pc);
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0xB9: {
-        bool pc = false;
-        m_r.a   = read8(addr_absy(pc));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.a       = read8_pageCrossed(a, pc);
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
@@ -566,8 +595,9 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 6;
       case 0xB1: {
-        bool pc = false;
-        m_r.a   = read8(addr_indy(pc));
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        m_r.a       = read8_pageCrossed(a, pc);
         setNZ(m_r.a);
         return static_cast<uint32_t>(5 + (pc ? 1 : 0));
       }
@@ -593,8 +623,9 @@ namespace prodos8emu {
         setNZ(m_r.x);
         return 4;
       case 0xBE: {
-        bool pc = false;
-        m_r.x   = read8(addr_absy(pc));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.x       = read8_pageCrossed(a, pc);
         setNZ(m_r.x);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
@@ -616,8 +647,9 @@ namespace prodos8emu {
         setNZ(m_r.y);
         return 4;
       case 0xBC: {
-        bool pc = false;
-        m_r.y   = read8(addr_absx(pc));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.y       = read8_pageCrossed(a, pc);
         setNZ(m_r.y);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
@@ -709,14 +741,16 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 4;
       case 0x1D: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a | read8(addr_absx(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a | read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0x19: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a | read8(addr_absy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a | read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
@@ -725,8 +759,9 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 6;
       case 0x11: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a | read8(addr_indy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a | read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(5 + (pc ? 1 : 0));
       }
@@ -753,14 +788,16 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 4;
       case 0x3D: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a & read8(addr_absx(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a & read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0x39: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a & read8(addr_absy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a & read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
@@ -769,8 +806,9 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 6;
       case 0x31: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a & read8(addr_indy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a & read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(5 + (pc ? 1 : 0));
       }
@@ -797,14 +835,16 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 4;
       case 0x5D: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a ^ read8(addr_absx(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a ^ read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0x59: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a ^ read8(addr_absy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a ^ read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
@@ -813,8 +853,9 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 6;
       case 0x51: {
-        bool pc = false;
-        m_r.a   = static_cast<uint8_t>(m_r.a ^ read8(addr_indy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        m_r.a       = static_cast<uint8_t>(m_r.a ^ read8_pageCrossed(a, pc));
         setNZ(m_r.a);
         return static_cast<uint32_t>(5 + (pc ? 1 : 0));
       }
@@ -837,21 +878,24 @@ namespace prodos8emu {
         m_r.a = adc(m_r.a, read8(addr_abs()));
         return 4;
       case 0x7D: {
-        bool pc = false;
-        m_r.a   = adc(m_r.a, read8(addr_absx(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.a       = adc(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0x79: {
-        bool pc = false;
-        m_r.a   = adc(m_r.a, read8(addr_absy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.a       = adc(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0x61:
         m_r.a = adc(m_r.a, read8(addr_indx()));
         return 6;
       case 0x71: {
-        bool pc = false;
-        m_r.a   = adc(m_r.a, read8(addr_indy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        m_r.a       = adc(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(5 + (pc ? 1 : 0));
       }
       case 0x72:
@@ -871,21 +915,24 @@ namespace prodos8emu {
         m_r.a = sbc(m_r.a, read8(addr_abs()));
         return 4;
       case 0xFD: {
-        bool pc = false;
-        m_r.a   = sbc(m_r.a, read8(addr_absx(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.a       = sbc(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0xF9: {
-        bool pc = false;
-        m_r.a   = sbc(m_r.a, read8(addr_absy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.a       = sbc(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0xE1:
         m_r.a = sbc(m_r.a, read8(addr_indx()));
         return 6;
       case 0xF1: {
-        bool pc = false;
-        m_r.a   = sbc(m_r.a, read8(addr_indy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        m_r.a       = sbc(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(5 + (pc ? 1 : 0));
       }
       case 0xF2:
@@ -906,21 +953,24 @@ namespace prodos8emu {
         (void)cmp(m_r.a, read8(addr_abs()));
         return 4;
       case 0xDD: {
-        bool pc = false;
-        (void)cmp(m_r.a, read8(addr_absx(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        (void)cmp(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0xD9: {
-        bool pc = false;
-        (void)cmp(m_r.a, read8(addr_absy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        (void)cmp(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(4 + (pc ? 1 : 0));
       }
       case 0xC1:
         (void)cmp(m_r.a, read8(addr_indx()));
         return 6;
       case 0xD1: {
-        bool pc = false;
-        (void)cmp(m_r.a, read8(addr_indy(pc)));
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        (void)cmp(m_r.a, read8_pageCrossed(a, pc));
         return static_cast<uint32_t>(5 + (pc ? 1 : 0));
       }
       case 0xD2:
@@ -1221,8 +1271,9 @@ namespace prodos8emu {
         return 4;
       }
       case 0x3C: {
-        bool pc = false;
-        uint8_t v = read8(addr_absx(pc));
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        uint8_t  v  = read8_pageCrossed(a, pc);
         setFlag(FLAG_Z, (m_r.a & v) == 0);
         setFlag(FLAG_N, (v & 0x80) != 0);
         setFlag(FLAG_V, (v & 0x40) != 0);
