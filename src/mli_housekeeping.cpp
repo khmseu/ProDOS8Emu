@@ -2,6 +2,7 @@
 #include <utime.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -9,6 +10,7 @@
 #include <sstream>
 #include <vector>
 
+#include "prodos8emu/access_byte.hpp"
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/mli.hpp"
@@ -93,6 +95,129 @@ namespace prodos8emu {
     }
 
     /**
+     * Convert ProDOS date/time to ISO 8601 UTC string.
+     * Returns YYYY-MM-DDTHH:MM:SSZ format.
+     * If date is 0, returns current time.
+     */
+    std::string proDOSDateTimeToISO8601(uint16_t date, uint16_t time) {
+      time_t     timestamp = decodeProDOSDateTime(date, time);
+      struct tm* t         = gmtime(&timestamp);
+      if (!t) {
+        // Fallback to current time
+        time_t now = ::time(nullptr);
+        t          = gmtime(&now);
+      }
+
+      std::ostringstream oss;
+      oss << std::setfill('0') << std::setw(4) << (t->tm_year + 1900) << '-' << std::setw(2)
+          << (t->tm_mon + 1) << '-' << std::setw(2) << t->tm_mday << 'T' << std::setw(2)
+          << t->tm_hour << ':' << std::setw(2) << t->tm_min << ':' << std::setw(2) << t->tm_sec
+          << 'Z';
+      return oss.str();
+    }
+
+    /**
+     * Parse ISO 8601 UTC string to Unix timestamp.
+     * Expected format: YYYY-MM-DDTHH:MM:SSZ (exactly 20 characters).
+     * Returns true on success, false if malformed.
+     */
+    bool parseISO8601(const std::string& str, time_t& result) {
+      // Validate format: YYYY-MM-DDTHH:MM:SSZ
+      if (str.length() != 20) return false;
+      if (str[4] != '-' || str[7] != '-' || str[10] != 'T' || str[13] != ':' || str[16] != ':' ||
+          str[19] != 'Z') {
+        return false;
+      }
+
+      // Parse components
+      char* endPtr = nullptr;
+
+      // Year: positions 0-3
+      long year = std::strtol(str.substr(0, 4).c_str(), &endPtr, 10);
+      if (endPtr == nullptr || *endPtr != '\0' || year < 1900 || year > 3000) return false;
+
+      // Month: positions 5-6
+      long month = std::strtol(str.substr(5, 2).c_str(), &endPtr, 10);
+      if (endPtr == nullptr || *endPtr != '\0' || month < 1 || month > 12) return false;
+
+      // Day: positions 8-9
+      long day = std::strtol(str.substr(8, 2).c_str(), &endPtr, 10);
+      if (endPtr == nullptr || *endPtr != '\0' || day < 1 || day > 31) return false;
+
+      // Hour: positions 11-12
+      long hour = std::strtol(str.substr(11, 2).c_str(), &endPtr, 10);
+      if (endPtr == nullptr || *endPtr != '\0' || hour < 0 || hour > 23) return false;
+
+      // Minute: positions 14-15
+      long minute = std::strtol(str.substr(14, 2).c_str(), &endPtr, 10);
+      if (endPtr == nullptr || *endPtr != '\0' || minute < 0 || minute > 59) return false;
+
+      // Second: positions 17-18
+      long second = std::strtol(str.substr(17, 2).c_str(), &endPtr, 10);
+      if (endPtr == nullptr || *endPtr != '\0' || second < 0 || second > 59) return false;
+
+      // Build tm struct for UTC time
+      struct tm t = {};
+      t.tm_year   = static_cast<int>(year - 1900);
+      t.tm_mon    = static_cast<int>(month - 1);
+      t.tm_mday   = static_cast<int>(day);
+      t.tm_hour   = static_cast<int>(hour);
+      t.tm_min    = static_cast<int>(minute);
+      t.tm_sec    = static_cast<int>(second);
+      t.tm_isdst  = 0;  // UTC has no DST
+
+      // Convert to time_t using timegm (UTC)
+      // timegm is available on Linux/macOS; for other platforms we need a portable fallback
+      result = ::timegm(&t);
+
+      return (result != static_cast<time_t>(-1));
+    }
+
+    /**
+     * Format uint8_t as 2 lowercase hex characters.
+     */
+    std::string formatHexByte(uint8_t value) {
+      std::ostringstream oss;
+      oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(value);
+      return oss.str();
+    }
+
+    /**
+     * Format uint16_t as 4 lowercase hex characters.
+     */
+    std::string formatHexWord(uint16_t value) {
+      std::ostringstream oss;
+      oss << std::hex << std::setfill('0') << std::setw(4) << value;
+      return oss.str();
+    }
+
+    /**
+     * Parse 2 hex characters to uint8_t.
+     * Returns true on success, false if invalid.
+     */
+    bool parseHexByte(const std::string& str, uint8_t& result) {
+      if (str.length() != 2) return false;
+      char*         endPtr = nullptr;
+      unsigned long val    = std::strtoul(str.c_str(), &endPtr, 16);
+      if (endPtr == nullptr || *endPtr != '\0' || val > 0xFF) return false;
+      result = static_cast<uint8_t>(val);
+      return true;
+    }
+
+    /**
+     * Parse 4 hex characters to uint16_t.
+     * Returns true on success, false if invalid.
+     */
+    bool parseHexWord(const std::string& str, uint16_t& result) {
+      if (str.length() != 4) return false;
+      char*         endPtr = nullptr;
+      unsigned long val    = std::strtoul(str.c_str(), &endPtr, 16);
+      if (endPtr == nullptr || *endPtr != '\0' || val > 0xFFFF) return false;
+      result = static_cast<uint16_t>(val);
+      return true;
+    }
+
+    /**
      * Metadata structure for ProDOS file attributes.
      */
     struct ProDOSMetadata {
@@ -110,19 +235,30 @@ namespace prodos8emu {
      * Store ProDOS metadata to xattrs.
      */
     uint8_t storeMetadata(const std::filesystem::path& hostPath, const ProDOSMetadata& meta) {
-      std::ostringstream oss;
-      oss << std::hex << std::setfill('0');
-      oss << std::setw(2) << (int)meta.access << ":" << std::setw(2) << (int)meta.file_type << ":"
-          << std::setw(4) << meta.aux_type << ":" << std::setw(2) << (int)meta.storage_type << ":"
-          << std::setw(4) << meta.create_date << ":" << std::setw(4) << meta.create_time << ":"
-          << std::setw(4) << meta.mod_date << ":" << std::setw(4) << meta.mod_time;
+      // Write separate xattrs for each field
+      uint8_t err;
 
-      uint8_t err = prodos8_set_xattr(hostPath.string(), "metadata", oss.str());
-      if (err != ERR_NO_ERROR) {
-        // If xattrs not supported, we can still proceed for some operations
-        // Return error for now as per spec
-        return err;
-      }
+      // access: 8-character string from format_access_byte
+      std::string accessStr = format_access_byte(meta.access);
+      err                   = prodos8_set_xattr(hostPath.string(), "access", accessStr);
+      if (err != ERR_NO_ERROR) return err;
+
+      // file_type: 2 lowercase hex chars
+      err = prodos8_set_xattr(hostPath.string(), "file_type", formatHexByte(meta.file_type));
+      if (err != ERR_NO_ERROR) return err;
+
+      // aux_type: 4 lowercase hex chars
+      err = prodos8_set_xattr(hostPath.string(), "aux_type", formatHexWord(meta.aux_type));
+      if (err != ERR_NO_ERROR) return err;
+
+      // storage_type: 2 lowercase hex chars
+      err = prodos8_set_xattr(hostPath.string(), "storage_type", formatHexByte(meta.storage_type));
+      if (err != ERR_NO_ERROR) return err;
+
+      // created: ISO 8601 UTC string from create_date/create_time
+      std::string createdStr = proDOSDateTimeToISO8601(meta.create_date, meta.create_time);
+      err                    = prodos8_set_xattr(hostPath.string(), "created", createdStr);
+      if (err != ERR_NO_ERROR) return err;
 
       return ERR_NO_ERROR;
     }
@@ -132,96 +268,112 @@ namespace prodos8emu {
      * Robustly handles malformed xattr data by falling back to stat-based defaults.
      */
     ProDOSMetadata loadMetadata(const std::filesystem::path& hostPath, bool isDirectory) {
-      ProDOSMetadata meta           = {};
-      bool           metadataLoaded = false;
+      ProDOSMetadata meta = {};
 
+      // Try to read each xattr independently
       std::string value;
-      uint8_t     err = prodos8_get_xattr(hostPath.string(), "metadata", value);
+      bool        accessLoaded      = false;
+      bool        fileTypeLoaded    = false;
+      bool        auxTypeLoaded     = false;
+      bool        storageTypeLoaded = false;
 
-      if (err == ERR_NO_ERROR && !value.empty()) {
-        // Robust tokenization: split on ':' into exactly 8 fields
-        std::vector<std::string> fields;
-        std::string::size_type   start = 0;
-        std::string::size_type   end;
-
-        while ((end = value.find(':', start)) != std::string::npos) {
-          fields.push_back(value.substr(start, end - start));
-          start = end + 1;
-        }
-        fields.push_back(value.substr(start));  // Last field
-
-        // Must have exactly 8 fields
-        if (fields.size() == 8) {
-          // Parse each field as hex into unsigned long and validate
-          unsigned long parsed[8];
-          bool          parseSuccess = true;
-
-          for (size_t i = 0; i < 8; i++) {
-            char* endPtr = nullptr;
-            parsed[i]    = std::strtoul(fields[i].c_str(), &endPtr, 16);
-            // Validate: endPtr should point to end of string (full parse)
-            if (endPtr == nullptr || *endPtr != '\0' || fields[i].empty()) {
-              parseSuccess = false;
-              break;
-            }
-          }
-
-          if (parseSuccess) {
-            meta.access       = static_cast<uint8_t>(parsed[0]);
-            meta.file_type    = static_cast<uint8_t>(parsed[1]);
-            meta.aux_type     = static_cast<uint16_t>(parsed[2]);
-            meta.storage_type = static_cast<uint8_t>(parsed[3]);
-            meta.create_date  = static_cast<uint16_t>(parsed[4]);
-            meta.create_time  = static_cast<uint16_t>(parsed[5]);
-            meta.mod_date     = static_cast<uint16_t>(parsed[6]);
-            meta.mod_time     = static_cast<uint16_t>(parsed[7]);
-            metadataLoaded    = true;
-          }
+      // Read access xattr
+      if (prodos8_get_xattr(hostPath.string(), "access", value) == ERR_NO_ERROR) {
+        uint8_t accessByte;
+        if (parse_access_byte(value, accessByte)) {
+          meta.access  = accessByte;
+          accessLoaded = true;
         }
       }
 
-      if (!metadataLoaded) {
-        // Provide defaults based on file system attributes
-        struct stat st;
-        if (stat(hostPath.string().c_str(), &st) == 0) {
-          // Derive access from Linux permissions
-          meta.access = 0xC3;  // Default: read+write+rename+destroy
+      // Read file_type xattr
+      if (prodos8_get_xattr(hostPath.string(), "file_type", value) == ERR_NO_ERROR) {
+        uint8_t fileTypeByte;
+        if (parseHexByte(value, fileTypeByte)) {
+          meta.file_type = fileTypeByte;
+          fileTypeLoaded = true;
+        }
+      }
+
+      // Read aux_type xattr
+      if (prodos8_get_xattr(hostPath.string(), "aux_type", value) == ERR_NO_ERROR) {
+        uint16_t auxTypeWord;
+        if (parseHexWord(value, auxTypeWord)) {
+          meta.aux_type = auxTypeWord;
+          auxTypeLoaded = true;
+        }
+      }
+
+      // Read storage_type xattr
+      if (prodos8_get_xattr(hostPath.string(), "storage_type", value) == ERR_NO_ERROR) {
+        uint8_t storageTypeByte;
+        if (parseHexByte(value, storageTypeByte)) {
+          meta.storage_type = storageTypeByte;
+          storageTypeLoaded = true;
+        }
+      }
+
+      // Get filesystem stats for defaults
+      struct stat st;
+      bool        haveStat = (stat(hostPath.string().c_str(), &st) == 0);
+
+      // Fill in missing fields with defaults
+      if (!accessLoaded) {
+        meta.access = 0xC3;  // Default: read+write+rename+destroy
+        if (haveStat) {
           if (!(st.st_mode & S_IWUSR)) {
             meta.access &= ~0x02;  // Clear write bit
           }
           if (!(st.st_mode & S_IRUSR)) {
             meta.access &= ~0x01;  // Clear read bit
           }
+        }
+      }
 
-          // Set storage type
-          if (isDirectory) {
-            meta.storage_type = 0x0D;  // Directory
-            meta.file_type    = 0x0F;  // Directory file type
-          } else {
-            meta.storage_type = 0x01;  // Standard file
-            meta.file_type    = 0x00;  // Default: typeless file
-          }
+      if (!fileTypeLoaded) {
+        meta.file_type = isDirectory ? 0x0F : 0x00;
+      }
 
-          meta.aux_type = 0x0000;
+      if (!auxTypeLoaded) {
+        meta.aux_type = 0x0000;
+      }
 
-          // Use mtime for both create and mod times
+      if (!storageTypeLoaded) {
+        meta.storage_type = isDirectory ? 0x0D : 0x01;
+      }
+
+      // Set create_date/create_time from "created" xattr if present, otherwise fall back to stat
+      time_t createTimestamp;
+      bool   haveCreatedXattr = false;
+
+      if (prodos8_get_xattr(hostPath.string(), "created", value) == ERR_NO_ERROR) {
+        if (parseISO8601(value, createTimestamp)) {
+          meta.create_date = encodeProDOSDate(createTimestamp);
+          meta.create_time = encodeProDOSTime(createTimestamp);
+          haveCreatedXattr = true;
+        }
+      }
+
+      // If no valid created xattr, fall back to mtime or now
+      if (!haveCreatedXattr) {
+        if (haveStat) {
           meta.create_date = encodeProDOSDate(st.st_mtime);
           meta.create_time = encodeProDOSTime(st.st_mtime);
-          meta.mod_date    = encodeProDOSDate(st.st_mtime);
-          meta.mod_time    = encodeProDOSTime(st.st_mtime);
         } else {
-          // Fallback defaults
-          meta.access       = 0xC3;
-          meta.file_type    = isDirectory ? 0x0F : 0x00;
-          meta.aux_type     = 0x0000;
-          meta.storage_type = isDirectory ? 0x0D : 0x01;
-
           time_t now       = ::time(nullptr);
           meta.create_date = encodeProDOSDate(now);
           meta.create_time = encodeProDOSTime(now);
-          meta.mod_date    = meta.create_date;
-          meta.mod_time    = meta.create_time;
         }
+      }
+
+      // Always set mod_date/mod_time from stat mtime
+      if (haveStat) {
+        meta.mod_date = encodeProDOSDate(st.st_mtime);
+        meta.mod_time = encodeProDOSTime(st.st_mtime);
+      } else {
+        // If no stat available, use create time
+        meta.mod_date = meta.create_date;
+        meta.mod_time = meta.create_time;
       }
 
       return meta;

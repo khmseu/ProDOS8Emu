@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 
+#include "prodos8emu/access_byte.hpp"
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/mli.hpp"
@@ -85,12 +86,11 @@ namespace prodos8emu {
     // Load metadata to check access bits
     std::string metaValue;
     uint8_t     access = 0xC3;  // default: read+write+rename+destroy
-    if (prodos8_get_xattr(hostPath.string(), "metadata", metaValue) == ERR_NO_ERROR &&
+    if (prodos8_get_xattr(hostPath.string(), "access", metaValue) == ERR_NO_ERROR &&
         !metaValue.empty()) {
-      char*         endPtr = nullptr;
-      unsigned long a      = std::strtoul(metaValue.c_str(), &endPtr, 16);
-      if (endPtr && *endPtr == ':') {
-        access = static_cast<uint8_t>(a);
+      uint8_t accessByte;
+      if (parse_access_byte(metaValue, accessByte)) {
+        access = accessByte;
       }
     }
 

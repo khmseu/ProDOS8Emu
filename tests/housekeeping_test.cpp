@@ -559,7 +559,7 @@ int main() {
 
   // Test 14: Corrupted metadata xattr falls back to defaults
   {
-    std::cout << "Test 14: Corrupted metadata xattr falls back to defaults\n";
+    std::cout << "Test 14: Corrupted metadata xattrs fall back to defaults\n";
     TestMemory             mem;
     prodos8emu::MLIContext ctx(tempDir);
 
@@ -581,9 +581,11 @@ int main() {
                 << "\n";
       failures++;
     } else {
-      // Corrupt the metadata xattr
+      // Corrupt the xattrs with invalid values
       fs::path hostPath = volume1 / "CORRUPT";
-      prodos8emu::prodos8_set_xattr(hostPath.string(), "metadata", "garbage:data:invalid");
+      prodos8emu::prodos8_set_xattr(hostPath.string(), "file_type", "zz");  // Invalid hex
+      prodos8emu::prodos8_set_xattr(hostPath.string(), "access",
+                                    "toolong");  // Wrong length (should be 8 chars)
 
       // Try to get file info - should fall back to defaults rather than return garbage
       mem.writeCountedString(0x0500, "/V1/CORRUPT");
@@ -600,24 +602,204 @@ int main() {
         uint8_t file_type    = prodos8emu::read_u8(mem.banks(), getBlock + 4);
         uint8_t storage_type = prodos8emu::read_u8(mem.banks(), getBlock + 7);
 
-        // Should have sensible defaults (storage_type 0x01 for regular file)
+        // Should have sensible defaults
         bool success = true;
-        if (storage_type != 0x01 && storage_type != 0x00) {
-          std::cerr << "FAIL: storage_type should be 0x01 (or 0x00), got 0x" << std::hex
-                    << (int)storage_type << "\n";
+        // storage_type should be 0x01 (regular file) since it was not corrupted
+        if (storage_type != 0x01) {
+          std::cerr << "FAIL: storage_type should be 0x01, got 0x" << std::hex << (int)storage_type
+                    << "\n";
           success = false;
         }
-        // file_type could be 0x00 (default) but shouldn't be garbage like 0xFF or high values
-        if (file_type > 0xF0) {
-          std::cerr << "FAIL: file_type appears to be garbage: 0x" << std::hex << (int)file_type
-                    << "\n";
+        // file_type should have fallen back to 0x00 (default) since "zz" is invalid
+        if (file_type != 0x00) {
+          std::cerr << "FAIL: file_type should be 0x00 after corruption, got 0x" << std::hex
+                    << (int)file_type << "\n";
           success = false;
         }
 
         if (success) {
-          std::cout << "PASS: Corrupted metadata xattr falls back to defaults\n";
+          std::cout << "PASS: Corrupted metadata xattrs fall back to defaults\n";
         } else {
           failures++;
+        }
+      }
+    }
+  }
+
+  // Test 14a: Direct xattr format verification
+  {
+    std::cout << "Test 14a: Direct xattr format verification\n";
+    TestMemory             mem;
+    prodos8emu::MLIContext ctx(tempDir);
+
+    // Create a file with specific access byte 0xC3
+    mem.writeCountedString(0x0400, "/V1/XATTRTEST");
+    uint16_t paramBlock = 0x0300;
+    prodos8emu::write_u8(mem.banks(), paramBlock, 7);
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 1, 0x0400);
+    prodos8emu::write_u8(mem.banks(), paramBlock + 3, 0xC3);        // access = 0xC3
+    prodos8emu::write_u8(mem.banks(), paramBlock + 4, 0x06);        // file_type = 0x06
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 5, 0x2000);  // aux_type = 0x2000
+    prodos8emu::write_u8(mem.banks(), paramBlock + 7, 0x01);        // storage_type = 0x01
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 8, 0x0000);
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 10, 0x0000);
+
+    uint8_t err = ctx.createCall(mem.constBanks(), paramBlock);
+    if (err != prodos8emu::ERR_NO_ERROR) {
+      std::cerr << "FAIL: CREATE for xattr verification test failed: 0x" << std::hex << (int)err
+                << "\n";
+      failures++;
+    } else {
+      // Directly read the xattrs to verify format
+      fs::path    hostPath = volume1 / "XATTRTEST";
+      std::string accessValue;
+      std::string fileTypeValue;
+      std::string auxTypeValue;
+      std::string storageTypeValue;
+      std::string createdValue;
+
+      bool allPresent = true;
+      allPresent &= (prodos8emu::prodos8_get_xattr(hostPath.string(), "access", accessValue) ==
+                     prodos8emu::ERR_NO_ERROR);
+      allPresent &= (prodos8emu::prodos8_get_xattr(hostPath.string(), "file_type", fileTypeValue) ==
+                     prodos8emu::ERR_NO_ERROR);
+      allPresent &= (prodos8emu::prodos8_get_xattr(hostPath.string(), "aux_type", auxTypeValue) ==
+                     prodos8emu::ERR_NO_ERROR);
+      allPresent &= (prodos8emu::prodos8_get_xattr(hostPath.string(), "storage_type",
+                                                   storageTypeValue) == prodos8emu::ERR_NO_ERROR);
+      allPresent &= (prodos8emu::prodos8_get_xattr(hostPath.string(), "created", createdValue) ==
+                     prodos8emu::ERR_NO_ERROR);
+
+      if (!allPresent) {
+        std::cerr << "FAIL: Not all xattrs present\n";
+        failures++;
+      } else {
+        bool success = true;
+
+        // Check access = "dn-..-wr" for 0xC3
+        if (accessValue != "dn-..-wr") {
+          std::cerr << "FAIL: Expected access=\"dn-..-wr\", got \"" << accessValue << "\"\n";
+          success = false;
+        }
+
+        // Check file_type = "06"
+        if (fileTypeValue != "06") {
+          std::cerr << "FAIL: Expected file_type=\"06\", got \"" << fileTypeValue << "\"\n";
+          success = false;
+        }
+
+        // Check aux_type = "2000"
+        if (auxTypeValue != "2000") {
+          std::cerr << "FAIL: Expected aux_type=\"2000\", got \"" << auxTypeValue << "\"\n";
+          success = false;
+        }
+
+        // Check storage_type = "01"
+        if (storageTypeValue != "01") {
+          std::cerr << "FAIL: Expected storage_type=\"01\", got \"" << storageTypeValue << "\"\n";
+          success = false;
+        }
+
+        // Check created format: YYYY-MM-DDTHH:MM:SSZ (length 20, ends with 'Z')
+        if (createdValue.length() != 20) {
+          std::cerr << "FAIL: Expected created length 20, got " << createdValue.length() << "\n";
+          success = false;
+        } else if (createdValue[19] != 'Z') {
+          std::cerr << "FAIL: Expected created to end with 'Z', got '" << createdValue[19] << "'\n";
+          success = false;
+        } else if (createdValue[4] != '-' || createdValue[7] != '-' || createdValue[10] != 'T' ||
+                   createdValue[13] != ':' || createdValue[16] != ':') {
+          std::cerr << "FAIL: Created format doesn't match YYYY-MM-DDTHH:MM:SSZ: \"" << createdValue
+                    << "\"\n";
+          success = false;
+        }
+
+        if (success) {
+          std::cout << "PASS: Direct xattr format verification\n";
+        } else {
+          failures++;
+        }
+      }
+    }
+  }
+
+  // Test 14b: Verify GET_FILE_INFO reads "created" xattr correctly
+  {
+    std::cout << "Test 14b: GET_FILE_INFO reads created xattr\n";
+    TestMemory             mem;
+    prodos8emu::MLIContext ctx(tempDir);
+
+    // Use the XATTRTEST file created in Test 14a
+    fs::path hostPath = volume1 / "XATTRTEST";
+    if (!fs::exists(hostPath)) {
+      std::cerr << "FAIL: XATTRTEST file does not exist (depends on Test 14a)\n";
+      failures++;
+    } else {
+      // Manually set the "created" xattr to a known timestamp: 2000-01-02T03:04:00Z
+      uint8_t setErr =
+          prodos8emu::prodos8_set_xattr(hostPath.string(), "created", "2000-01-02T03:04:00Z");
+      if (setErr != prodos8emu::ERR_NO_ERROR) {
+        std::cerr << "FAIL: Failed to set created xattr: 0x" << std::hex << (int)setErr << "\n";
+        failures++;
+      } else {
+        // Call GET_FILE_INFO to read the metadata
+        mem.writeCountedString(0x0400, "/V1/XATTRTEST");
+        uint16_t paramBlock = 0x0300;
+        prodos8emu::write_u8(mem.banks(), paramBlock, 10);
+        prodos8emu::write_u16_le(mem.banks(), paramBlock + 1, 0x0400);
+
+        uint8_t err = ctx.getFileInfoCall(mem.banks(), paramBlock);
+        if (err != prodos8emu::ERR_NO_ERROR) {
+          std::cerr << "FAIL: GET_FILE_INFO returned error 0x" << std::hex << (int)err << "\n";
+          failures++;
+        } else {
+          // Read create_date and create_time from the parameter block
+          // GET_FILE_INFO layout: offset 14=create_date, offset 16=create_time
+          uint16_t create_date = prodos8emu::read_u16_le(mem.banks(), paramBlock + 14);
+          uint16_t create_time = prodos8emu::read_u16_le(mem.banks(), paramBlock + 16);
+
+          // Expected values for 2000-01-02T03:04:00Z:
+          // Parse the timestamp and encode it the same way the implementation does
+          // to handle timezone conversions properly
+          struct tm utc_tm = {};
+          utc_tm.tm_year   = 2000 - 1900;
+          utc_tm.tm_mon    = 1 - 1;
+          utc_tm.tm_mday   = 2;
+          utc_tm.tm_hour   = 3;
+          utc_tm.tm_min    = 4;
+          utc_tm.tm_sec    = 0;
+          utc_tm.tm_isdst  = 0;
+
+          // Convert UTC to time_t using timegm (same as implementation)
+          time_t utc_time = ::timegm(&utc_tm);
+
+          // Now convert back to local time and encode to ProDOS format
+          struct tm* local_tm = localtime(&utc_time);
+          if (!local_tm) {
+            std::cerr << "FAIL: localtime() failed\n";
+            failures++;
+          } else {
+            // Encode to ProDOS date format
+            int      day   = local_tm->tm_mday;
+            int      month = local_tm->tm_mon + 1;
+            int      year  = local_tm->tm_year;
+            uint16_t expected_date =
+                static_cast<uint16_t>((day & 0x1F) | ((month & 0x0F) << 5) | ((year & 0x7F) << 9));
+
+            // Encode to ProDOS time format
+            int      minute        = local_tm->tm_min;
+            int      hour          = local_tm->tm_hour;
+            uint16_t expected_time = static_cast<uint16_t>((minute & 0x3F) | ((hour & 0x1F) << 8));
+
+            if (create_date != expected_date || create_time != expected_time) {
+              std::cerr << "FAIL: Expected create_date=0x" << std::hex << expected_date
+                        << " create_time=0x" << expected_time << ", got create_date=0x"
+                        << create_date << " create_time=0x" << create_time << "\n";
+              failures++;
+            } else {
+              std::cout << "PASS: GET_FILE_INFO reads created xattr\n";
+            }
+          }
         }
       }
     }
