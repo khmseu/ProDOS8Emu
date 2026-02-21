@@ -1,6 +1,12 @@
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <time.h>
+
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 #include "prodos8emu/access_byte.hpp"
@@ -1210,6 +1216,172 @@ int main() {
         failures++;
       } else {
         std::cout << "PASS: Rejects '-' in reserved positions\n";
+      }
+    }
+  }
+
+  // Test: GET_FILE_INFO derives mod_date/mod_time from filesystem mtime
+  {
+    std::cout << "Test: GET_FILE_INFO reads mod_date/mod_time from filesystem mtime\n";
+    TestMemory             mem;
+    prodos8emu::MLIContext ctx(tempDir);
+
+    // Create a test file
+    fs::path hostPath = volume1 / "MTIMETEST";
+    {
+      std::ofstream f(hostPath);
+      f << "test data";
+    }
+
+    // Set a known mtime on the file (June 1, 2025, 14:30:00)
+    // ProDOS date: year=125 (2025-1900), month=6, day=1
+    // ProDOS time: hour=14, minute=30
+    struct tm t  = {};
+    t.tm_year    = 125;  // 2025 - 1900
+    t.tm_mon     = 5;    // 0-based: June = 5
+    t.tm_mday    = 1;
+    t.tm_hour    = 14;
+    t.tm_min     = 30;
+    t.tm_sec     = 0;
+    t.tm_isdst   = -1;
+    time_t mtime = mktime(&t);
+
+    struct timespec times[2];
+    times[0].tv_sec  = mtime;  // atime
+    times[0].tv_nsec = 0;
+    times[1].tv_sec  = mtime;  // mtime
+    times[1].tv_nsec = 0;
+    utimensat(AT_FDCWD, hostPath.string().c_str(), times, 0);
+
+    // Call GET_FILE_INFO
+    mem.writeCountedString(0x0400, "/V1/MTIMETEST");
+    uint16_t paramBlock = 0x0300;
+    prodos8emu::write_u8(mem.banks(), paramBlock, 0x0A);
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 1, 0x0400);
+
+    uint8_t err = ctx.getFileInfoCall(mem.banks(), paramBlock);
+    if (err != prodos8emu::ERR_NO_ERROR) {
+      std::cerr << "FAIL: GET_FILE_INFO returned error 0x" << std::hex << (int)err << "\n";
+      failures++;
+    } else {
+      uint16_t mod_date = prodos8emu::read_u16_le(mem.banks(), paramBlock + 10);
+      uint16_t mod_time = prodos8emu::read_u16_le(mem.banks(), paramBlock + 12);
+
+      // Decode ProDOS date/time
+      int day   = mod_date & 0x1F;
+      int month = (mod_date >> 5) & 0x0F;
+      int year  = (mod_date >> 9) & 0x7F;
+      int min   = mod_time & 0x3F;
+      int hour  = (mod_time >> 8) & 0x1F;
+
+      bool success = true;
+      if (day != 1) {
+        std::cerr << "FAIL: Expected day=1, got " << day << "\n";
+        success = false;
+      }
+      if (month != 6) {
+        std::cerr << "FAIL: Expected month=6, got " << month << "\n";
+        success = false;
+      }
+      if (year != 125) {
+        std::cerr << "FAIL: Expected year=125, got " << year << "\n";
+        success = false;
+      }
+      if (hour != 14) {
+        std::cerr << "FAIL: Expected hour=14, got " << hour << "\n";
+        success = false;
+      }
+      if (min != 30) {
+        std::cerr << "FAIL: Expected minute=30, got " << min << "\n";
+        success = false;
+      }
+
+      if (success) {
+        std::cout << "PASS: GET_FILE_INFO reads mod_date/mod_time from filesystem mtime\n";
+      } else {
+        failures++;
+      }
+    }
+  }
+
+  // Test: SET_FILE_INFO updates filesystem mtime
+  {
+    std::cout << "Test: SET_FILE_INFO updates filesystem mtime\n";
+    TestMemory             mem;
+    prodos8emu::MLIContext ctx(tempDir);
+
+    // Create a test file
+    fs::path hostPath = volume1 / "MTIMEUPDATE";
+    {
+      std::ofstream f(hostPath);
+      f << "test data";
+    }
+
+    // Get initial mtime
+    struct stat st_before;
+    stat(hostPath.string().c_str(), &st_before);
+
+    // Sleep briefly to ensure time difference
+    struct timespec sleep_time;
+    sleep_time.tv_sec  = 0;
+    sleep_time.tv_nsec = 100000000;  // 100ms
+    nanosleep(&sleep_time, nullptr);
+
+    // Call SET_FILE_INFO with a different mod_date/mod_time
+    // Set to July 15, 2024, 18:45:00
+    // ProDOS date: year=124 (2024-1900), month=7, day=15
+    // ProDOS date = (15 & 0x1F) | ((7 & 0x0F) << 5) | ((124 & 0x7F) << 9)
+    //             = 15 | (7 << 5) | (124 << 9) = 15 | 224 | 63488 = 63727 = 0xF8EF
+    // ProDOS time: hour=18, minute=45
+    // ProDOS time = (45 & 0x3F) | ((18 & 0x1F) << 8)
+    //             = 45 | (18 << 8) = 45 | 4608 = 4653 = 0x122D
+
+    mem.writeCountedString(0x0400, "/V1/MTIMEUPDATE");
+    uint16_t paramBlock = 0x0300;
+    prodos8emu::write_u8(mem.banks(), paramBlock, 7);
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 1, 0x0400);   // pathname
+    prodos8emu::write_u8(mem.banks(), paramBlock + 3, 0xC3);         // access
+    prodos8emu::write_u8(mem.banks(), paramBlock + 4, 0x00);         // file_type
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 5, 0x0000);   // aux_type
+    prodos8emu::write_u8(mem.banks(), paramBlock + 7, 0);            // null_field[0]
+    prodos8emu::write_u8(mem.banks(), paramBlock + 8, 0);            // null_field[1]
+    prodos8emu::write_u8(mem.banks(), paramBlock + 9, 0);            // null_field[2]
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 10, 0xF8EF);  // mod_date
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 12, 0x122D);  // mod_time
+
+    uint8_t err = ctx.setFileInfoCall(mem.constBanks(), paramBlock);
+    if (err != prodos8emu::ERR_NO_ERROR) {
+      std::cerr << "FAIL: SET_FILE_INFO returned error 0x" << std::hex << (int)err << "\n";
+      failures++;
+    } else {
+      // Check that filesystem mtime was updated
+      struct stat st_after;
+      stat(hostPath.string().c_str(), &st_after);
+
+      // Compute expected mtime from ProDOS date/time
+      struct tm t_expected  = {};
+      t_expected.tm_year    = 124;  // 2024 - 1900
+      t_expected.tm_mon     = 6;    // 0-based: July = 6
+      t_expected.tm_mday    = 15;
+      t_expected.tm_hour    = 18;
+      t_expected.tm_min     = 45;
+      t_expected.tm_sec     = 0;
+      t_expected.tm_isdst   = -1;
+      time_t expected_mtime = mktime(&t_expected);
+
+      // Allow small difference due to rounding/DST
+      time_t diff = st_after.st_mtime - expected_mtime;
+      if (diff < 0) diff = -diff;
+
+      if (diff > 3600) {  // Allow 1 hour tolerance for DST
+        std::cerr << "FAIL: Filesystem mtime not updated correctly. Expected ~" << expected_mtime
+                  << ", got " << st_after.st_mtime << " (diff=" << diff << ")\n";
+        failures++;
+      } else if (st_after.st_mtime == st_before.st_mtime) {
+        std::cerr << "FAIL: Filesystem mtime was not changed\n";
+        failures++;
+      } else {
+        std::cout << "PASS: SET_FILE_INFO updates filesystem mtime\n";
       }
     }
   }

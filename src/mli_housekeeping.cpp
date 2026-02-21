@@ -1,5 +1,5 @@
+#include <fcntl.h>
 #include <sys/stat.h>
-#include <utime.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -742,11 +742,18 @@ namespace prodos8emu {
 
     // Update mtime if mod_date/time specified
     if (mod_date != 0 && mod_time != 0) {
-      time_t         mtime = decodeProDOSDateTime(mod_date, mod_time);
-      struct utimbuf times;
-      times.actime  = mtime;
-      times.modtime = mtime;
-      utime(hostPath.string().c_str(), &times);
+      time_t          mtime = decodeProDOSDateTime(mod_date, mod_time);
+      struct timespec times[2];
+      times[0].tv_sec  = mtime;  // atime
+      times[0].tv_nsec = 0;
+      times[1].tv_sec  = mtime;  // mtime
+      times[1].tv_nsec = 0;
+      if (utimensat(AT_FDCWD, hostPath.string().c_str(), times, 0) == -1) {
+        if (errno == EACCES || errno == EPERM) {
+          return ERR_ACCESS_ERROR;
+        }
+        return ERR_IO_ERROR;
+      }
     }
 
     // Store updated metadata
