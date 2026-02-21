@@ -25,6 +25,7 @@ add_library(prodos8emu
     src/mli_system.cpp
     src/path.cpp
     src/xattr.cpp
+    src/apple2mem.cpp
 )
 
 target_include_directories(prodos8emu
@@ -116,3 +117,15 @@ target_link_libraries(prodos8emu_system_tests
 )
 
 add_test(NAME prodos8emu_system_tests COMMAND prodos8emu_system_tests)
+
+# Test executable - Apple2Memory tests
+add_executable(prodos8emu_apple2mem_tests
+    tests/apple2mem_test.cpp
+)
+
+target_link_libraries(prodos8emu_apple2mem_tests
+    PRIVATE
+        prodos8emu
+)
+
+add_test(NAME prodos8emu_apple2mem_tests COMMAND prodos8emu_apple2mem_tests)
