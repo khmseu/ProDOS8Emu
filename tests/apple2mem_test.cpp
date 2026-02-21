@@ -305,6 +305,207 @@ int main() {
     }
   }
 
+  // Test 13: applySoftSwitch returns false for non-LC-switch addresses
+  {
+    std::cout << "Test 13: applySoftSwitch rejects non-switch addresses\n";
+    prodos8emu::Apple2Memory mem;
+
+    bool ok = !mem.applySoftSwitch(0xC000, true) && !mem.applySoftSwitch(0xC07F, true) &&
+              !mem.applySoftSwitch(0xC090, true) && !mem.applySoftSwitch(0x0000, true);
+
+    if (!ok) {
+      std::cerr << "FAIL: applySoftSwitch accepted non-switch address\n";
+      failures++;
+    } else {
+      std::cout << "PASS: applySoftSwitch rejects non-switch addresses\n";
+    }
+  }
+
+  // Test 14: $C080 read - enable LC bank 2 read, write protect
+  {
+    std::cout << "Test 14: $C080 read - LC bank 2 read, write protect\n";
+    prodos8emu::Apple2Memory mem;
+
+    bool valid = mem.applySoftSwitch(0xC080, true);
+    bool ok    = valid && mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && !mem.isLCBank1();
+
+    if (!ok) {
+      std::cerr << "FAIL: $C080 did not set expected state\n";
+      failures++;
+    } else {
+      std::cout << "PASS: $C080 read - LC bank 2 read, write protect\n";
+    }
+  }
+
+  // Test 15: $C082 read - ROM read (LC disabled), write protect
+  {
+    std::cout << "Test 15: $C082 read - ROM read, write protect\n";
+    prodos8emu::Apple2Memory mem;
+
+    mem.applySoftSwitch(0xC082, true);
+    bool ok = !mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && !mem.isLCBank1();
+
+    if (!ok) {
+      std::cerr << "FAIL: $C082 did not set expected state\n";
+      failures++;
+    } else {
+      std::cout << "PASS: $C082 read - ROM read, write protect\n";
+    }
+  }
+
+  // Test 16: $C088 read - enable LC bank 1 read, write protect
+  {
+    std::cout << "Test 16: $C088 read - LC bank 1 read, write protect\n";
+    prodos8emu::Apple2Memory mem;
+
+    mem.applySoftSwitch(0xC088, true);
+    bool ok = mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && mem.isLCBank1();
+
+    if (!ok) {
+      std::cerr << "FAIL: $C088 did not set expected state\n";
+      failures++;
+    } else {
+      std::cout << "PASS: $C088 read - LC bank 1 read, write protect\n";
+    }
+  }
+
+  // Test 17: $C081 two-read protocol enables write
+  {
+    std::cout << "Test 17: $C081 two reads enable write\n";
+    prodos8emu::Apple2Memory mem;
+
+    // First read: prequalify
+    mem.applySoftSwitch(0xC081, true);
+    bool afterFirst = !mem.isLCWriteEnabled() && mem.isLCWritePrequalified();
+
+    // Second read: write-enable activated
+    mem.applySoftSwitch(0xC081, true);
+    bool afterSecond = mem.isLCWriteEnabled() && !mem.isLCWritePrequalified();
+
+    if (!afterFirst || !afterSecond) {
+      std::cerr << "FAIL: $C081 two-read write-enable did not work\n";
+      failures++;
+    } else {
+      std::cout << "PASS: $C081 two reads enable write\n";
+    }
+  }
+
+  // Test 18: Write access clears write-enable pre-qualification
+  {
+    std::cout << "Test 18: Write to soft switch clears pre-qualification\n";
+    prodos8emu::Apple2Memory mem;
+
+    // First read: prequalify
+    mem.applySoftSwitch(0xC081, true);
+    bool prequalSet = mem.isLCWritePrequalified();
+
+    // Write access: should clear pre-qualification
+    mem.applySoftSwitch(0xC081, false);
+    bool prequalCleared = !mem.isLCWritePrequalified() && !mem.isLCWriteEnabled();
+
+    if (!prequalSet || !prequalCleared) {
+      std::cerr << "FAIL: Write did not clear pre-qualification\n";
+      failures++;
+    } else {
+      std::cout << "PASS: Write to soft switch clears pre-qualification\n";
+    }
+  }
+
+  // Test 19: $C083 two-read protocol enables LC read+write (bank 2)
+  {
+    std::cout << "Test 19: $C083 two reads enable LC read+write bank 2\n";
+    prodos8emu::Apple2Memory mem;
+
+    mem.applySoftSwitch(0xC083, true);
+    mem.applySoftSwitch(0xC083, true);
+    bool ok = mem.isLCReadEnabled() && mem.isLCWriteEnabled() && !mem.isLCBank1();
+
+    if (!ok) {
+      std::cerr << "FAIL: $C083 two reads did not enable LC read+write\n";
+      failures++;
+    } else {
+      std::cout << "PASS: $C083 two reads enable LC read+write bank 2\n";
+    }
+  }
+
+  // Test 20: $C08B two-read protocol enables LC read+write (bank 1)
+  {
+    std::cout << "Test 20: $C08B two reads enable LC read+write bank 1\n";
+    prodos8emu::Apple2Memory mem;
+
+    mem.applySoftSwitch(0xC08B, true);
+    mem.applySoftSwitch(0xC08B, true);
+    bool ok = mem.isLCReadEnabled() && mem.isLCWriteEnabled() && mem.isLCBank1();
+
+    if (!ok) {
+      std::cerr << "FAIL: $C08B two reads did not enable LC read+write bank 1\n";
+      failures++;
+    } else {
+      std::cout << "PASS: $C08B two reads enable LC read+write bank 1\n";
+    }
+  }
+
+  // Test 21: Mirror addresses $C084-$C087 behave like $C080-$C083
+  {
+    std::cout << "Test 21: Mirror addresses $C084-$C087 work like $C080-$C083\n";
+    prodos8emu::Apple2Memory mem;
+
+    // $C084 mirrors $C080: LC bank 2 read, write protect
+    mem.applySoftSwitch(0xC084, true);
+    bool c084ok = mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && !mem.isLCBank1();
+
+    // $C086 mirrors $C082: ROM read, write protect
+    mem.applySoftSwitch(0xC086, true);
+    bool c086ok = !mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && !mem.isLCBank1();
+
+    if (!c084ok || !c086ok) {
+      std::cerr << "FAIL: Mirror addresses do not work correctly\n";
+      failures++;
+    } else {
+      std::cout << "PASS: Mirror addresses $C084-$C087 work like $C080-$C083\n";
+    }
+  }
+
+  // Test 22: Non-write-enable read clears pre-qualification
+  {
+    std::cout << "Test 22: Non-write-enable read clears pre-qualification\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Prequalify
+    mem.applySoftSwitch(0xC081, true);
+    bool prequal = mem.isLCWritePrequalified();
+
+    // Read non-write-enable switch: should clear pre-qual
+    mem.applySoftSwitch(0xC080, true);
+    bool cleared = !mem.isLCWritePrequalified();
+
+    if (!prequal || !cleared) {
+      std::cerr << "FAIL: Non-write-enable read did not clear pre-qualification\n";
+      failures++;
+    } else {
+      std::cout << "PASS: Non-write-enable read clears pre-qualification\n";
+    }
+  }
+
+  // Test 23: reset() clears write-enable pre-qualification
+  {
+    std::cout << "Test 23: reset() clears write-enable pre-qualification\n";
+    prodos8emu::Apple2Memory mem;
+
+    mem.applySoftSwitch(0xC081, true);  // prequalify
+    bool prequal = mem.isLCWritePrequalified();
+
+    mem.reset();
+    bool cleared = !mem.isLCWritePrequalified();
+
+    if (!prequal || !cleared) {
+      std::cerr << "FAIL: reset() did not clear write-enable pre-qualification\n";
+      failures++;
+    } else {
+      std::cout << "PASS: reset() clears write-enable pre-qualification\n";
+    }
+  }
+
   // Summary
   if (failures == 0) {
     std::cout << "\nAll Apple2Memory tests passed!\n";
