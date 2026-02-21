@@ -594,6 +594,66 @@ int main() {
     }
   }
 
+  // Test 27: ROMIN1 mode reads ROM but writes LC RAM
+  {
+    std::cout << "Test 27: ROMIN1 reads ROM, writes LC RAM\n";
+    prodos8emu::Apple2Memory mem;
+
+    // ROMIN1: bank 1 selected, ROM reads, write-enable after two reads
+    mem.applySoftSwitch(0xC089, true);
+    mem.applySoftSwitch(0xC089, true);
+
+    bool stateOk = !mem.isLCReadEnabled() && mem.isLCWriteEnabled() && mem.isLCBank1();
+
+    prodos8emu::write_u8(mem.banks(), 0xD000, 0xA1);
+    prodos8emu::write_u8(mem.banks(), 0xE000, 0xB2);
+    prodos8emu::write_u8(mem.banks(), 0xFFFF, 0xC3);
+
+    bool readsRomOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xFFFF) == 0;
+
+    mem.setLCReadEnabled(true);
+    bool readsRamOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0xA1 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0xB2 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xFFFF) == 0xC3;
+
+    if (!stateOk || !readsRomOk || !readsRamOk) {
+      std::cerr << "FAIL: ROMIN1 did not behave as read-ROM/write-RAM\n";
+      failures++;
+    } else {
+      std::cout << "PASS: ROMIN1 reads ROM, writes LC RAM\n";
+    }
+  }
+
+  // Test 28: RDROM1 mode ignores writes
+  {
+    std::cout << "Test 28: RDROM1 ignores writes\n";
+    prodos8emu::Apple2Memory mem;
+
+    // RDROM1: bank 1 selected, ROM reads, write protected
+    mem.applySoftSwitch(0xC08A, true);
+    bool stateOk = !mem.isLCReadEnabled() && !mem.isLCWriteEnabled() && mem.isLCBank1();
+
+    prodos8emu::write_u8(mem.banks(), 0xD000, 0xD4);
+    prodos8emu::write_u8(mem.banks(), 0xE000, 0xE5);
+
+    bool readsRomOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0;
+
+    mem.setLCReadEnabled(true);
+    mem.setLCBank1(true);
+    bool readsRamOk = prodos8emu::read_u8(mem.constBanks(), 0xD000) == 0 &&
+                      prodos8emu::read_u8(mem.constBanks(), 0xE000) == 0;
+
+    if (!stateOk || !readsRomOk || !readsRamOk) {
+      std::cerr << "FAIL: RDROM1 did not ignore writes\n";
+      failures++;
+    } else {
+      std::cout << "PASS: RDROM1 ignores writes\n";
+    }
+  }
+
   // Summary
   if (failures == 0) {
     std::cout << "\nAll Apple2Memory tests passed!\n";
