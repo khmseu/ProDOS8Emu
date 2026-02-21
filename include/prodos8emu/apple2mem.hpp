@@ -1,0 +1,154 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+
+#include "memory.hpp"
+
+namespace prodos8emu {
+
+  /**
+   * Apple2Memory - Owner of emulated Apple II memory with Language Card support.
+   *
+   * Models the Apple II 64KB address space and the Language Card (LC) bank-switching
+   * hardware. Memory is organized as 16 banks × 4096 bytes.
+   *
+   * Apple II Memory Map:
+   *   $0000-$BFFF  (banks  0-11): Main RAM (48KB, always read/write)
+   *   $C000-$CFFF  (bank  12):    I/O area (treated as RAM in this model)
+   *   $D000-$DFFF  (bank  13):    ROM or LC bank 1 / LC bank 2 RAM
+   *   $E000-$EFFF  (bank  14):    ROM or LC high RAM
+   *   $F000-$FFFF  (bank  15):    ROM or LC high RAM
+   *
+   * Language Card (LC):
+   *   The LC adds 16KB of extra RAM that overlays the ROM region ($D000-$FFFF).
+   *   The $D000-$DFFF range is double-banked (bank 1 and bank 2); $E000-$FFFF
+   *   has a single LC bank.
+   *
+   *   - LC read enabled:  $D000-$FFFF reads come from LC RAM (bank-selected).
+   *   - LC read disabled: $D000-$FFFF reads come from the ROM area (zero-filled).
+   *   - LC write enabled: $D000-$FFFF writes go to LC RAM (bank-selected).
+   *     Note: Write protection is tracked but cannot be enforced through the
+   *     MemoryBanks pointer interface. Callers must check isLCWriteEnabled()
+   *     before performing writes intended for the LC.
+   *
+   * On construction and after reset():
+   *   - All memory is zeroed.
+   *   - LC read and write are disabled (ROM mode).
+   *   - LC bank 1 is selected.
+   */
+  class Apple2Memory {
+   public:
+    /**
+     * Construct with all memory zeroed, LC disabled, bank 1 selected.
+     */
+    Apple2Memory();
+
+    /**
+     * Reset all memory to zero and restore initial LC state (disabled, bank 1).
+     */
+    void reset();
+
+    /**
+     * Get mutable memory banks for use with MLI calls.
+     *
+     * @return Reference to the current MemoryBanks array.
+     */
+    MemoryBanks& banks() {
+      return m_banks;
+    }
+
+    /**
+     * Get const memory banks for use with MLI calls.
+     *
+     * @return Reference to the current ConstMemoryBanks array.
+     */
+    const ConstMemoryBanks& constBanks() const {
+      return m_constBanks;
+    }
+
+    /**
+     * Enable or disable Language Card read.
+     *
+     * When enabled, reads from $D000-$FFFF come from the LC RAM selected by
+     * the current bank setting. When disabled, reads come from the ROM area
+     * (zero-filled; no ROM image is loaded by this class).
+     *
+     * @param enable True to read from LC RAM; false to read from ROM area.
+     */
+    void setLCReadEnabled(bool enable);
+
+    /**
+     * Enable or disable Language Card write.
+     *
+     * Tracks whether writes to $D000-$FFFF should target LC RAM. Because the
+     * MemoryBanks interface uses raw pointers, write protection cannot be
+     * enforced at the memory level. Callers must check isLCWriteEnabled()
+     * before performing writes intended to be guarded.
+     *
+     * @param enable True to enable writes to LC RAM; false to protect LC RAM.
+     */
+    void setLCWriteEnabled(bool enable);
+
+    /**
+     * Select the active Language Card $D000-$DFFF bank.
+     *
+     * The LC has two independently writable 4KB banks at $D000-$DFFF.
+     * The $E000-$FFFF region is a single LC bank and is unaffected by this call.
+     *
+     * @param bank1 True to select LC bank 1; false to select LC bank 2.
+     */
+    void setLCBank1(bool bank1);
+
+    /**
+     * Returns true if LC read is currently enabled.
+     */
+    bool isLCReadEnabled() const {
+      return m_lcReadEnabled;
+    }
+
+    /**
+     * Returns true if LC write is currently enabled.
+     */
+    bool isLCWriteEnabled() const {
+      return m_lcWriteEnabled;
+    }
+
+    /**
+     * Returns true if LC bank 1 is currently selected for $D000-$DFFF.
+     */
+    bool isLCBank1() const {
+      return m_lcBank1;
+    }
+
+   private:
+    // Bank indices for the Apple II memory map.
+    static constexpr std::size_t MAIN_RAM_LAST_BANK = 12;  // $0000-$CFFF (banks 0-12)
+    static constexpr std::size_t LC_D000_BANK       = 13;  // $D000-$DFFF (language card)
+    static constexpr std::size_t LC_E000_BANK       = 14;  // $E000-$EFFF (LC high)
+    static constexpr std::size_t LC_F000_BANK       = 15;  // $F000-$FFFF (LC high)
+
+    // Main RAM: banks 0-15 ($0000-$FFFF), 64KB total.
+    // When LC read is enabled, banks 13-15 are redirected to the LC buffers below.
+    std::array<std::array<uint8_t, BANK_SIZE>, NUM_BANKS> m_mainRam;
+
+    // Language Card bank 2 storage for $D000-$DFFF (bank index 13).
+    // LC bank 1 for $D000-$DFFF reuses m_mainRam[13].
+    std::array<uint8_t, BANK_SIZE> m_lcBank2;
+
+    // ROM area: zero-filled, used for $D000-$FFFF when LC read is disabled.
+    // Sized to cover banks 13-15 (3 × 4KB).
+    std::array<uint8_t, BANK_SIZE * 3> m_romArea;
+
+    MemoryBanks      m_banks;
+    ConstMemoryBanks m_constBanks;
+
+    bool m_lcReadEnabled;
+    bool m_lcWriteEnabled;
+    bool m_lcBank1;
+
+    // Recompute m_banks / m_constBanks to reflect current LC state.
+    void updateBanks();
+  };
+
+}  // namespace prodos8emu
