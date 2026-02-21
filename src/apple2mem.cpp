@@ -6,7 +6,7 @@ namespace prodos8emu {
 
   Apple2Memory::Apple2Memory()
       : m_mainRam{}, m_lcBank2{}, m_romArea{}, m_lcReadEnabled(false), m_lcWriteEnabled(false),
-        m_lcBank1(true) {
+        m_lcBank1(true), m_lcWritePrequalified(false) {
     updateBanks();
   }
 
@@ -16,9 +16,10 @@ namespace prodos8emu {
     }
     m_lcBank2.fill(0);
     // m_romArea is always zero (never written); no need to re-zero it.
-    m_lcReadEnabled  = false;
-    m_lcWriteEnabled = false;
-    m_lcBank1        = true;
+    m_lcReadEnabled       = false;
+    m_lcWriteEnabled      = false;
+    m_lcBank1             = true;
+    m_lcWritePrequalified = false;
     updateBanks();
   }
 
@@ -70,6 +71,47 @@ namespace prodos8emu {
       m_banks[LC_F000_BANK]      = m_romArea.data() + BANK_SIZE * 2;
       m_constBanks[LC_F000_BANK] = m_romArea.data() + BANK_SIZE * 2;
     }
+  }
+
+  bool Apple2Memory::applySoftSwitch(uint16_t addr, bool isRead) {
+    if (addr < 0xC080 || addr > 0xC08F) {
+      return false;
+    }
+
+    uint8_t offset = static_cast<uint8_t>(addr & 0x000F);
+    bool    bank1  = (offset & 0x08) != 0;  // bit 3: 1 = bank 1, 0 = bank 2
+    uint8_t cmd    = offset & 0x03;          // bits 1-0: command
+
+    // Select the $D000-$DFFF bank
+    setLCBank1(bank1);
+
+    // Determine what this switch requests
+    bool wantsWriteEnable = (cmd == 1 || cmd == 3);
+    bool wantsLCRead      = (cmd == 0 || cmd == 3);
+
+    if (!isRead) {
+      // Write access: clear pre-qualification, disable write
+      m_lcWritePrequalified = false;
+      setLCWriteEnabled(false);
+    } else if (wantsWriteEnable) {
+      if (m_lcWritePrequalified) {
+        // Second consecutive qualifying read: enable write, consume the latch
+        setLCWriteEnabled(true);
+        m_lcWritePrequalified = false;
+      } else {
+        // First qualifying read: set pre-qualification latch
+        m_lcWritePrequalified = true;
+        setLCWriteEnabled(false);
+      }
+    } else {
+      // Read to non-write-enable switch: clear pre-qualification, disable write
+      m_lcWritePrequalified = false;
+      setLCWriteEnabled(false);
+    }
+
+    setLCReadEnabled(wantsLCRead);
+
+    return true;
   }
 
 }  // namespace prodos8emu

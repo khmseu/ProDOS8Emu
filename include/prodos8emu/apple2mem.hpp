@@ -121,6 +121,46 @@ namespace prodos8emu {
       return m_lcBank1;
     }
 
+    /**
+     * Process a Language Card soft-switch access at $C080–$C08F.
+     *
+     * Emulates the 16 LC soft switches that the Apple II maps to $C080–$C08F.
+     * Each access (read or write) updates the LC read, write, and bank state
+     * according to Apple II hardware behavior, including the two-read
+     * write-enable pre-qualification protocol.
+     *
+     * Address encoding (bits 3–0 of the address):
+     *   Bit 3:  bank select – 0 = LC bank 2, 1 = LC bank 1 ($D000-$DFFF)
+     *   Bits 1-0: command:
+     *     00: LC read enabled,  write protected
+     *     01: ROM read (LC disabled), write-enable (requires 2 consecutive reads)
+     *     10: ROM read (LC disabled), write protected
+     *     11: LC read enabled, write-enable (requires 2 consecutive reads)
+     *
+     * Write-enable protocol:
+     *   Write-enable is activated only after two consecutive read accesses to a
+     *   write-enable switch (bits 1–0 == 01 or 11). Any write access to a soft
+     *   switch, or any read to a non-write-enable switch, clears the
+     *   pre-qualification latch.
+     *
+     * @param addr Address in the range $C080–$C08F (addresses outside this
+     *             range are silently ignored).
+     * @param isRead True if this is a read access; false for a write access.
+     * @return true if the address was a valid LC soft switch ($C080–$C08F);
+     *         false otherwise.
+     */
+    bool applySoftSwitch(uint16_t addr, bool isRead);
+
+    /**
+     * Returns true if the LC write-enable pre-qualification latch is set.
+     *
+     * After one read to a write-enable soft switch, this returns true.
+     * A second such read actually enables write. Any other access clears it.
+     */
+    bool isLCWritePrequalified() const {
+      return m_lcWritePrequalified;
+    }
+
    private:
     // Bank indices for the Apple II memory map.
     static constexpr std::size_t MAIN_RAM_LAST_BANK = 12;  // $0000-$CFFF (banks 0-12)
@@ -146,6 +186,7 @@ namespace prodos8emu {
     bool m_lcReadEnabled;
     bool m_lcWriteEnabled;
     bool m_lcBank1;
+    bool m_lcWritePrequalified;  // write-enable pre-qualification latch
 
     // Recompute m_banks / m_constBanks to reflect current LC state.
     void updateBanks();
