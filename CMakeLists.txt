@@ -23,9 +23,11 @@ add_library(prodos8emu
     src/mli_housekeeping.cpp
     src/mli_filing.cpp
     src/mli_system.cpp
+    src/mli_dispatch.cpp
     src/path.cpp
     src/xattr.cpp
     src/apple2mem.cpp
+    src/cpu65c02.cpp
 )
 
 target_include_directories(prodos8emu
@@ -129,3 +131,15 @@ target_link_libraries(prodos8emu_apple2mem_tests
 )
 
 add_test(NAME prodos8emu_apple2mem_tests COMMAND prodos8emu_apple2mem_tests)
+
+# Test executable - CPU65C02 tests
+add_executable(prodos8emu_cpu65c02_tests
+    tests/cpu65c02_test.cpp
+)
+
+target_link_libraries(prodos8emu_cpu65c02_tests
+    PRIVATE
+        prodos8emu
+)
+
+add_test(NAME prodos8emu_cpu65c02_tests COMMAND prodos8emu_cpu65c02_tests)
