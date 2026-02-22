@@ -1,8 +1,66 @@
 #include "prodos8emu/apple2mem.hpp"
 
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <random>
+#include <stdexcept>
+#include <string>
 
 #include "prodos8emu/memory.hpp"
+
+// Helper: Generate a temporary ROM file with deterministic pattern
+static std::filesystem::path createTestROM(std::size_t size) {
+  std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+
+  // Generate unique filename using random suffix
+  std::random_device              rd;
+  std::mt19937                    gen(rd());
+  std::uniform_int_distribution<> dis(10000, 99999);
+  std::string                     filename = "test_rom_" + std::to_string(dis(gen)) + ".bin";
+  std::filesystem::path           romPath  = tempDir / filename;
+
+  // Create ROM file with deterministic pattern
+  std::ofstream ofs(romPath, std::ios::binary);
+  if (!ofs) {
+    throw std::runtime_error("Failed to create test ROM file");
+  }
+
+  // Fill with pattern: byte value = (offset & 0xFF) XOR 0xAA
+  for (std::size_t i = 0; i < size; i++) {
+    uint8_t byte = static_cast<uint8_t>((i & 0xFF) ^ 0xAA);
+    ofs.write(reinterpret_cast<const char*>(&byte), 1);
+  }
+
+  // For 12KB ROM, set specific signature bytes
+  if (size == 12288) {
+    // $D000 (offset 0x0000): 0x4C (JMP opcode)
+    ofs.seekp(0x0000);
+    uint8_t byte = 0x4C;
+    ofs.write(reinterpret_cast<const char*>(&byte), 1);
+
+    // $E000 (offset 0x1000): 0x20 (JSR opcode)
+    ofs.seekp(0x1000);
+    byte = 0x20;
+    ofs.write(reinterpret_cast<const char*>(&byte), 1);
+
+    // $F000 (offset 0x2000): 0x60 (RTS opcode)
+    ofs.seekp(0x2000);
+    byte = 0x60;
+    ofs.write(reinterpret_cast<const char*>(&byte), 1);
+
+    // $FFFC-$FFFD (offset 0x2FFC-0x2FFD): Reset vector = 0xFA62
+    ofs.seekp(0x2FFC);
+    uint8_t lo = 0x62;
+    uint8_t hi = 0xFA;
+    ofs.write(reinterpret_cast<const char*>(&lo), 1);
+    ofs.write(reinterpret_cast<const char*>(&hi), 1);
+  }
+
+  ofs.close();
+  return romPath;
+}
 
 int main() {
   int failures = 0;
@@ -651,6 +709,204 @@ int main() {
       failures++;
     } else {
       std::cout << "PASS: RDROM1 ignores writes\n";
+    }
+  }
+
+  // Test: ROM Loading - Load ROM file and populate ROM area
+  {
+    std::cout << "Test: ROM Loading - Load and populate ROM area\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create temporary 12KB ROM file
+    std::filesystem::path romPath = createTestROM(12288);
+
+    // Load ROM from test file
+    try {
+      mem.loadROM(romPath);
+      std::cout << "  ROM loaded successfully\n";
+
+      // Verify ROM area is not all zero after loading
+      bool hasNonZero = false;
+      for (uint32_t addr = 0xD000; addr < 0x10000; addr++) {
+        if (prodos8emu::read_u8(mem.constBanks(), static_cast<uint16_t>(addr)) != 0) {
+          hasNonZero = true;
+          break;
+        }
+      }
+
+      if (!hasNonZero) {
+        std::cerr << "FAIL: ROM area is still all zeros after loading\n";
+        failures++;
+      } else {
+        std::cout << "PASS: ROM Loading populated ROM area\n";
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "FAIL: ROM Loading threw exception: " << e.what() << "\n";
+      failures++;
+    }
+
+    // Clean up temp file
+    std::filesystem::remove(romPath);
+  }
+
+  // Test: ROM Readback - Read ROM content at $D000-$FFFF when LC read disabled
+  {
+    std::cout << "Test: ROM Readback - Read ROM when LC disabled\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create temporary 12KB ROM file
+    std::filesystem::path romPath = createTestROM(12288);
+
+    try {
+      mem.loadROM(romPath);
+
+      // LC read should be disabled by default (ROM mode)
+      if (mem.isLCReadEnabled()) {
+        std::cerr << "FAIL: LC read should be disabled by default\n";
+        failures++;
+      } else {
+        // Verify specific signature bytes we wrote
+        uint8_t  d000        = prodos8emu::read_u8(mem.constBanks(), 0xD000);
+        uint8_t  e000        = prodos8emu::read_u8(mem.constBanks(), 0xE000);
+        uint8_t  f000        = prodos8emu::read_u8(mem.constBanks(), 0xF000);
+        uint16_t resetVector = prodos8emu::read_u16_le(mem.constBanks(), 0xFFFC);
+
+        if (d000 != 0x4C || e000 != 0x20 || f000 != 0x60 || resetVector != 0xFA62) {
+          std::cerr << "FAIL: ROM signature bytes mismatch\n";
+          failures++;
+        } else {
+          std::cout << "  Reset vector: 0x" << std::hex << resetVector << std::dec << "\n";
+          std::cout << "PASS: ROM Readback works when LC disabled\n";
+        }
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "FAIL: ROM Readback threw exception: " << e.what() << "\n";
+      failures++;
+    }
+
+    // Clean up temp file
+    std::filesystem::remove(romPath);
+  }
+
+  // Test: ROM Readback vs LC RAM - Verify LC read enabled switches to LC RAM
+  {
+    std::cout << "Test: ROM vs LC RAM switching\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create temporary 12KB ROM file
+    std::filesystem::path romPath = createTestROM(12288);
+
+    try {
+      mem.loadROM(romPath);
+
+      // Read a byte from ROM area (LC disabled)
+      uint8_t romByte = prodos8emu::read_u8(mem.constBanks(), 0xD000);
+
+      // Enable LC read and write, write different value
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+      prodos8emu::write_u8(mem.banks(), 0xD000, 0xAA);
+
+      // Read back - should get LC RAM value
+      uint8_t lcByte = prodos8emu::read_u8(mem.constBanks(), 0xD000);
+
+      if (lcByte != 0xAA) {
+        std::cerr << "FAIL: LC RAM read failed, got 0x" << std::hex << static_cast<int>(lcByte)
+                  << std::dec << "\n";
+        failures++;
+      } else {
+        // Disable LC read - should go back to ROM
+        mem.setLCReadEnabled(false);
+        uint8_t backToRom = prodos8emu::read_u8(mem.constBanks(), 0xD000);
+
+        if (backToRom != romByte) {
+          std::cerr << "FAIL: Did not switch back to ROM, expected 0x" << std::hex
+                    << static_cast<int>(romByte) << " got 0x" << static_cast<int>(backToRom)
+                    << std::dec << "\n";
+          failures++;
+        } else {
+          std::cout << "PASS: ROM vs LC RAM switching works\n";
+        }
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "FAIL: ROM vs LC RAM test threw exception: " << e.what() << "\n";
+      failures++;
+    }
+
+    // Clean up temp file
+    std::filesystem::remove(romPath);
+  }
+
+  // Test: ROM Size Validation - File too small
+  {
+    std::cout << "Test: ROM Size Validation - File too small\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create a temporary small file
+    std::filesystem::path smallFile = createTestROM(100);
+
+    bool caughtException = false;
+    try {
+      mem.loadROM(smallFile);
+    } catch (const std::exception& e) {
+      caughtException = true;
+      std::cout << "  Expected exception caught: " << e.what() << "\n";
+    }
+
+    std::filesystem::remove(smallFile);
+
+    if (!caughtException) {
+      std::cerr << "FAIL: loadROM did not throw exception for small file\n";
+      failures++;
+    } else {
+      std::cout << "PASS: ROM Size Validation rejects small file\n";
+    }
+  }
+
+  // Test: ROM Size Validation - File too large
+  {
+    std::cout << "Test: ROM Size Validation - File too large\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create a temporary large file
+    std::filesystem::path largeFile = createTestROM(20000);
+
+    bool caughtException = false;
+    try {
+      mem.loadROM(largeFile);
+    } catch (const std::exception& e) {
+      caughtException = true;
+      std::cout << "  Expected exception caught: " << e.what() << "\n";
+    }
+
+    std::filesystem::remove(largeFile);
+
+    if (!caughtException) {
+      std::cerr << "FAIL: loadROM did not throw exception for large file\n";
+      failures++;
+    } else {
+      std::cout << "PASS: ROM Size Validation rejects large file\n";
+    }
+  }
+
+  // Test: ROM Loading - Nonexistent file
+  {
+    std::cout << "Test: ROM Loading - Nonexistent file\n";
+    prodos8emu::Apple2Memory mem;
+
+    bool caughtException = false;
+    try {
+      mem.loadROM("/nonexistent/file/path.rom");
+    } catch (const std::exception& e) {
+      caughtException = true;
+      std::cout << "  Expected exception caught: " << e.what() << "\n";
+    }
+
+    if (!caughtException) {
+      std::cerr << "FAIL: loadROM did not throw exception for nonexistent file\n";
+      failures++;
+    } else {
+      std::cout << "PASS: ROM Loading rejects nonexistent file\n";
     }
   }
 

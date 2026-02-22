@@ -131,6 +131,7 @@ target_link_libraries(prodos8emu_apple2mem_tests
 )
 
 add_test(NAME prodos8emu_apple2mem_tests COMMAND prodos8emu_apple2mem_tests)
+set_tests_properties(prodos8emu_apple2mem_tests PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 # Test executable - CPU65C02 tests
 add_executable(prodos8emu_cpu65c02_tests

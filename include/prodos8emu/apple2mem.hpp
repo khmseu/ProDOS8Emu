@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 
 #include "memory.hpp"
 
@@ -26,7 +27,8 @@ namespace prodos8emu {
    *   has a single LC bank.
    *
    *   - LC read enabled:  $D000-$FFFF reads come from LC RAM (bank-selected).
-   *   - LC read disabled: $D000-$FFFF reads come from the ROM area (zero-filled).
+  *   - LC read disabled: $D000-$FFFF reads come from the ROM area (loaded via loadROM() or
+  *     zero-filled if not loaded).
    *   - LC write enabled: $D000-$FFFF writes go to LC RAM (bank-selected).
    *   - LC write disabled: writes to $D000-$FFFF are ignored.
    *
@@ -41,7 +43,7 @@ namespace prodos8emu {
    *   $D000-$FFFF; use constBanks() instead.
    *
    * On construction and after reset():
-   *   - All memory is zeroed.
+  *   - All RAM is zeroed.
    *   - LC read and write are disabled (ROM mode).
    *   - LC bank 1 is selected.
    */
@@ -53,9 +55,23 @@ namespace prodos8emu {
     Apple2Memory();
 
     /**
-     * Reset all memory to zero and restore initial LC state (disabled, bank 1).
+     * Reset RAM to zero and restore initial LC state (disabled, bank 1).
+     * Preserves any loaded ROM content.
      */
     void reset();
+
+    /**
+     * Load ROM image from file into the ROM area ($D000-$FFFF).
+     *
+     * Reads exactly 12KB (0x3000 bytes) from the specified file and populates
+     * the internal ROM area. The ROM content becomes visible when LC read is
+     * disabled.
+     *
+     * @param path Path to the ROM image file (must be exactly 12KB).
+     * @throws std::runtime_error if file cannot be opened, is wrong size, or
+     *         read fails.
+     */
+    void loadROM(const std::filesystem::path& path);
 
     /**
      * Get mutable memory banks for use with MLI calls.
@@ -80,7 +96,7 @@ namespace prodos8emu {
      *
      * When enabled, reads from $D000-$FFFF come from the LC RAM selected by
      * the current bank setting. When disabled, reads come from the ROM area
-     * (zero-filled; no ROM image is loaded by this class).
+     * (loaded via loadROM(), or zero-filled if no ROM was loaded).
      *
      * @param enable True to read from LC RAM; false to read from ROM area.
      */
@@ -182,8 +198,8 @@ namespace prodos8emu {
     // LC bank 1 for $D000-$DFFF reuses m_mainRam[13].
     std::array<uint8_t, BANK_SIZE> m_lcBank2;
 
-    // ROM area: zero-filled, used for $D000-$FFFF when LC read is disabled.
-    // Sized to cover banks 13-15 (3 × 4KB).
+    // ROM area: loaded via loadROM() or zero-filled if not loaded, used for $D000-$FFFF when LC
+    // read is disabled. Sized to cover banks 13-15 (3 × 4KB).
     std::array<uint8_t, BANK_SIZE * 3> m_romArea;
 
     // Write-sink area: used for $D000-$FFFF when LC write is disabled.

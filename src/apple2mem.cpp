@@ -1,6 +1,9 @@
 #include "prodos8emu/apple2mem.hpp"
 
 #include <cstring>
+#include <fstream>
+#include <stdexcept>
+#include <string>
 
 namespace prodos8emu {
 
@@ -21,13 +24,36 @@ namespace prodos8emu {
       bank.fill(0);
     }
     m_lcBank2.fill(0);
-    // m_romArea is always zero (never written); no need to re-zero it.
+    // m_romArea retains loaded ROM content; no need to re-zero it.
     m_writeSink.fill(0);
     m_lcReadEnabled       = false;
     m_lcWriteEnabled      = false;
     m_lcBank1             = true;
     m_lcWritePrequalified = false;
     updateBanks();
+  }
+
+  void Apple2Memory::loadROM(const std::filesystem::path& path) {
+    constexpr std::size_t ROM_SIZE = BANK_SIZE * 3;  // 12KB for $D000-$FFFF
+
+    // Open file
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+      throw std::runtime_error("Failed to open ROM file: " + path.string());
+    }
+
+    // Check file size
+    std::streamsize fileSize = file.tellg();
+    if (fileSize != ROM_SIZE) {
+      throw std::runtime_error("ROM file must be exactly " + std::to_string(ROM_SIZE) +
+                               " bytes (12KB), got " + std::to_string(fileSize) + " bytes");
+    }
+
+    // Read ROM data
+    file.seekg(0, std::ios::beg);
+    if (!file.read(reinterpret_cast<char*>(m_romArea.data()), ROM_SIZE)) {
+      throw std::runtime_error("Failed to read ROM file: " + path.string());
+    }
   }
 
   void Apple2Memory::setLCReadEnabled(bool enable) {
