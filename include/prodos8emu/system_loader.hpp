@@ -29,4 +29,20 @@ namespace prodos8emu {
   void loadSystemFile(Apple2Memory& mem, const std::filesystem::path& filePath,
                       uint16_t loadAddr = 0x2000);
 
+  /**
+   * Initialize the Apple II Control-Reset warm start vector.
+   *
+   * Sets up the warm restart vector used by ProDOS system programs at
+   * Control-Reset. Writes the entry address to $03F2/$03F3 (little-endian)
+   * and sets the power-up byte at $03F4 to $A5 to mark the vector as valid.
+   *
+   * From ProDOS 8 Technical Reference, system programs should initialize
+   * this vector on startup and can invalidate it on quit by modifying
+   * the power-up byte.
+   *
+   * @param mem Apple2Memory instance to initialize.
+   * @param entryAddr Entry point address to jump to on warm restart.
+   */
+  void initWarmStartVector(Apple2Memory& mem, uint16_t entryAddr);
+
 }  // namespace prodos8emu

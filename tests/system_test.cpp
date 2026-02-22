@@ -604,6 +604,49 @@ int main() {
     }
   }
 
+  // Test 16: Warm restart vector initialization
+  {
+    std::cout << "Test 16: Warm restart vector initialization\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Initialize restart vector with entry address 0x2000
+    uint16_t entryAddr = 0x2000;
+    prodos8emu::initWarmStartVector(mem, entryAddr);
+
+    // Verify $03F2/$03F3 contain the entry address (little-endian)
+    auto& banks = mem.banks();
+    uint16_t vectorAddr = prodos8emu::read_u16_le(banks, 0x03F2);
+    if (vectorAddr != entryAddr) {
+      std::cerr << "FAIL: Expected restart vector at $03F2 to be 0x" << std::hex << entryAddr
+                << ", got 0x" << vectorAddr << "\n";
+      failures++;
+    }
+
+    // Verify $03F4 contains power-up byte 0xA5
+    uint8_t powerUpByte = prodos8emu::read_u8(banks, 0x03F4);
+    if (powerUpByte != 0xA5) {
+      std::cerr << "FAIL: Expected power-up byte at $03F4 to be 0xA5, got 0x" << std::hex
+                << (int)powerUpByte << "\n";
+      failures++;
+    }
+
+    if (vectorAddr == entryAddr && powerUpByte == 0xA5) {
+      std::cout << "PASS: Warm restart vector initialized correctly\n";
+    }
+
+    // Test with different entry address
+    entryAddr = 0x1000;
+    prodos8emu::initWarmStartVector(mem, entryAddr);
+    vectorAddr = prodos8emu::read_u16_le(banks, 0x03F2);
+    if (vectorAddr != entryAddr) {
+      std::cerr << "FAIL: Expected restart vector to be 0x" << std::hex << entryAddr
+                << ", got 0x" << vectorAddr << " (second test)\n";
+      failures++;
+    } else {
+      std::cout << "PASS: Restart vector can be reinitialized\n";
+    }
+  }
+
   // Clean up
   fs::remove_all(tempDir);
 

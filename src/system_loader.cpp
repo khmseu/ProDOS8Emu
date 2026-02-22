@@ -69,4 +69,14 @@ namespace prodos8emu {
     }
   }
 
+  void initWarmStartVector(Apple2Memory& mem, uint16_t entryAddr) {
+    auto& banks = mem.banks();
+    
+    // Write entry address to $03F2/$03F3 (little-endian)
+    write_u16_le(banks, 0x03F2, entryAddr);
+    
+    // Set power-up byte at $03F4 to $A5 (valid marker)
+    write_u8(banks, 0x03F4, 0xA5);
+  }
+
 }  // namespace prodos8emu
