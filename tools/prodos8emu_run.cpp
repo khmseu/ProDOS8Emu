@@ -4,6 +4,10 @@
 #include <cstring>
 #include <charconv>
 
+#include "prodos8emu/apple2mem.hpp"
+#include "prodos8emu/cpu65c02.hpp"
+#include "prodos8emu/mli.hpp"
+
 enum class ParseResult {
     Ok,
     Help,
@@ -108,7 +112,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // For now, just print the parsed options
+    // Set default volume root if not provided
+    if (opts.volume_root.empty()) {
+        opts.volume_root = ".";
+    }
+    
+    // Print parsed configuration
     std::cout << "Configuration:\n"
               << "  rom=" << opts.rom_path << "\n"
               << "  sys=" << opts.system_file_path << "\n";
@@ -119,10 +128,15 @@ int main(int argc, char* argv[]) {
         std::cout << "  max=unlimited\n";
     }
     
-    if (!opts.volume_root.empty()) {
-        std::cout << "  volroot=" << opts.volume_root << "\n";
-    }
+    std::cout << "  volroot=" << opts.volume_root << "\n";
     
+    // Initialize emulator components
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext ctx(opts.volume_root);
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    
+    std::cout << "\nInitialized emulator components\n";
     std::cout << "\n(Emulator execution not yet implemented)\n";
     
     return 0;
