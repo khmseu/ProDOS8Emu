@@ -9,14 +9,12 @@
 
 namespace prodos8emu {
 
-  void loadSystemFile(Apple2Memory& mem, const std::filesystem::path& filePath,
-                      uint16_t loadAddr) {
+  void loadSystemFile(Apple2Memory& mem, const std::filesystem::path& filePath, uint16_t loadAddr) {
     // Validate load address is in safe range (below I/O space at $C000)
     if (loadAddr >= 0xC000) {
       char buf[128];
       std::snprintf(buf, sizeof(buf),
-                    "Invalid load address: 0x%04X. Must be < 0xC000 to avoid I/O space.",
-                    loadAddr);
+                    "Invalid load address: 0x%04X. Must be < 0xC000 to avoid I/O space.", loadAddr);
       throw std::runtime_error(buf);
     }
 
@@ -40,9 +38,10 @@ namespace prodos8emu {
     const uint32_t maxSize = 0xC000 - loadAddr;
     if (static_cast<uint32_t>(fileSize) > maxSize) {
       char buf[256];
-      std::snprintf(buf, sizeof(buf),
-                    "System file too large: %zu bytes exceeds maximum of %u bytes for load address 0x%04X",
-                    static_cast<size_t>(fileSize), maxSize, loadAddr);
+      std::snprintf(
+          buf, sizeof(buf),
+          "System file too large: %zu bytes exceeds maximum of %u bytes for load address 0x%04X",
+          static_cast<size_t>(fileSize), maxSize, loadAddr);
       throw std::runtime_error(buf);
     }
 
@@ -71,10 +70,10 @@ namespace prodos8emu {
 
   void initWarmStartVector(Apple2Memory& mem, uint16_t entryAddr) {
     auto& banks = mem.banks();
-    
+
     // Write entry address to $03F2/$03F3 (little-endian)
     write_u16_le(banks, 0x03F2, entryAddr);
-    
+
     // Set power-up byte at $03F4 to $A5 (valid marker)
     write_u8(banks, 0x03F4, 0xA5);
   }

@@ -1,7 +1,6 @@
-#include "prodos8emu/mli.hpp"
-
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
+#include "prodos8emu/mli.hpp"
 
 namespace prodos8emu {
 

@@ -509,9 +509,9 @@ namespace prodos8emu {
    *
    * Routes an MLI call number to the corresponding MLIContext method.
    *
-    * Convention for ProDOS MLI entry (commonly used by emulated callers):
-    * - code executes `JSR $BF00`
-    * - immediately following the JSR: `.byte callNumber` then `.word paramBlockAddr`
+   * Convention for ProDOS MLI entry (commonly used by emulated callers):
+   * - code executes `JSR $BF00`
+   * - immediately following the JSR: `.byte callNumber` then `.word paramBlockAddr`
    *
    * @param ctx MLI context
    * @param banks Emulated memory banks (mutable)

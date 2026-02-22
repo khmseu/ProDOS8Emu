@@ -614,7 +614,7 @@ int main() {
     prodos8emu::initWarmStartVector(mem, entryAddr);
 
     // Verify $03F2/$03F3 contain the entry address (little-endian)
-    auto& banks = mem.banks();
+    auto&    banks      = mem.banks();
     uint16_t vectorAddr = prodos8emu::read_u16_le(banks, 0x03F2);
     if (vectorAddr != entryAddr) {
       std::cerr << "FAIL: Expected restart vector at $03F2 to be 0x" << std::hex << entryAddr
@@ -639,8 +639,8 @@ int main() {
     prodos8emu::initWarmStartVector(mem, entryAddr);
     vectorAddr = prodos8emu::read_u16_le(banks, 0x03F2);
     if (vectorAddr != entryAddr) {
-      std::cerr << "FAIL: Expected restart vector to be 0x" << std::hex << entryAddr
-                << ", got 0x" << vectorAddr << " (second test)\n";
+      std::cerr << "FAIL: Expected restart vector to be 0x" << std::hex << entryAddr << ", got 0x"
+                << vectorAddr << " (second test)\n";
       failures++;
     } else {
       std::cout << "PASS: Restart vector can be reinitialized\n";

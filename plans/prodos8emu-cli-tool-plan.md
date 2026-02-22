@@ -15,14 +15,14 @@ Create a C++ command-line tool that instantiates a complete Apple II emulator us
   - `ROMReadbackTest`: Verify ROM content is readable at $D000-$FFFF when LC read is disabled
   - `ROMSizeValidation`: Verify error handling for incorrect file sizes
 - **Steps:**
-     1. Write test that creates a temporary ROM file and calls `loadROM()`
-     2. Run test to see it fail (method doesn't exist)
-     3. Add method declaration to apple2mem.hpp
-     4. Implement minimal loadROM in apple2mem.cpp (read file, validate size, copy to m_romArea)
-     5. Run test to see it pass
-     6. Write readback test verifying ROM data is accessible
-     7. Run test to see it pass
-     8. Build and run all tests to confirm no regressions
+  1.  Write test that creates a temporary ROM file and calls `loadROM()`
+  2.  Run test to see it fail (method doesn't exist)
+  3.  Add method declaration to apple2mem.hpp
+  4.  Implement minimal loadROM in apple2mem.cpp (read file, validate size, copy to m_romArea)
+  5.  Run test to see it pass
+  6.  Write readback test verifying ROM data is accessible
+  7.  Run test to see it pass
+  8.  Build and run all tests to confirm no regressions
 
 ### 2. **Phase 2: System File Loader Helper**
 
@@ -35,15 +35,15 @@ Create a C++ command-line tool that instantiates a complete Apple II emulator us
   - `SystemFileValidationTest`: Verify JMP instruction check at $2000
   - `PathBufferInitTest`: Verify $0280 pathname initialization
 - **Steps:**
-     1. Write test that creates a minimal system file (starts with JMP) and loads it
-     2. Run test to see it fail (function doesn't exist)
-     3. Create system_loader.hpp with function signature
-     4. Implement loadSystemFile in system_loader.cpp (read file, write to $2000+)
-     5. Run test to see it pass
-     6. Write validation test for JMP opcode check
-     7. Implement validation in loadSystemFile
-     8. Run test to see it pass
-     9. Build and run all tests
+  1.  Write test that creates a minimal system file (starts with JMP) and loads it
+  2.  Run test to see it fail (function doesn't exist)
+  3.  Create system_loader.hpp with function signature
+  4.  Implement loadSystemFile in system_loader.cpp (read file, write to $2000+)
+  5.  Run test to see it pass
+  6.  Write validation test for JMP opcode check
+  7.  Implement validation in loadSystemFile
+  8.  Run test to see it pass
+  9.  Build and run all tests
 
 ### 3. **Phase 3: Warm Restart Vector Initialization**
 
@@ -55,12 +55,12 @@ Create a C++ command-line tool that instantiates a complete Apple II emulator us
   - `WarmStartVectorTest`: Verify $03F2/$03F3 are set to $2000
   - `WarmStartCheckByteTest`: Verify $03F4 is set correctly
 - **Steps:**
-     1. Write test that initializes warm vector and verifies memory contents
-     2. Run test to see it fail
-     3. Add initWarmStartVector declaration to header
-     4. Implement function (write $2000 to $03F2/$03F3, set check byte at $03F4)
-     5. Run test to see it pass
-     6. Build and run all tests
+  1.  Write test that initializes warm vector and verifies memory contents
+  2.  Run test to see it fail
+  3.  Add initWarmStartVector declaration to header
+  4.  Implement function (write $2000 to $03F2/$03F3, set check byte at $03F4)
+  5.  Run test to see it pass
+  6.  Build and run all tests
 
 ### 4. **Phase 4: CLI Tool Scaffolding**
 
@@ -72,11 +72,11 @@ Create a C++ command-line tool that instantiates a complete Apple II emulator us
   - Manual CLI testing with --help flag
   - Manual CLI testing with invalid arguments
 - **Steps:**
-     1. Create prodos8emu_run.cpp with basic main() and argument parsing
-     2. Add executable target to CMakeLists.txt
-     3. Build to see it compile
-     4. Run with --help to verify usage message
-     5. Test error handling for missing arguments
+  1.  Create prodos8emu_run.cpp with basic main() and argument parsing
+  2.  Add executable target to CMakeLists.txt
+  3.  Build to see it compile
+  4.  Run with --help to verify usage message
+  5.  Test error handling for missing arguments
 
 ### 5. **Phase 5: Emulator Initialization**
 
@@ -86,14 +86,14 @@ Create a C++ command-line tool that instantiates a complete Apple II emulator us
 - **Tests to Write:**
   - Integration test verifying emulator components connect properly
 - **Steps:**
-     1. Write integration test that creates all components and verifies linkage
-     2. Run test to see it fail
-     3. Add code to main() to instantiate Apple2Memory
-     4. Add code to instantiate MLIContext with volumes root
-     5. Add code to instantiate CPU65C02 with memory reference
-     6. Add code to attach MLI to CPU
-     7. Run integration test to see it pass
-     8. Build and run all tests
+  1.  Write integration test that creates all components and verifies linkage
+  2.  Run test to see it fail
+  3.  Add code to main() to instantiate Apple2Memory
+  4.  Add code to instantiate MLIContext with volumes root
+  5.  Add code to instantiate CPU65C02 with memory reference
+  6.  Add code to attach MLI to CPU
+  7.  Run integration test to see it pass
+  8.  Build and run all tests
 
 ### 6. **Phase 6: Complete Execution Pipeline**
 
@@ -104,23 +104,23 @@ Create a C++ command-line tool that instantiates a complete Apple II emulator us
   - End-to-end integration test with minimal ROM and system file
   - Test verifying CPU starts at correct address after reset
 - **Steps:**
-     1. Write E2E test that simulates full startup sequence
-     2. Run test to see it fail
-     3. Add ROM loading call in main()
-     4. Add system file loading call in main()
-     5. Add warm vector initialization call in main()
-     6. Enable LC read/write for reset vector access
-     7. Set reset vector ($FFFC) to $2000
-     8. Call cpu.reset()
-     9. Add cpu.run() with configurable instruction limit
-     10. Add basic status output (PC, registers, cycle count)
-     11. Run test to see it pass
-     12. Build and run manual test with real ROM/system files
-     13. Run full test suite
+  1.  Write E2E test that simulates full startup sequence
+  2.  Run test to see it fail
+  3.  Add ROM loading call in main()
+  4.  Add system file loading call in main()
+  5.  Add warm vector initialization call in main()
+  6.  Enable LC read/write for reset vector access
+  7.  Set reset vector ($FFFC) to $2000
+  8.  Call cpu.reset()
+  9.  Add cpu.run() with configurable instruction limit
+  10. Add basic status output (PC, registers, cycle count)
+  11. Run test to see it pass
+  12. Build and run manual test with real ROM/system files
+  13. Run full test suite
 
 **Open Questions:**
 
-1. Should the CLI tool support a --max-instructions limit or run indefinitely? *Suggestion: default to 1 million with --max-instructions flag*
-2. Should we add debug output (register dumps, memory inspection)? *Suggestion: add --verbose flag for Phase 6*
-3. Where should the volumes root directory be configured? *Suggestion: add --volume-root flag or default to ./volumes*
-4. Should the ROM path be optional (allowing ROM-less operation with LC RAM only)? *Suggestion: make ROM optional, document LC-only mode*
+1. Should the CLI tool support a --max-instructions limit or run indefinitely? _Suggestion: default to 1 million with --max-instructions flag_
+2. Should we add debug output (register dumps, memory inspection)? _Suggestion: add --verbose flag for Phase 6_
+3. Where should the volumes root directory be configured? _Suggestion: add --volume-root flag or default to ./volumes_
+4. Should the ROM path be optional (allowing ROM-less operation with LC RAM only)? _Suggestion: make ROM optional, document LC-only mode_

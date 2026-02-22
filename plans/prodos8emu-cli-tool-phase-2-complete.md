@@ -3,15 +3,18 @@
 Added a small loader helper that reads a ProDOS system file from the host filesystem, validates its entry opcode, and writes it into emulated memory starting at $2000 (or a caller-provided load address).
 
 **Files created/changed:**
+
 - include/prodos8emu/system_loader.hpp
 - src/system_loader.cpp
 - tests/system_test.cpp
 - CMakeLists.txt
 
 **Functions created/changed:**
+
 - `loadSystemFile(Apple2Memory& mem, const std::filesystem::path& filePath, uint16_t loadAddr)`
 
 **Tests created/changed:**
+
 - System loader tests in `system_test.cpp` covering:
   - Valid load at $2000
   - Invalid first byte (must be 0x4C)

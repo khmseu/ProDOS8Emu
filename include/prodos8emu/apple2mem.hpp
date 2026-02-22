@@ -27,8 +27,8 @@ namespace prodos8emu {
    *   has a single LC bank.
    *
    *   - LC read enabled:  $D000-$FFFF reads come from LC RAM (bank-selected).
-  *   - LC read disabled: $D000-$FFFF reads come from the ROM area (loaded via loadROM() or
-  *     zero-filled if not loaded).
+   *   - LC read disabled: $D000-$FFFF reads come from the ROM area (loaded via loadROM() or
+   *     zero-filled if not loaded).
    *   - LC write enabled: $D000-$FFFF writes go to LC RAM (bank-selected).
    *   - LC write disabled: writes to $D000-$FFFF are ignored.
    *
@@ -43,7 +43,7 @@ namespace prodos8emu {
    *   $D000-$FFFF; use constBanks() instead.
    *
    * On construction and after reset():
-  *   - All RAM is zeroed.
+   *   - All RAM is zeroed.
    *   - LC read and write are disabled (ROM mode).
    *   - LC bank 1 is selected.
    */
