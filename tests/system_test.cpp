@@ -3,9 +3,11 @@
 #include <fstream>
 #include <iostream>
 
+#include "prodos8emu/apple2mem.hpp"
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/mli.hpp"
+#include "prodos8emu/system_loader.hpp"
 
 namespace fs = std::filesystem;
 
@@ -416,6 +418,189 @@ int main() {
       failures++;
     } else {
       std::cout << "PASS: Block call param_count validation\n";
+    }
+  }
+
+  // Test 12: System file loader - valid system file
+  {
+    std::cout << "Test 12: System file loader - valid system file\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create a minimal system file: starts with 0x4C (JMP abs)
+    fs::path sysFile = tempDir / "TESTSYS";
+    {
+      std::ofstream out(sysFile, std::ios::binary);
+      out.put(0x4C);  // JMP abs
+      out.put(0x00);  // target low
+      out.put(0x20);  // target high (JMP $2000)
+      out.put(0x60);  // RTS for testing
+      for (int i = 0; i < 96; i++) {
+        out.put(0xEA);  // NOPs
+      }
+    }
+
+    try {
+      prodos8emu::loadSystemFile(mem, sysFile, 0x2000);
+
+      // Verify bytes were loaded at $2000
+      auto& banks = mem.banks();
+      if (prodos8emu::read_u8(banks, 0x2000) != 0x4C) {
+        std::cerr << "FAIL: Expected 0x4C at $2000\n";
+        failures++;
+      } else if (prodos8emu::read_u8(banks, 0x2001) != 0x00) {
+        std::cerr << "FAIL: Expected 0x00 at $2001\n";
+        failures++;
+      } else if (prodos8emu::read_u8(banks, 0x2002) != 0x20) {
+        std::cerr << "FAIL: Expected 0x20 at $2002\n";
+        failures++;
+      } else if (prodos8emu::read_u8(banks, 0x2003) != 0x60) {
+        std::cerr << "FAIL: Expected 0x60 at $2003\n";
+        failures++;
+      } else {
+        std::cout << "PASS: System file loaded correctly\n";
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "FAIL: Unexpected exception: " << e.what() << "\n";
+      failures++;
+    }
+  }
+
+  // Test 13: System file loader - validation (missing JMP)
+  {
+    std::cout << "Test 13: System file loader - validation\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create a file that doesn't start with 0x4C
+    fs::path badFile = tempDir / "BADSYS";
+    {
+      std::ofstream out(badFile, std::ios::binary);
+      out.put(0x60);  // RTS instead of JMP
+      for (int i = 0; i < 99; i++) {
+        out.put(0x00);
+      }
+    }
+
+    bool threw = false;
+    try {
+      prodos8emu::loadSystemFile(mem, badFile, 0x2000);
+    } catch (const std::runtime_error& e) {
+      threw = true;
+      std::string msg(e.what());
+      if (msg.find("0x4C") == std::string::npos && msg.find("JMP") == std::string::npos) {
+        std::cerr << "FAIL: Exception message should mention 0x4C or JMP, got: " << msg << "\n";
+        failures++;
+      }
+    } catch (...) {
+      threw = true;
+      std::cerr << "FAIL: Wrong exception type thrown\n";
+      failures++;
+    }
+
+    if (!threw) {
+      std::cerr << "FAIL: Expected exception for invalid system file\n";
+      failures++;
+    } else {
+      std::cout << "PASS: Invalid system file rejected\n";
+    }
+  }
+
+  // Test 14: System file loader - file too large
+  {
+    std::cout << "Test 14: System file loader - file too large\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create a file that's too large to fit from $2000 to $BFFF
+    // Max size should be $C000 - $2000 = 40960 bytes
+    fs::path tooBigFile = tempDir / "BIGSYS";
+    {
+      std::ofstream out(tooBigFile, std::ios::binary);
+      out.put(0x4C);  // Valid JMP
+      out.put(0x00);
+      out.put(0x20);
+      // Write 40960 more bytes (exceeds $BFFF)
+      for (int i = 0; i < 40960; i++) {
+        out.put(0xEA);
+      }
+    }
+
+    bool threw = false;
+    try {
+      prodos8emu::loadSystemFile(mem, tooBigFile, 0x2000);
+    } catch (const std::runtime_error& e) {
+      threw = true;
+      std::string msg(e.what());
+      if (msg.find("large") == std::string::npos && msg.find("size") == std::string::npos) {
+        std::cerr << "FAIL: Exception message should mention file size, got: " << msg << "\n";
+        failures++;
+      }
+    } catch (...) {
+      threw = true;
+      std::cerr << "FAIL: Wrong exception type thrown\n";
+      failures++;
+    }
+
+    if (!threw) {
+      std::cerr << "FAIL: Expected exception for oversized file\n";
+      failures++;
+    } else {
+      std::cout << "PASS: Oversized file rejected\n";
+    }
+  }
+
+  // Test 15: System file loader - invalid load address
+  {
+    std::cout << "Test 15: System file loader - invalid load address\n";
+    prodos8emu::Apple2Memory mem;
+
+    // Create a valid system file
+    fs::path sysFile = tempDir / "VALIDSYS";
+    {
+      std::ofstream out(sysFile, std::ios::binary);
+      out.put(0x4C);  // Valid JMP
+      out.put(0x00);
+      out.put(0x20);
+      for (int i = 0; i < 100; i++) {
+        out.put(0xEA);
+      }
+    }
+
+    // Try to load at 0xC000 (I/O space)
+    bool threw = false;
+    try {
+      prodos8emu::loadSystemFile(mem, sysFile, 0xC000);
+    } catch (const std::runtime_error& e) {
+      threw = true;
+      std::string msg(e.what());
+      if (msg.find("0xC000") == std::string::npos && msg.find("address") == std::string::npos) {
+        std::cerr << "FAIL: Exception message should mention address/0xC000, got: " << msg << "\n";
+        failures++;
+      }
+    } catch (...) {
+      threw = true;
+      std::cerr << "FAIL: Wrong exception type thrown\n";
+      failures++;
+    }
+
+    if (!threw) {
+      std::cerr << "FAIL: Expected exception for invalid load address\n";
+      failures++;
+    }
+
+    // Try to load at 0xF000 (also invalid)
+    threw = false;
+    try {
+      prodos8emu::loadSystemFile(mem, sysFile, 0xF000);
+    } catch (const std::runtime_error& e) {
+      threw = true;
+    } catch (...) {
+      threw = true;
+    }
+
+    if (!threw) {
+      std::cerr << "FAIL: Expected exception for invalid load address 0xF000\n";
+      failures++;
+    } else {
+      std::cout << "PASS: Invalid load addresses rejected\n";
     }
   }
 

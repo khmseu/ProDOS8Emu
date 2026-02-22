@@ -28,6 +28,7 @@ add_library(prodos8emu
     src/xattr.cpp
     src/apple2mem.cpp
     src/cpu65c02.cpp
+    src/system_loader.cpp
 )
 
 target_include_directories(prodos8emu
