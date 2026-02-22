@@ -3,10 +3,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <charconv>
+#include <exception>
 
 #include "prodos8emu/apple2mem.hpp"
 #include "prodos8emu/cpu65c02.hpp"
 #include "prodos8emu/mli.hpp"
+#include "prodos8emu/memory.hpp"
+#include "prodos8emu/system_loader.hpp"
 
 enum class ParseResult {
     Ok,
@@ -18,7 +21,7 @@ struct CliOptions {
     std::string rom_path;
     std::string system_file_path;
     std::string volume_root;
-    int max_instructions = -1;  // -1 means unlimited
+    uint64_t max_instructions = 1000000;  // Default: 1 million instructions
 };
 
 void print_usage(const char* program_name) {
@@ -55,14 +58,10 @@ ParseResult parse_args(int argc, char* argv[], CliOptions& opts) {
             ++i;
             const char* str = argv[i];
             const char* str_end = str + std::strlen(str);
-            int value = 0;
+            uint64_t value = 0;
             auto [ptr, ec] = std::from_chars(str, str_end, value);
             if (ec != std::errc{} || ptr != str_end) {
-                std::cerr << "Error: --max-instructions must be a valid integer\n";
-                return ParseResult::Error;
-            }
-            if (value < 0) {
-                std::cerr << "Error: --max-instructions must be non-negative\n";
+                std::cerr << "Error: --max-instructions must be a valid unsigned integer\n";
                 return ParseResult::Error;
             }
             opts.max_instructions = value;
@@ -120,24 +119,64 @@ int main(int argc, char* argv[]) {
     // Print parsed configuration
     std::cout << "Configuration:\n"
               << "  rom=" << opts.rom_path << "\n"
-              << "  sys=" << opts.system_file_path << "\n";
+              << "  sys=" << opts.system_file_path << "\n"
+              << "  max=" << opts.max_instructions << "\n"
+              << "  volroot=" << opts.volume_root << "\n\n";
     
-    if (opts.max_instructions >= 0) {
-        std::cout << "  max=" << opts.max_instructions << "\n";
-    } else {
-        std::cout << "  max=unlimited\n";
+    try {
+        // Initialize emulator components
+        prodos8emu::Apple2Memory mem;
+        prodos8emu::MLIContext ctx(opts.volume_root);
+        prodos8emu::CPU65C02 cpu(mem);
+        cpu.attachMLI(ctx);
+        
+        std::cout << "Loading ROM from " << opts.rom_path << "...\n";
+        mem.loadROM(opts.rom_path);
+        
+        std::cout << "Loading system file from " << opts.system_file_path << "...\n";
+        prodos8emu::loadSystemFile(mem, opts.system_file_path, 0x2000);
+        
+        std::cout << "Initializing warm restart vector...\n";
+        prodos8emu::initWarmStartVector(mem, 0x2000);
+        
+        std::cout << "Setting reset vector to $2000...\n";
+        // Enable LC read/write to modify reset vector area
+        mem.setLCReadEnabled(true);
+        mem.setLCWriteEnabled(true);
+        
+        // Write $2000 to reset vector at $FFFC/$FFFD
+        prodos8emu::write_u16_le(mem.banks(), 0xFFFC, 0x2000);
+        
+        // Reset CPU (loads PC from reset vector)
+        cpu.reset();
+        
+        // Restore LC to ROM mode for execution
+        mem.setLCReadEnabled(false);
+        mem.setLCWriteEnabled(false);
+        
+        std::cout << "Starting CPU execution (max " << opts.max_instructions << " instructions)...\n\n";
+        
+        // Run CPU with bounded instruction count
+        uint64_t instructionCount = cpu.run(opts.max_instructions);
+        
+        // Print final status
+        std::cout << "\n=== Execution Summary ===\n";
+        std::cout << "Instructions executed: " << instructionCount << "\n";
+        std::cout << "CPU Status:\n";
+        std::cout << "  Stopped: " << (cpu.isStopped() ? "yes" : "no") << "\n";
+        std::cout << "  Waiting: " << (cpu.isWaiting() ? "yes (WAI)" : "no") << "\n";
+        std::cout << "Registers:\n";
+        std::cout << "  PC: $" << std::hex << std::uppercase << cpu.regs().pc << "\n";
+        std::cout << "  A:  $" << std::hex << std::uppercase << (int)cpu.regs().a << "\n";
+        std::cout << "  X:  $" << std::hex << std::uppercase << (int)cpu.regs().x << "\n";
+        std::cout << "  Y:  $" << std::hex << std::uppercase << (int)cpu.regs().y << "\n";
+        std::cout << "  SP: $" << std::hex << std::uppercase << (int)cpu.regs().sp << "\n";
+        std::cout << "  P:  $" << std::hex << std::uppercase << (int)cpu.regs().p << std::dec << "\n";
+        
+        return 0;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "\nError: " << e.what() << "\n";
+        return 1;
     }
-    
-    std::cout << "  volroot=" << opts.volume_root << "\n";
-    
-    // Initialize emulator components
-    prodos8emu::Apple2Memory mem;
-    prodos8emu::MLIContext ctx(opts.volume_root);
-    prodos8emu::CPU65C02 cpu(mem);
-    cpu.attachMLI(ctx);
-    
-    std::cout << "\nInitialized emulator components\n";
-    std::cout << "\n(Emulator execution not yet implemented)\n";
-    
-    return 0;
 }
