@@ -145,3 +145,13 @@ target_link_libraries(prodos8emu_cpu65c02_tests
 )
 
 add_test(NAME prodos8emu_cpu65c02_tests COMMAND prodos8emu_cpu65c02_tests)
+
+# CLI executable - prodos8emu_run tool
+add_executable(prodos8emu_run
+    tools/prodos8emu_run.cpp
+)
+
+target_link_libraries(prodos8emu_run
+    PRIVATE
+        prodos8emu
+)
