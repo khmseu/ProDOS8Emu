@@ -2,7 +2,10 @@
 """Convert Linux text files to ProDOS TEXT format.
 
 Phase 1: Core byte conversion functions for line endings and ASCII.
+Phase 2: File operations and xattr metadata.
 """
+
+import os
 
 
 def normalize_line_endings(data: bytes) -> bytes:
@@ -57,3 +60,95 @@ def convert_to_ascii(data: bytes, *, strict: bool) -> bytes:
         return bytes(result)
     
     return data
+
+
+def set_prodos_text_metadata(path: str, *, access: str = "dn-..-wr") -> None:
+    """Set ProDOS TEXT metadata xattrs on a file.
+    
+    Sets the following xattrs:
+    - user.prodos8.file_type = b"04" (TEXT file)
+    - user.prodos8.aux_type = b"0000" (sequential TEXT)
+    - user.prodos8.storage_type = b"01" (seedling file)
+    - user.prodos8.access = access encoded as ASCII bytes
+    
+    Args:
+        path: Path to the file to set metadata on
+        access: ProDOS access string (default: "dn-..-wr")
+        
+    Raises:
+        OSError: If xattr operations fail (e.g., file not found, xattrs unsupported)
+    """
+    os.setxattr(path, "user.prodos8.file_type", b"04")
+    os.setxattr(path, "user.prodos8.aux_type", b"0000")
+    os.setxattr(path, "user.prodos8.storage_type", b"01")
+    os.setxattr(path, "user.prodos8.access", access.encode("ascii"))
+
+
+def convert_file_in_place(path: str, *, strict_ascii: bool = True, access: str = "dn-..-wr") -> None:
+    """Convert a file to ProDOS TEXT format in-place.
+    
+    Atomically reads the file, applies line ending normalization and ASCII conversion,
+    writes the result to a temp file, sets xattrs, and replaces the original.
+    If any step fails, the original file remains unchanged.
+    
+    Args:
+        path: Path to the file to convert
+        strict_ascii: If True, raise ValueError on non-ASCII bytes.
+                     If False, replace non-ASCII bytes with '?'.
+        access: ProDOS access string for xattr metadata (default: "dn-..-wr")
+        
+    Raises:
+        ValueError: If strict_ascii=True and non-ASCII bytes are found
+        OSError: If file operations or xattr operations fail
+    """
+    import tempfile
+    import stat
+    
+    # Read the original file
+    with open(path, 'rb') as f:
+        data = f.read()
+    
+    # Get original file permissions
+    original_mode = os.stat(path).st_mode
+    
+    # Apply conversions (this may raise ValueError in strict mode)
+    data = normalize_line_endings(data)
+    data = convert_to_ascii(data, strict=strict_ascii)
+    
+    # Create temp file in the same directory for atomic replacement
+    dir_path = os.path.dirname(os.path.abspath(path))
+    temp_fd = None
+    temp_path = None
+    
+    try:
+        # Create temporary file in same directory (delete=False to control cleanup)
+        temp_fd, temp_path = tempfile.mkstemp(dir=dir_path, prefix=".prodos_tmp_")
+        
+        # Write converted data to temp file (use fdopen to ensure complete write)
+        with os.fdopen(temp_fd, 'wb') as f:
+            f.write(data)
+        temp_fd = None
+        
+        # Copy permissions from original to temp
+        os.chmod(temp_path, stat.S_IMODE(original_mode))
+        
+        # Set ProDOS metadata on temp file
+        set_prodos_text_metadata(temp_path, access=access)
+        
+        # Atomically replace original with temp
+        os.replace(temp_path, path)
+        temp_path = None  # Successfully moved, don't clean up
+        
+    except Exception:
+        # Clean up temp file on any error
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except Exception:
+                pass
+        if temp_path is not None and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+        raise

@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-"""Unit tests for linux_to_prodos_text.py - Phase 1 line ending and ASCII conversion."""
+"""Unit tests for linux_to_prodos_text.py - Phase 1 and 2: line ending, ASCII conversion, and file operations."""
 
+import errno
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Add tools directory to path so we can import the module
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
-from linux_to_prodos_text import normalize_line_endings, convert_to_ascii
+from linux_to_prodos_text import (
+    normalize_line_endings,
+    convert_to_ascii,
+    set_prodos_text_metadata,
+    convert_file_in_place,
+)
 
 
 class TestNormalizeLineEndings(unittest.TestCase):
@@ -109,6 +118,248 @@ class TestConvertToAscii(unittest.TestCase):
         data = b"test\x80data"
         expected = b"test?data"
         self.assertEqual(convert_to_ascii(data, strict=False), expected)
+
+
+class TestSetProdosTextMetadata(unittest.TestCase):
+    """Test set_prodos_text_metadata function."""
+
+    def _xattr_supported(self, path: str) -> bool:
+        """Check if xattrs are supported on the given path."""
+        try:
+            os.setxattr(path, "user.test", b"test")
+            os.removexattr(path, "user.test")
+            return True
+        except OSError as e:
+            if e.errno in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS):
+                return False
+            raise
+
+    def test_sets_all_prodos_xattrs(self):
+        """Should set all required ProDOS xattrs with default access."""
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            set_prodos_text_metadata(path)
+
+            # Verify all xattrs are set correctly
+            self.assertEqual(os.getxattr(path, "user.prodos8.file_type"), b"04")
+            self.assertEqual(os.getxattr(path, "user.prodos8.aux_type"), b"0000")
+            self.assertEqual(os.getxattr(path, "user.prodos8.storage_type"), b"01")
+            self.assertEqual(os.getxattr(path, "user.prodos8.access"), b"dn-..-wr")
+        finally:
+            os.unlink(path)
+
+    def test_sets_custom_access(self):
+        """Should set custom access value when provided."""
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            set_prodos_text_metadata(path, access="dnb..-wr")
+
+            self.assertEqual(os.getxattr(path, "user.prodos8.access"), b"dnb..-wr")
+        finally:
+            os.unlink(path)
+
+    def test_raises_on_nonexistent_file(self):
+        """Should raise an exception for nonexistent files."""
+        with self.assertRaises(OSError):
+            set_prodos_text_metadata("/nonexistent/file/path")
+
+
+class TestConvertFileInPlace(unittest.TestCase):
+    """Test convert_file_in_place function."""
+
+    def _xattr_supported(self, path: str) -> bool:
+        """Check if xattrs are supported on the given path."""
+        try:
+            os.setxattr(path, "user.test", b"test")
+            os.removexattr(path, "user.test")
+            return True
+        except OSError as e:
+            if e.errno in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS):
+                return False
+            raise
+
+    def test_converts_lf_to_cr_in_place(self):
+        """Should convert LF line endings to CR and write back."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"line1\nline2\nline3\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            convert_file_in_place(path)
+
+            # Verify content was converted
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, b"line1\rline2\rline3\r")
+        finally:
+            os.unlink(path)
+
+    def test_converts_crlf_to_cr_in_place(self):
+        """Should convert CRLF line endings to CR."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"line1\r\nline2\r\nline3\r\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            convert_file_in_place(path)
+
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, b"line1\rline2\rline3\r")
+        finally:
+            os.unlink(path)
+
+    def test_sets_xattrs_after_conversion(self):
+        """Should set ProDOS xattrs after conversion."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"test\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            convert_file_in_place(path)
+
+            # Verify xattrs are set
+            self.assertEqual(os.getxattr(path, "user.prodos8.file_type"), b"04")
+            self.assertEqual(os.getxattr(path, "user.prodos8.aux_type"), b"0000")
+            self.assertEqual(os.getxattr(path, "user.prodos8.storage_type"), b"01")
+            self.assertEqual(os.getxattr(path, "user.prodos8.access"), b"dn-..-wr")
+        finally:
+            os.unlink(path)
+
+    def test_custom_access_parameter(self):
+        """Should use custom access parameter."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"test\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            convert_file_in_place(path, access="dnb..-wr")
+
+            self.assertEqual(os.getxattr(path, "user.prodos8.access"), b"dnb..-wr")
+        finally:
+            os.unlink(path)
+
+    def test_strict_ascii_mode_raises_on_non_ascii(self):
+        """Strict ASCII mode should raise on non-ASCII and not modify file."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            original = b"Caf\xc3\xa9\n"
+            f.write(original)
+            path = f.name
+
+        try:
+            with self.assertRaises(ValueError) as cm:
+                convert_file_in_place(path, strict_ascii=True)
+            self.assertIn("non-ASCII", str(cm.exception))
+
+            # Verify file was not modified
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, original)
+        finally:
+            os.unlink(path)
+
+    def test_lossy_mode_replaces_non_ascii(self):
+        """Lossy mode should replace non-ASCII with '?'."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"Caf\xc3\xa9\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            convert_file_in_place(path, strict_ascii=False)
+
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, b"Caf??\r")
+        finally:
+            os.unlink(path)
+
+    def test_empty_file_conversion(self):
+        """Should handle empty files correctly."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            convert_file_in_place(path)
+
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, b"")
+        finally:
+            os.unlink(path)
+
+    def test_atomicity_xattr_failure_preserves_original(self):
+        """If xattr setting fails, original file should be unchanged."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            original = b"line1\nline2\nline3\n"
+            f.write(original)
+            path = f.name
+
+        try:
+            # Mock os.setxattr to raise EACCES when called
+            with mock.patch('linux_to_prodos_text.os.setxattr') as mock_setxattr:
+                mock_setxattr.side_effect = OSError(errno.EACCES, "Permission denied")
+                
+                # Attempt conversion - should fail
+                with self.assertRaises(OSError) as cm:
+                    convert_file_in_place(path)
+                self.assertEqual(cm.exception.errno, errno.EACCES)
+                
+                # Verify original file is unchanged
+                with open(path, 'rb') as f:
+                    content = f.read()
+                self.assertEqual(content, original, "Original file should be unchanged after xattr failure")
+        finally:
+            os.unlink(path)
+
+    def test_atomicity_preserves_file_permissions(self):
+        """Conversion should preserve original file permissions."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"test\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            # Set specific permissions (readable/writable by owner only)
+            os.chmod(path, 0o600)
+            original_mode = os.stat(path).st_mode
+            
+            convert_file_in_place(path)
+            
+            # Verify permissions are preserved
+            new_mode = os.stat(path).st_mode
+            self.assertEqual(new_mode, original_mode, "File permissions should be preserved")
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":
