@@ -158,6 +158,12 @@ target_link_libraries(prodos8emu_emulator_startup_tests
 
 add_test(NAME prodos8emu_emulator_startup_tests COMMAND prodos8emu_emulator_startup_tests)
 
+# Python unit test for linux_to_prodos_text.py
+add_test(NAME python_linux_to_prodos_text_test
+    COMMAND python3 -B -m unittest tests.python_linux_to_prodos_text_test
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # CLI executable - prodos8emu_run tool
 add_executable(prodos8emu_run
     tools/prodos8emu_run.cpp

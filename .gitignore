@@ -25,6 +25,11 @@ compile_commands.json
 Testing/
 CTestTestfile.cmake
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # Executables
 prodos8emu_tests
 
