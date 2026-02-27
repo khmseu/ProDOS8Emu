@@ -99,6 +99,75 @@ python3 tools/linux_to_prodos_text.py --lossy notes.txt
 python3 tools/linux_to_prodos_text.py --access dnb..-wr notes.txt
 ```
 
+### `edasm_setup.py` (Python)
+
+Script path: `tools/edasm_setup.py`
+
+Purpose:
+
+Complete EDASM (or other ProDOS application) setup and launch workflow:
+
+1. Extract `.2mg` disk image using `cadius`
+2. Convert Cadius metadata to xattr format
+3. Import and convert host text files to ProDOS TEXT format
+4. Discover or validate system file
+5. Launch emulator with configured volumes
+
+**Requirements:**
+
+- `cadius` must be installed and in PATH (unless `--skip-extract` used)
+- Only `.2mg` disk images currently supported
+- Python 3 with xattr support
+
+**Basic Usage:**
+
+```bash
+# Extract disk image and run
+python3 tools/edasm_setup.py \
+  --work-dir work \
+  --disk-image EDASM_SRC.2mg \
+  --rom third_party_docs/apple_II.rom
+
+# Skip extraction, use existing work directory
+python3 tools/edasm_setup.py \
+  --work-dir work \
+  --rom third_party_docs/apple_II.rom \
+  --skip-extract
+
+# Import text files and run
+python3 tools/edasm_setup.py \
+  --work-dir work \
+  --disk-image EDASM_SRC.2mg \
+  --rom third_party_docs/apple_II.rom \
+  --text main.asm \
+  --text lib.asm:LIB/lib.asm \
+  --lossy-text
+
+# Setup only, don't run emulator
+python3 tools/edasm_setup.py \
+  --work-dir work \
+  --disk-image EDASM_SRC.2mg \
+  --rom third_party_docs/apple_II.rom \
+  --no-run
+```
+
+**Key Options:**
+
+- `--work-dir DIR` — work directory (required)
+- `--disk-image PATH` — `.2mg` disk image to extract (required unless `--skip-extract`)
+- `--rom PATH` — Apple II ROM file (required)
+- `--skip-extract` — use existing extracted files
+- `--text SRC[:DEST]` — import text file (repeatable)
+- `--lossy-text` — allow lossy ASCII conversion
+- `--system-file PATH` — explicit system file (auto-discovered if omitted)
+- `--no-run` — setup only, don't launch emulator
+- `--runner PATH` — path to `prodos8emu_run` (default: `build/prodos8emu_run`)
+- `--volume-name NAME` — volume name (default: `EDASM`)
+- `--volume-root DIR` — volume root directory (default: `<work-dir>/volumes`)
+- `--max-instructions N` — instruction limit passed to emulator
+
+Run `python3 tools/edasm_setup.py --help` for full documentation.
+
 ## Repository Layout
 
 ```text

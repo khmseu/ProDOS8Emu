@@ -164,6 +164,12 @@ add_test(NAME python_linux_to_prodos_text_test
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# Python unit test for edasm_setup.py
+add_test(NAME python_edasm_setup_test
+    COMMAND python3 -B -m unittest tests.python_edasm_setup_test
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # CLI executable - prodos8emu_run tool
 add_executable(prodos8emu_run
     tools/prodos8emu_run.cpp

@@ -24,5 +24,5 @@ Extended the Linux-to-ProDOS text conversion script to rewrite a file in-place (
 feat: Convert files to ProDOS TEXT xattrs
 
 - Convert text files in-place with atomic temp-file replace
-- Set ProDOS TEXT metadata via user.prodos8.* xattrs
+- Set ProDOS TEXT metadata via user.prodos8.\* xattrs
 - Extend unittests for conversion, xattrs, and atomicity
