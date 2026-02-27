@@ -3,9 +3,12 @@
 
 Phase 1: Core byte conversion functions for line endings and ASCII.
 Phase 2: File operations and xattr metadata.
+Phase 3: Command-line interface.
 """
 
+import argparse
 import os
+import sys
 
 
 def normalize_line_endings(data: bytes) -> bytes:
@@ -152,3 +155,72 @@ def convert_file_in_place(path: str, *, strict_ascii: bool = True, access: str =
             except Exception:
                 pass
         raise
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments.
+    
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:] if None)
+        
+    Returns:
+        Parsed arguments namespace
+    """
+    parser = argparse.ArgumentParser(
+        description="Convert Linux text files to ProDOS TEXT format with CR line endings and xattrs."
+    )
+    parser.add_argument(
+        "path",
+        help="Path to the text file to convert"
+    )
+    parser.add_argument(
+        "--lossy",
+        action="store_true",
+        help="Allow non-ASCII characters by replacing them with '?' (default: strict mode rejects non-ASCII)"
+    )
+    parser.add_argument(
+        "--access",
+        default="dn-..-wr",
+        help="ProDOS access string for xattr metadata (default: dn-..-wr)"
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Main entry point for the CLI.
+    
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:] if None)
+        
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    try:
+        args = parse_args(argv)
+    except SystemExit as e:
+        # argparse calls sys.exit() for --help or parse errors
+        # Return the exit code (ensure it's an int)
+        if isinstance(e.code, int):
+            return e.code
+        return 2 if e.code is None else 1
+    
+    try:
+        convert_file_in_place(
+            args.path,
+            strict_ascii=not args.lossy,
+            access=args.access
+        )
+        return 0
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

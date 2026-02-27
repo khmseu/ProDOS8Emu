@@ -17,6 +17,8 @@ from linux_to_prodos_text import (
     convert_to_ascii,
     set_prodos_text_metadata,
     convert_file_in_place,
+    parse_args,
+    main,
 )
 
 
@@ -360,6 +362,154 @@ class TestConvertFileInPlace(unittest.TestCase):
             self.assertEqual(new_mode, original_mode, "File permissions should be preserved")
         finally:
             os.unlink(path)
+
+
+class TestCLI(unittest.TestCase):
+    """Test command-line interface (Phase 3)."""
+
+    def _xattr_supported(self, path: str) -> bool:
+        """Check if xattrs are supported on the given path."""
+        try:
+            os.setxattr(path, "user.test", b"test")
+            os.removexattr(path, "user.test")
+            return True
+        except OSError as e:
+            if e.errno in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS):
+                return False
+            raise
+
+    def test_main_converts_file_successfully(self):
+        """CLI should convert a file and return exit code 0."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"line1\nline2\nline3\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            exit_code = main([path])
+
+            # Should return 0 on success
+            self.assertEqual(exit_code, 0)
+
+            # Verify file was converted
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, b"line1\rline2\rline3\r")
+        finally:
+            os.unlink(path)
+
+    def test_main_sets_xattrs(self):
+        """CLI should set ProDOS xattrs with default access."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"test\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            exit_code = main([path])
+            self.assertEqual(exit_code, 0)
+
+            # Verify xattrs with default access
+            self.assertEqual(os.getxattr(path, "user.prodos8.file_type"), b"04")
+            self.assertEqual(os.getxattr(path, "user.prodos8.access"), b"dn-..-wr")
+        finally:
+            os.unlink(path)
+
+    def test_main_lossy_option(self):
+        """--lossy option should allow non-ASCII by replacing with '?'."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"Caf\xc3\xa9\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            exit_code = main(['--lossy', path])
+            self.assertEqual(exit_code, 0)
+
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, b"Caf??\r")
+        finally:
+            os.unlink(path)
+
+    def test_main_strict_mode_rejects_non_ascii(self):
+        """Without --lossy, non-ASCII should cause non-zero exit."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            original = b"Caf\xc3\xa9\n"
+            f.write(original)
+            path = f.name
+
+        try:
+            exit_code = main([path])
+            self.assertNotEqual(exit_code, 0, "Should return non-zero on non-ASCII in strict mode")
+
+            # File should be unchanged
+            with open(path, 'rb') as f:
+                content = f.read()
+            self.assertEqual(content, original)
+        finally:
+            os.unlink(path)
+
+    def test_main_custom_access(self):
+        """--access option should set custom access value."""
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+            f.write(b"test\n")
+            path = f.name
+
+        try:
+            if not self._xattr_supported(path):
+                self.skipTest("xattrs not supported on this filesystem")
+
+            exit_code = main(['--access', 'dnb..-wr', path])
+            self.assertEqual(exit_code, 0)
+
+            self.assertEqual(os.getxattr(path, "user.prodos8.access"), b"dnb..-wr")
+        finally:
+            os.unlink(path)
+
+    def test_main_missing_path_returns_error(self):
+        """Missing path argument should return non-zero exit code."""
+        exit_code = main([])
+        self.assertNotEqual(exit_code, 0, "Should return non-zero when path is missing")
+
+    def test_main_help_returns_success(self):
+        """--help should exit with code 0 (or raise SystemExit(0))."""
+        # --help typically raises SystemExit(0) from argparse
+        try:
+            exit_code = main(['--help'])
+            # If it doesn't raise, it should return 0
+            self.assertEqual(exit_code, 0)
+        except SystemExit as e:
+            # argparse.ArgumentParser exits with code 0 for --help
+            self.assertEqual(e.code, 0, "--help should exit with code 0")
+
+    def test_main_nonexistent_file_returns_error(self):
+        """Non-existent file should return non-zero exit code."""
+        exit_code = main(['/nonexistent/file/path'])
+        self.assertNotEqual(exit_code, 0, "Should return non-zero for non-existent file")
+
+    def test_parse_args_default_values(self):
+        """parse_args should set default values for options."""
+        args = parse_args(['input.txt'])
+        self.assertEqual(args.path, 'input.txt')
+        self.assertFalse(args.lossy, "lossy should default to False (strict mode)")
+        self.assertEqual(args.access, 'dn-..-wr', "access should default to 'dn-..-wr'")
+
+    def test_parse_args_lossy_flag(self):
+        """parse_args should parse --lossy flag."""
+        args = parse_args(['--lossy', 'input.txt'])
+        self.assertTrue(args.lossy)
+
+    def test_parse_args_access_option(self):
+        """parse_args should parse --access option."""
+        args = parse_args(['--access', 'dnb..-wr', 'input.txt'])
+        self.assertEqual(args.access, 'dnb..-wr')
 
 
 if __name__ == "__main__":
