@@ -13,12 +13,12 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
 from linux_to_prodos_text import (
-    normalize_line_endings,
-    convert_to_ascii,
-    set_prodos_text_metadata,
     convert_file_in_place,
-    parse_args,
+    convert_to_ascii,
     main,
+    normalize_line_endings,
+    parse_args,
+    set_prodos_text_metadata,
 )
 
 
@@ -26,13 +26,13 @@ class TestNormalizeLineEndings(unittest.TestCase):
     """Test normalize_line_endings function."""
 
     def test_lf_to_cr(self):
-        """LF (\\n) should be converted to CR (\\r)."""
+        r"""LF (\\n) should be converted to CR (\\r)."""
         data = b"line1\nline2\nline3\n"
         expected = b"line1\rline2\rline3\r"
         self.assertEqual(normalize_line_endings(data), expected)
 
     def test_crlf_to_cr(self):
-        """CRLF (\\r\\n) should be converted to single CR (\\r)."""
+        r"""CRLF (\\r\\n) should be converted to single CR (\\r)."""
         data = b"line1\r\nline2\r\nline3\r\n"
         expected = b"line1\rline2\rline3\r"
         self.assertEqual(normalize_line_endings(data), expected)
@@ -192,7 +192,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_converts_lf_to_cr_in_place(self):
         """Should convert LF line endings to CR and write back."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"line1\nline2\nline3\n")
             path = f.name
 
@@ -203,7 +203,7 @@ class TestConvertFileInPlace(unittest.TestCase):
             convert_file_in_place(path)
 
             # Verify content was converted
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, b"line1\rline2\rline3\r")
         finally:
@@ -211,7 +211,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_converts_crlf_to_cr_in_place(self):
         """Should convert CRLF line endings to CR."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"line1\r\nline2\r\nline3\r\n")
             path = f.name
 
@@ -221,7 +221,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
             convert_file_in_place(path)
 
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, b"line1\rline2\rline3\r")
         finally:
@@ -229,7 +229,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_sets_xattrs_after_conversion(self):
         """Should set ProDOS xattrs after conversion."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"test\n")
             path = f.name
 
@@ -249,7 +249,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_custom_access_parameter(self):
         """Should use custom access parameter."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"test\n")
             path = f.name
 
@@ -265,7 +265,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_strict_ascii_mode_raises_on_non_ascii(self):
         """Strict ASCII mode should raise on non-ASCII and not modify file."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             original = b"Caf\xc3\xa9\n"
             f.write(original)
             path = f.name
@@ -276,7 +276,7 @@ class TestConvertFileInPlace(unittest.TestCase):
             self.assertIn("non-ASCII", str(cm.exception))
 
             # Verify file was not modified
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, original)
         finally:
@@ -284,7 +284,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_lossy_mode_replaces_non_ascii(self):
         """Lossy mode should replace non-ASCII with '?'."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"Caf\xc3\xa9\n")
             path = f.name
 
@@ -294,7 +294,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
             convert_file_in_place(path, strict_ascii=False)
 
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, b"Caf??\r")
         finally:
@@ -302,7 +302,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_empty_file_conversion(self):
         """Should handle empty files correctly."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             path = f.name
 
         try:
@@ -311,7 +311,7 @@ class TestConvertFileInPlace(unittest.TestCase):
 
             convert_file_in_place(path)
 
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, b"")
         finally:
@@ -319,31 +319,35 @@ class TestConvertFileInPlace(unittest.TestCase):
 
     def test_atomicity_xattr_failure_preserves_original(self):
         """If xattr setting fails, original file should be unchanged."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             original = b"line1\nline2\nline3\n"
             f.write(original)
             path = f.name
 
         try:
             # Mock os.setxattr to raise EACCES when called
-            with mock.patch('linux_to_prodos_text.os.setxattr') as mock_setxattr:
+            with mock.patch("linux_to_prodos_text.os.setxattr") as mock_setxattr:
                 mock_setxattr.side_effect = OSError(errno.EACCES, "Permission denied")
-                
+
                 # Attempt conversion - should fail
                 with self.assertRaises(OSError) as cm:
                     convert_file_in_place(path)
                 self.assertEqual(cm.exception.errno, errno.EACCES)
-                
+
                 # Verify original file is unchanged
-                with open(path, 'rb') as f:
+                with open(path, "rb") as f:
                     content = f.read()
-                self.assertEqual(content, original, "Original file should be unchanged after xattr failure")
+                self.assertEqual(
+                    content,
+                    original,
+                    "Original file should be unchanged after xattr failure",
+                )
         finally:
             os.unlink(path)
 
     def test_atomicity_preserves_file_permissions(self):
         """Conversion should preserve original file permissions."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"test\n")
             path = f.name
 
@@ -354,12 +358,14 @@ class TestConvertFileInPlace(unittest.TestCase):
             # Set specific permissions (readable/writable by owner only)
             os.chmod(path, 0o600)
             original_mode = os.stat(path).st_mode
-            
+
             convert_file_in_place(path)
-            
+
             # Verify permissions are preserved
             new_mode = os.stat(path).st_mode
-            self.assertEqual(new_mode, original_mode, "File permissions should be preserved")
+            self.assertEqual(
+                new_mode, original_mode, "File permissions should be preserved"
+            )
         finally:
             os.unlink(path)
 
@@ -380,7 +386,7 @@ class TestCLI(unittest.TestCase):
 
     def test_main_converts_file_successfully(self):
         """CLI should convert a file and return exit code 0."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"line1\nline2\nline3\n")
             path = f.name
 
@@ -394,7 +400,7 @@ class TestCLI(unittest.TestCase):
             self.assertEqual(exit_code, 0)
 
             # Verify file was converted
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, b"line1\rline2\rline3\r")
         finally:
@@ -402,7 +408,7 @@ class TestCLI(unittest.TestCase):
 
     def test_main_sets_xattrs(self):
         """CLI should set ProDOS xattrs with default access."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"test\n")
             path = f.name
 
@@ -421,7 +427,7 @@ class TestCLI(unittest.TestCase):
 
     def test_main_lossy_option(self):
         """--lossy option should allow non-ASCII by replacing with '?'."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"Caf\xc3\xa9\n")
             path = f.name
 
@@ -429,10 +435,10 @@ class TestCLI(unittest.TestCase):
             if not self._xattr_supported(path):
                 self.skipTest("xattrs not supported on this filesystem")
 
-            exit_code = main(['--lossy', path])
+            exit_code = main(["--lossy", path])
             self.assertEqual(exit_code, 0)
 
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, b"Caf??\r")
         finally:
@@ -440,17 +446,19 @@ class TestCLI(unittest.TestCase):
 
     def test_main_strict_mode_rejects_non_ascii(self):
         """Without --lossy, non-ASCII should cause non-zero exit."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             original = b"Caf\xc3\xa9\n"
             f.write(original)
             path = f.name
 
         try:
             exit_code = main([path])
-            self.assertNotEqual(exit_code, 0, "Should return non-zero on non-ASCII in strict mode")
+            self.assertNotEqual(
+                exit_code, 0, "Should return non-zero on non-ASCII in strict mode"
+            )
 
             # File should be unchanged
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, original)
         finally:
@@ -458,7 +466,7 @@ class TestCLI(unittest.TestCase):
 
     def test_main_custom_access(self):
         """--access option should set custom access value."""
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
             f.write(b"test\n")
             path = f.name
 
@@ -466,7 +474,7 @@ class TestCLI(unittest.TestCase):
             if not self._xattr_supported(path):
                 self.skipTest("xattrs not supported on this filesystem")
 
-            exit_code = main(['--access', 'dnb..-wr', path])
+            exit_code = main(["--access", "dnb..-wr", path])
             self.assertEqual(exit_code, 0)
 
             self.assertEqual(os.getxattr(path, "user.prodos8.access"), b"dnb..-wr")
@@ -482,7 +490,7 @@ class TestCLI(unittest.TestCase):
         """--help should exit with code 0 (or raise SystemExit(0))."""
         # --help typically raises SystemExit(0) from argparse
         try:
-            exit_code = main(['--help'])
+            exit_code = main(["--help"])
             # If it doesn't raise, it should return 0
             self.assertEqual(exit_code, 0)
         except SystemExit as e:
@@ -491,25 +499,27 @@ class TestCLI(unittest.TestCase):
 
     def test_main_nonexistent_file_returns_error(self):
         """Non-existent file should return non-zero exit code."""
-        exit_code = main(['/nonexistent/file/path'])
-        self.assertNotEqual(exit_code, 0, "Should return non-zero for non-existent file")
+        exit_code = main(["/nonexistent/file/path"])
+        self.assertNotEqual(
+            exit_code, 0, "Should return non-zero for non-existent file"
+        )
 
     def test_parse_args_default_values(self):
         """parse_args should set default values for options."""
-        args = parse_args(['input.txt'])
-        self.assertEqual(args.path, 'input.txt')
+        args = parse_args(["input.txt"])
+        self.assertEqual(args.path, "input.txt")
         self.assertFalse(args.lossy, "lossy should default to False (strict mode)")
-        self.assertEqual(args.access, 'dn-..-wr', "access should default to 'dn-..-wr'")
+        self.assertEqual(args.access, "dn-..-wr", "access should default to 'dn-..-wr'")
 
     def test_parse_args_lossy_flag(self):
         """parse_args should parse --lossy flag."""
-        args = parse_args(['--lossy', 'input.txt'])
+        args = parse_args(["--lossy", "input.txt"])
         self.assertTrue(args.lossy)
 
     def test_parse_args_access_option(self):
         """parse_args should parse --access option."""
-        args = parse_args(['--access', 'dnb..-wr', 'input.txt'])
-        self.assertEqual(args.access, 'dnb..-wr')
+        args = parse_args(["--access", "dnb..-wr", "input.txt"])
+        self.assertEqual(args.access, "dnb..-wr")
 
 
 if __name__ == "__main__":

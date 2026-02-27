@@ -12,7 +12,7 @@ import sys
 
 
 def normalize_line_endings(data: bytes) -> bytes:
-    """Normalize line endings to ProDOS CR (\\r).
+    r"""Normalize line endings to ProDOS CR (\\r).
 
     Converts:
     - CRLF (\\r\\n) -> CR (\\r)
@@ -26,9 +26,9 @@ def normalize_line_endings(data: bytes) -> bytes:
         Bytes with normalized line endings
     """
     # Replace CRLF with CR first to avoid double conversion
-    data = data.replace(b'\r\n', b'\r')
+    data = data.replace(b"\r\n", b"\r")
     # Then replace remaining LF with CR
-    data = data.replace(b'\n', b'\r')
+    data = data.replace(b"\n", b"\r")
     return data
 
 
@@ -57,7 +57,7 @@ def convert_to_ascii(data: bytes, *, strict: bool) -> bytes:
         result = bytearray()
         for byte in data:
             if byte >= 0x80:
-                result.append(ord('?'))
+                result.append(ord("?"))
             else:
                 result.append(byte)
         return bytes(result)
@@ -87,7 +87,9 @@ def set_prodos_text_metadata(path: str, *, access: str = "dn-..-wr") -> None:
     os.setxattr(path, "user.prodos8.access", access.encode("ascii"))
 
 
-def convert_file_in_place(path: str, *, strict_ascii: bool = True, access: str = "dn-..-wr") -> None:
+def convert_file_in_place(
+    path: str, *, strict_ascii: bool = True, access: str = "dn-..-wr"
+) -> None:
     """Convert a file to ProDOS TEXT format in-place.
 
     Atomically reads the file, applies line ending normalization and ASCII conversion,
@@ -104,11 +106,11 @@ def convert_file_in_place(path: str, *, strict_ascii: bool = True, access: str =
         ValueError: If strict_ascii=True and non-ASCII bytes are found
         OSError: If file operations or xattr operations fail
     """
-    import tempfile
     import stat
+    import tempfile
 
     # Read the original file
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         data = f.read()
 
     # Get original file permissions
@@ -128,7 +130,7 @@ def convert_file_in_place(path: str, *, strict_ascii: bool = True, access: str =
         temp_fd, temp_path = tempfile.mkstemp(dir=dir_path, prefix=".prodos_tmp_")
 
         # Write converted data to temp file (use fdopen to ensure complete write)
-        with os.fdopen(temp_fd, 'wb') as f:
+        with os.fdopen(temp_fd, "wb") as f:
             f.write(data)
         temp_fd = None
 
@@ -147,12 +149,12 @@ def convert_file_in_place(path: str, *, strict_ascii: bool = True, access: str =
         if temp_fd is not None:
             try:
                 os.close(temp_fd)
-            except Exception:
+            except OSError:
                 pass
         if temp_path is not None and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
-            except Exception:
+            except OSError:
                 pass
         raise
 
@@ -169,19 +171,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert Linux text files to ProDOS TEXT format with CR line endings and xattrs."
     )
-    parser.add_argument(
-        "path",
-        help="Path to the text file to convert"
-    )
+    parser.add_argument("path", help="Path to the text file to convert")
     parser.add_argument(
         "--lossy",
         action="store_true",
-        help="Allow non-ASCII characters by replacing them with '?' (default: strict mode rejects non-ASCII)"
+        help="Allow non-ASCII characters by replacing them with '?' (default: strict mode rejects non-ASCII)",
     )
     parser.add_argument(
         "--access",
         default="dn-..-wr",
-        help="ProDOS access string for xattr metadata (default: dn-..-wr)"
+        help="ProDOS access string for xattr metadata (default: dn-..-wr)",
     )
     return parser.parse_args(argv)
 
@@ -206,9 +205,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         convert_file_in_place(
-            args.path,
-            strict_ascii=not args.lossy,
-            access=args.access
+            args.path, strict_ascii=not args.lossy, access=args.access
         )
         return 0
     except ValueError as e:

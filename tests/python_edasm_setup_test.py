@@ -17,8 +17,78 @@ from edasm_setup import (  # type: ignore[import-not-found]
     parse_text_mapping,
     run_emulator,
     validate_disk_image_extension,
+    validate_safe_path,
     validate_system_file,
 )
+
+
+class TestPathSecurity(unittest.TestCase):
+    """Test path security validation against command injection."""
+
+    def test_safe_paths_accepted(self):
+        """Normal paths should be accepted."""
+        safe_paths = [
+            "/path/to/file.2mg",
+            "relative/path/image.2mg",
+            "file-with-dash.txt",
+            "file_with_underscore.txt",
+            "file.with.dots.txt",
+            "work_dir_123",
+        ]
+        for path in safe_paths:
+            validate_safe_path(path, "test_param")  # Should not raise
+
+    def test_semicolon_rejected(self):
+        """Paths with semicolons should be rejected (shell command separator)."""
+        with self.assertRaises(ValueError) as cm:
+            validate_safe_path("/path/to/file;rm -rf /", "disk-image")
+        self.assertIn("shell metacharacter", str(cm.exception))
+        self.assertIn(";", str(cm.exception))
+        self.assertIn("disk-image", str(cm.exception))
+
+    def test_pipe_rejected(self):
+        """Paths with pipes should be rejected (shell command chaining)."""
+        with self.assertRaises(ValueError) as cm:
+            validate_safe_path("file.2mg|cat /etc/passwd", "disk-image")
+        self.assertIn("|", str(cm.exception))
+
+    def test_ampersand_rejected(self):
+        """Paths with ampersands should be rejected (shell backgrounding)."""
+        with self.assertRaises(ValueError) as cm:
+            validate_safe_path("file.2mg&", "disk-image")
+        self.assertIn("&", str(cm.exception))
+
+    def test_dollar_rejected(self):
+        """Paths with dollar signs should be rejected (shell variable expansion)."""
+        with self.assertRaises(ValueError) as cm:
+            validate_safe_path("/path/$EVIL/file", "output-dir")
+        self.assertIn("$", str(cm.exception))
+
+    def test_backtick_rejected(self):
+        """Paths with backticks should be rejected (command substitution)."""
+        with self.assertRaises(ValueError) as cm:
+            validate_safe_path("file`whoami`.2mg", "disk-image")
+        self.assertIn("`", str(cm.exception))
+
+    def test_newline_rejected(self):
+        """Paths with newlines should be rejected (command separation)."""
+        with self.assertRaises(ValueError) as cm:
+            validate_safe_path("file\nrm -rf /", "disk-image")
+        # The exception message will contain the actual newline character
+        self.assertIn("shell metacharacter", str(cm.exception))
+        self.assertIn("\n", str(cm.exception))
+
+    def test_redirect_operators_rejected(self):
+        """Paths with redirect operators should be rejected."""
+        for char in [">", "<"]:
+            with self.assertRaises(ValueError):
+                validate_safe_path(f"file{char}evil", "test-param")
+
+    def test_parentheses_rejected(self):
+        """Paths with parentheses should be rejected (subshells)."""
+        for char in ["(", ")", "{", "}"]:
+            with self.assertRaises(ValueError):
+                validate_safe_path(f"file{char}evil", "test-param")
 
 
 class TestDiskImageValidation(unittest.TestCase):
