@@ -1,8 +1,8 @@
-## Plan: Linux to ProDOS Text Converter Script
+# Plan: Linux to ProDOS Text Converter Script
 
 Create a small Python script that takes a Linux text file and converts it into a ProDOS TEXT file in this repo’s xattr-based metadata format. Conversion normalizes line endings to CR and applies `user.prodos8.*` xattrs consistent with existing tooling.
 
-**Phases**
+## Phases
 
 1. **Phase 1: Core byte conversion**
    - **Objective:** Convert Linux line endings to ProDOS CR and apply an ASCII policy.
@@ -43,14 +43,14 @@ Create a small Python script that takes a Linux text file and converts it into a
      - Existing xattrs behavior matches chosen policy
    - **Steps:** Expand tests, implement edge-case behavior, re-run tests.
 
-**Defaults (chosen for implementation unless changed)**
+## Defaults (chosen for implementation unless changed)
 
 - ASCII policy: strict by default (error on non-ASCII); optional `--lossy` replaces with `?`.
 - Output: in-place rewrite of the file contents.
 - Xattrs: overwrite the ProDOS xattr keys this script manages.
 - Metadata values: `file_type=04`, `aux_type=0000` (sequential TEXT), `storage_type=01`, `access=dn-..-wr`.
 
-**Open Questions**
+## Open Questions
 
 1. Do you want an option to set the high bit on printable characters (Apple II “high-bit text” style), or keep 7-bit ASCII only?
 2. Should the default access byte be more permissive (e.g., `dnb..-wr`) or keep `dn-..-wr`?

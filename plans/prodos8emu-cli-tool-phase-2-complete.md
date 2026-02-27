@@ -1,4 +1,4 @@
-## Phase 2 Complete: System File Loader Helper
+# Phase 2 Complete: System File Loader Helper
 
 Added a small loader helper that reads a ProDOS system file from the host filesystem, validates its entry opcode, and writes it into emulated memory starting at $2000 (or a caller-provided load address).
 

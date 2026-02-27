@@ -1,4 +1,4 @@
-## Plan Complete: ProDOS8 CLI Emulator Tool
+# Plan Complete: ProDOS8 CLI Emulator Tool
 
 Implemented a new C++ CLI tool that uses the ProDOS8Emu library to load an Apple II ROM image and a ProDOS system file, initialize the Apple II warm restart vector, and execute the 65C02 CPU starting from reset. This provides a concrete end-to-end entrypoint for driving the emulator from the command line while staying compatible with the existing MLI trap-based integration.
 

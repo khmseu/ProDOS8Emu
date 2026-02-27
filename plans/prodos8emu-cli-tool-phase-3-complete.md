@@ -1,4 +1,4 @@
-## Phase 3 Complete: Warm Restart Vector Initialization
+# Phase 3 Complete: Warm Restart Vector Initialization
 
 Added a helper to initialize the Apple II Control-Reset vector used by ProDOS system programs by writing the restart entrypoint to $03F2/$03F3 and setting the power-up byte ($03F4) to 0xA5.
 

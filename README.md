@@ -81,10 +81,10 @@ Purpose:
 - Convert Linux text line endings to ProDOS style (`CR`)
 - Optionally enforce strict ASCII or lossy replacement (`?`) for non-ASCII bytes
 - Apply ProDOS xattr metadata:
-	- `user.prodos8.file_type = 04`
-	- `user.prodos8.aux_type = 0000`
-	- `user.prodos8.storage_type = 01`
-	- `user.prodos8.access = dn-..-wr` (default)
+  - `user.prodos8.file_type = 04`
+  - `user.prodos8.aux_type = 0000`
+  - `user.prodos8.storage_type = 01`
+  - `user.prodos8.access = dn-..-wr` (default)
 
 Examples:
 

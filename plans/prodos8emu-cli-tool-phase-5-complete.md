@@ -1,4 +1,4 @@
-## Phase 5 Complete: Emulator Initialization
+# Phase 5 Complete: Emulator Initialization
 
 Updated the `prodos8emu_run` CLI tool to construct the core emulator components (`Apple2Memory`, `MLIContext`, `CPU65C02`) and attach the MLI trap, preparing for the actual boot/run pipeline in the next phase.
 

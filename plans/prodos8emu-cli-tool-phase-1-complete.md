@@ -1,4 +1,4 @@
-## Phase 1 Complete: Add ROM Loading API to Apple2Memory
+# Phase 1 Complete: Add ROM Loading API to Apple2Memory
 
 Extended Apple2Memory with a public method to load ROM image files (12KB) into the ROM backing area ($D000-$FFFF), enabling proper ROM/LC RAM switching behavior for emulator initialization.
 
@@ -28,7 +28,7 @@ Extended Apple2Memory with a public method to load ROM image files (12KB) into t
 
 **Git Commit Message:**
 
-```
+```text
 feat: Add ROM loading API to Apple2Memory
 
 - Add loadROM() method to load 12KB ROM images into $D000-$FFFF

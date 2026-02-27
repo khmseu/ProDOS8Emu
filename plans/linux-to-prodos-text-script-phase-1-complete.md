@@ -1,4 +1,4 @@
-## Phase 1 Complete: Core Byte Conversion
+# Phase 1 Complete: Core Byte Conversion
 
 Implemented and tested the Phase 1 pure conversion functions for ProDOS text preparation: newline normalization to CR and an ASCII policy (strict vs lossy). The new Python unit test suite is integrated into CTest and avoids generating bytecode artifacts.
 
