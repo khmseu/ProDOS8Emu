@@ -235,22 +235,23 @@ int main() {
     }
   }
 
-  // Test 5: GET_TIME param_count validation
+  // Test 5: GET_TIME never fails (per ProDOS spec)
   {
-    std::cout << "Test 5: GET_TIME param_count validation\n";
+    std::cout << "Test 5: GET_TIME never fails (per ProDOS spec)\n";
     TestMemory             mem;
     prodos8emu::MLIContext ctx(tempDir);
 
     uint16_t paramBlock = 0x0300;
-    prodos8emu::write_u8(mem.banks(), paramBlock, 1);  // wrong: should be 0
+    prodos8emu::write_u8(mem.banks(), paramBlock, 99);  // invalid param_count
 
+    // Per ProDOS 8 Tech Ref Section 4.6.1: "it cannot generate an error"
     uint8_t err = ctx.getTimeCall(mem.banks(), paramBlock);
-    if (err != prodos8emu::ERR_BAD_CALL_PARAM_COUNT) {
-      std::cerr << "FAIL: Expected ERR_BAD_CALL_PARAM_COUNT, got 0x" << std::hex << (int)err
+    if (err != prodos8emu::ERR_NO_ERROR) {
+      std::cerr << "FAIL: GET_TIME must always succeed, got error 0x" << std::hex << (int)err
                 << "\n";
       failures++;
     } else {
-      std::cout << "PASS: GET_TIME param_count validation\n";
+      std::cout << "PASS: GET_TIME never fails (per ProDOS spec)\n";
     }
   }
 

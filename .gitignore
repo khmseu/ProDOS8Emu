@@ -38,6 +38,7 @@ _codeql_build_dir/
 _codeql_detected_source_root
 .cache/
 .fake
+*.log
 inputs/
 third_party_docs/
 work/

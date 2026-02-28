@@ -96,10 +96,10 @@ namespace prodos8emu {
   }
 
   uint8_t MLIContext::getTimeCall(MemoryBanks& banks, uint16_t paramBlockAddr) {
-    uint8_t paramCount = read_u8(banks, paramBlockAddr);
-    if (paramCount != 0) {
-      return ERR_BAD_CALL_PARAM_COUNT;
-    }
+    // Per ProDOS 8 Technical Reference Manual Section 4.6.1:
+    // "This call has no parameter list, and it cannot generate an error."
+    // We ignore the parameter block entirely and always succeed.
+    (void)paramBlockAddr;  // Unused
 
     time_t   now  = ::time(nullptr);
     uint16_t date = encodeProDOSDate(now);
