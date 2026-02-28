@@ -230,16 +230,16 @@ Destination directories are created automatically if they don't exist.
 
 ### Execution Order
 
-File rearrangement happens at a specific point in the workflow:
+File rearrangement happens after metadata conversion, allowing you to reference clean filenames:
 
-1. Extract disk image (using `cadius`)
-2. **→ Rearrange files** (if `--rearrange-config` provided)
-3. Convert metadata to xattrs
+1. Extract disk image (using `cadius`) - files have Cadius suffixes like `FILE#040000`
+2. Convert metadata to xattrs - strips suffixes, files become `FILE`, xattrs stored on files
+3. **→ Rearrange files** (if `--rearrange-config` provided) - xattrs move with files
 4. Import text files (if `--text` specified)
 5. Discover system file
 6. Run emulator
 
-This ensures files are organized before metadata is applied and text imports are processed.
+This ensures you can reference clean filenames in your config without Cadius suffixes.
 
 ### Multiple Matches
 

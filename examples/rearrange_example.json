@@ -1,6 +1,6 @@
 {
     "__comment_overview": "Example configuration for edasm_setup.py --rearrange-config option",
-    "__comment_purpose": "File rearrangement allows you to reorganize disk image contents before metadata conversion",
+    "__comment_purpose": "File rearrangement allows you to reorganize disk image contents after metadata conversion (so filenames are already clean)",
     "rearrange": [
         {
             "__comment": "Simple rename: Change a single file name",
@@ -43,9 +43,9 @@
             "to": "LIB/SOURCE/"
         },
         {
-            "__comment": "Cleanup suffixes: Remove Cadius-added suffixes during rearrangement",
-            "from": "PROG#062000",
-            "to": "PROGS/PROG"
+            "__comment": "Clean filename usage: Since rearrangement happens after metadata conversion, no Cadius suffixes",
+            "from": "PROGRAM",
+            "to": "PROGS/PROGRAM"
         },
         {
             "__comment": "Group by type: Organize documentation files",
@@ -57,7 +57,8 @@
         "Pattern matching is case-insensitive for ProDOS compatibility",
         "Destination directories are created automatically if they don't exist",
         "If multiple patterns match the same file, first match wins",
-        "Rearrangement happens after extraction, before metadata conversion",
+        "Rearrangement happens AFTER metadata conversion, so filenames are clean (no #FTAUXT suffixes)",
+        "Extended attributes (xattrs) are stored on files and move with them during rearrangement",
         "Use relative paths for files within the volume root",
         "Use absolute paths (starting with /) to explicitly specify volume name"
     ]

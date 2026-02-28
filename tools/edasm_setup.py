@@ -690,16 +690,16 @@ def main():
                 args.cadius, args.disk_image, str(volume_dir), args.extract_cmd
             )
 
-            # Rearrange files if config provided
+            print("Converting metadata to xattrs...")
+            run_metadata_conversion(str(volume_dir))
+
+            # Rearrange files if config provided (after metadata conversion)
             if args.rearrange_config:
                 print("Rearranging files...")
                 config = parse_rearrange_config(args.rearrange_config)
                 validate_rearrange_config(config)
                 mappings = expand_rearrange_mappings(str(volume_dir), config["rearrange"])
                 rearrange_files(str(volume_dir), mappings)
-
-            print("Converting metadata to xattrs...")
-            run_metadata_conversion(str(volume_dir))
 
         # Import text files
         if args.text_mappings:

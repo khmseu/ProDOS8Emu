@@ -896,7 +896,7 @@ class TestRearrangementIntegration(unittest.TestCase):
         mock_expand_mappings,
         mock_rearrange,
     ):
-        """Verify correct order: extract → rearrange → metadata."""
+        """Verify correct order: extract → metadata → rearrange."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Track call order
             call_order = []
@@ -947,8 +947,8 @@ class TestRearrangementIntegration(unittest.TestCase):
             # Should succeed
             self.assertEqual(result, 0)
 
-            # Verify correct order
-            self.assertEqual(call_order, ["extract", "rearrange", "metadata"])
+            # Verify correct order: rearrangement now happens after metadata conversion
+            self.assertEqual(call_order, ["extract", "metadata", "rearrange"])
 
 
 class TestRearrangementEndToEnd(unittest.TestCase):
