@@ -183,7 +183,7 @@ class TestSystemFileValidation(unittest.TestCase):
     """Test system file validation."""
 
     def test_valid_system_file(self):
-        """File starting with 0x4C (JMP) should be valid."""
+        """Non-empty file should be valid."""
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"\x4c\x00\x08")  # JMP $0800
             f.flush()
@@ -194,15 +194,15 @@ class TestSystemFileValidation(unittest.TestCase):
         finally:
             os.unlink(path)
 
-    def test_invalid_first_byte(self):
-        """File not starting with 0x4C should be invalid."""
+    def test_valid_system_file_without_jmp(self):
+        """File not starting with 0x4C is still valid (ProDOS doesn't check)."""
         with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"\x00\x00\x00")
+            f.write(b"\xa2\xf0\x9a")  # LDX #$F0; TXS (also valid!)
             f.flush()
             path = f.name
 
         try:
-            self.assertFalse(validate_system_file(path))
+            self.assertTrue(validate_system_file(path))
         finally:
             os.unlink(path)
 
@@ -227,7 +227,7 @@ class TestSystemFileDiscovery(unittest.TestCase):
     """Test automatic system file discovery."""
 
     def test_single_system_file_found(self):
-        """Single .SYSTEM file with JMP should be discovered."""
+        """Single .SYSTEM file should be discovered."""
         with tempfile.TemporaryDirectory() as tmpdir:
             system_path = Path(tmpdir) / "EDASM.SYSTEM"
             system_path.write_bytes(b"\x4c\x00\x08")
@@ -273,15 +273,14 @@ class TestSystemFileDiscovery(unittest.TestCase):
                 discover_system_file(tmpdir)
             self.assertIn("no system file", str(cm.exception).lower())
 
-    def test_ignores_non_jmp_files(self):
-        """Files not starting with 0x4C should be ignored."""
+    def test_finds_any_system_extension(self):
+        """Files with .SYSTEM extension are valid regardless of content."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            fake = Path(tmpdir) / "FAKE.SYSTEM"
-            fake.write_bytes(b"\x00\x00\x00")
+            sys_file = Path(tmpdir) / "FAKE.SYSTEM"
+            sys_file.write_bytes(b"\xa2\xf0\x9a")  # LDX #$F0; TXS
 
-            with self.assertRaises(ValueError) as cm:
-                discover_system_file(tmpdir)
-            self.assertIn("no system file", str(cm.exception).lower())
+            result = discover_system_file(tmpdir)
+            self.assertEqual(result, str(sys_file))
 
     def test_fallback_to_xattr_ff(self):
         """Should fallback to checking file_type=ff xattr."""
@@ -357,6 +356,7 @@ class TestRunEmulator(unittest.TestCase):
             rom_path="rom.bin",
             system_file="EDASM.SYSTEM",
             volume_root="work/volumes",
+            debug=True,
             max_instructions=1234,
         )
 
@@ -364,6 +364,7 @@ class TestRunEmulator(unittest.TestCase):
         self.assertEqual(called_cmd[0], "build/prodos8emu_run")
         self.assertIn("--volume-root", called_cmd)
         self.assertIn("work/volumes", called_cmd)
+        self.assertIn("--debug", called_cmd)
         self.assertIn("--max-instructions", called_cmd)
         self.assertIn("1234", called_cmd)
 
@@ -765,6 +766,11 @@ class TestRearrangementIntegration(unittest.TestCase):
         # Test without config argument
         args = parse_args(["--work-dir", "work", "--rom", "rom.bin"])
         self.assertIsNone(args.rearrange_config)
+        self.assertFalse(args.debug)
+
+        # Test debug flag parsing
+        args = parse_args(["--work-dir", "work", "--rom", "rom.bin", "--debug"])
+        self.assertTrue(args.debug)
 
     @mock.patch("edasm_setup.run_emulator")
     @mock.patch("edasm_setup.discover_system_file")

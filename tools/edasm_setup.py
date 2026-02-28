@@ -81,22 +81,23 @@ def parse_text_mapping(spec: str) -> Tuple[str, str]:
 def validate_system_file(path: str) -> bool:
     """Validate a file is a ProDOS system file.
 
-    Checks that file exists and starts with 0x4C (JMP instruction).
+    Checks that file exists and has non-zero size. Note: ProDOS system files
+    (type $FF) do NOT need to start with 0x4C (JMP). ProDOS unconditionally
+    jumps to $2000 after loading. The 0x4C check is only used by some selector
+    programs to detect if an interpreter supports the startup-program protocol.
 
     Args:
         path: Path to file to validate
 
     Returns:
-        True if valid system file, False if not
+        True if valid system file (exists and non-empty), False if empty
 
     Raises:
         OSError: If file doesn't exist or can't be read
     """
     with open(path, "rb") as f:
         first_byte = f.read(1)
-        if not first_byte:
-            return False
-        return first_byte[0] == 0x4C
+        return bool(first_byte)
 
 
 def discover_system_file(volume_dir: str) -> str:
@@ -104,9 +105,7 @@ def discover_system_file(volume_dir: str) -> str:
 
     Strategy:
     1. Look for files with .SYSTEM or .SYS extension (case-insensitive)
-       that start with 0x4C
     2. If none found, look for files with xattr user.prodos8.file_type=ff
-       that start with 0x4C
     3. Exactly one candidate required, otherwise fail
 
     Args:
@@ -154,7 +153,7 @@ def discover_system_file(volume_dir: str) -> str:
     if not candidates:
         raise ValueError(
             f"No system file found in {volume_dir}. "
-            f"Expected .SYSTEM/.SYS file or file with type $FF starting with $4C."
+            f"Expected .SYSTEM/.SYS file or file with type $FF."
         )
 
     if len(candidates) > 1:
@@ -530,6 +529,7 @@ def run_emulator(
     rom_path: str,
     system_file: str,
     volume_root: str,
+    debug: bool = False,
     max_instructions: Optional[int] = None,
 ) -> None:
     """Run the emulator.
@@ -539,6 +539,7 @@ def run_emulator(
         rom_path: Path to ROM file
         system_file: Path to system file to execute
         volume_root: Volume root directory
+        debug: Enable runner debug logs
         max_instructions: Optional instruction limit
 
     Raises:
@@ -549,6 +550,9 @@ def run_emulator(
         "--volume-root",
         volume_root,
     ]
+
+    if debug:
+        cmd.append("--debug")
 
     if max_instructions is not None:
         cmd.extend(["--max-instructions", str(max_instructions)])
@@ -651,6 +655,11 @@ Examples:
         type=int,
         help="Maximum instructions to execute (passed to runner)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable prodos8emu_run debug logs",
+    )
 
     return parser.parse_args(args)
 
@@ -719,7 +728,7 @@ def main():
                 return 1
             if not validate_system_file(str(system_file_path)):
                 print(
-                    f"Error: Invalid system file (must start with $4C): {system_file_path}",
+                    f"Error: Invalid system file (empty or unreadable): {system_file_path}",
                     file=sys.stderr,
                 )
                 return 1
@@ -737,6 +746,7 @@ def main():
                 args.rom,
                 system_file,
                 str(volume_root),
+                args.debug,
                 args.max_instructions,
             )
         else:

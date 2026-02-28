@@ -11,8 +11,12 @@ namespace prodos8emu {
    * Load a ProDOS system file (type $FF) into Apple II memory.
    *
    * Reads file bytes from the host filesystem and writes them to memory
-   * starting at the specified load address. Validates that the first byte
-   * is 0x4C (JMP abs instruction) as required for ProDOS system files.
+   * starting at the specified load address.
+   *
+   * Note: ProDOS system files do NOT need to start with 0x4C (JMP). ProDOS
+   * unconditionally jumps to the load address after loading. The 0x4C check
+   * is only used by some selector programs to detect if an interpreter
+   * supports the startup-program-passing protocol.
    *
    * @param mem Apple2Memory instance to load the file into.
    * @param filePath Path to the system file on the host filesystem.
@@ -24,7 +28,6 @@ namespace prodos8emu {
    *         - File cannot be opened
    *         - File read fails
    *         - File is too large to fit from loadAddr to 0xBFFF
-   *         - First byte is not 0x4C (JMP abs)
    */
   void loadSystemFile(Apple2Memory& mem, const std::filesystem::path& filePath,
                       uint16_t loadAddr = 0x2000);

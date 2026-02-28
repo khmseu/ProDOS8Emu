@@ -51,13 +51,9 @@ namespace prodos8emu {
       throw std::runtime_error("Failed to read system file: " + filePath.string());
     }
 
-    // Validate first byte is 0x4C (JMP abs)
-    if (buffer.empty() || buffer[0] != 0x4C) {
-      char buf[128];
-      std::snprintf(buf, sizeof(buf),
-                    "Invalid system file: first byte must be 0x4C (JMP abs), got 0x%02X",
-                    buffer.empty() ? 0 : buffer[0]);
-      throw std::runtime_error(buf);
+    // Validate file is not empty
+    if (buffer.empty()) {
+      throw std::runtime_error("System file is empty: " + filePath.string());
     }
 
     // Write bytes to memory

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <iosfwd>
+
 #include "apple2mem.hpp"
 
 namespace prodos8emu {
@@ -21,6 +23,7 @@ namespace prodos8emu {
 
     void attachMLI(MLIContext& mli);
     void detachMLI();
+    void setDebugLogs(std::ostream* mliLog, std::ostream* coutLog);
 
     // Reset vectors are read from $FFFC/$FFFD.
     void reset();
@@ -49,7 +52,9 @@ namespace prodos8emu {
 
    private:
     Apple2Memory& m_mem;
-    MLIContext*   m_mli = nullptr;
+    MLIContext*   m_mli     = nullptr;
+    std::ostream* m_mliLog  = nullptr;
+    std::ostream* m_coutLog = nullptr;
 
     CPU65C02Regs m_r;
 

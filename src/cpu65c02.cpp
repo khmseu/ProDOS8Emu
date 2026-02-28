@@ -1,5 +1,8 @@
 #include "prodos8emu/cpu65c02.hpp"
 
+#include <iomanip>
+#include <ostream>
+
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/mli.hpp"
 
@@ -7,11 +10,77 @@ namespace prodos8emu {
 
   namespace {
 
-    constexpr uint16_t VEC_RESET = 0xFFFC;
-    constexpr uint16_t VEC_IRQ   = 0xFFFE;
+    constexpr uint16_t VEC_RESET       = 0xFFFC;
+    constexpr uint16_t VEC_IRQ         = 0xFFFE;
+    constexpr uint16_t COUT_VECTOR_PTR = 0x0036;
 
     inline uint16_t make_u16(uint8_t lo, uint8_t hi) {
       return static_cast<uint16_t>(static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8));
+    }
+
+    const char* mli_call_name(uint8_t callNumber) {
+      switch (callNumber) {
+        case 0xC0:
+          return "CREATE";
+        case 0xC1:
+          return "DESTROY";
+        case 0xC2:
+          return "RENAME";
+        case 0xC3:
+          return "SET_FILE_INFO";
+        case 0xC4:
+          return "GET_FILE_INFO";
+        case 0xC5:
+          return "ON_LINE";
+        case 0xC6:
+          return "SET_PREFIX";
+        case 0xC7:
+          return "GET_PREFIX";
+        case 0xC8:
+          return "OPEN";
+        case 0xC9:
+          return "NEWLINE";
+        case 0xCA:
+          return "READ";
+        case 0xCB:
+          return "WRITE";
+        case 0xCC:
+          return "CLOSE";
+        case 0xCD:
+          return "FLUSH";
+        case 0xCE:
+          return "SET_MARK";
+        case 0xCF:
+          return "GET_MARK";
+        case 0xD0:
+          return "SET_EOF";
+        case 0xD1:
+          return "GET_EOF";
+        case 0xD2:
+          return "SET_BUF";
+        case 0xD3:
+          return "GET_BUF";
+        case 0x40:
+          return "ALLOC_INTERRUPT";
+        case 0x41:
+          return "DEALLOC_INTERRUPT";
+        case 0x80:
+          return "READ_BLOCK";
+        case 0x81:
+          return "WRITE_BLOCK";
+        case 0x82:
+          return "GET_TIME";
+        default:
+          return "UNKNOWN";
+      }
+    }
+
+    void write_hex(std::ostream& os, uint32_t value, int width) {
+      auto flags = os.flags();
+      auto fill  = os.fill();
+      os << std::uppercase << std::hex << std::setw(width) << std::setfill('0') << value;
+      os.flags(flags);
+      os.fill(fill);
     }
 
   }  // namespace
@@ -25,6 +94,11 @@ namespace prodos8emu {
 
   void CPU65C02::detachMLI() {
     m_mli = nullptr;
+  }
+
+  void CPU65C02::setDebugLogs(std::ostream* mliLog, std::ostream* coutLog) {
+    m_mliLog  = mliLog;
+    m_coutLog = coutLog;
   }
 
   uint8_t CPU65C02::read8(uint16_t addr) {
@@ -320,6 +394,21 @@ namespace prodos8emu {
 
       uint8_t err = mli_dispatch(*m_mli, m_mem.banks(), callNumber, paramBlock);
 
+      if (m_mliLog != nullptr) {
+        *m_mliLog << "MLI call=$";
+        write_hex(*m_mliLog, callNumber, 2);
+        *m_mliLog << " (" << mli_call_name(callNumber) << ") param=$";
+        write_hex(*m_mliLog, paramBlock, 4);
+        *m_mliLog << " result=$";
+        write_hex(*m_mliLog, err, 2);
+        if (err == 0) {
+          *m_mliLog << " OK\n";
+        } else {
+          *m_mliLog << " ERROR\n";
+        }
+        m_mliLog->flush();
+      }
+
       // ProDOS convention: Carry set on error, A holds error code.
       m_r.a = err;
       setFlag(FLAG_C, err != 0);
@@ -512,9 +601,27 @@ namespace prodos8emu {
       case 0x4C:  // JMP abs
         m_r.pc = fetch16();
         return 3;
-      case 0x6C:  // JMP (abs)
-        m_r.pc = addr_ind();
+      case 0x6C: {  // JMP (abs)
+        uint16_t ptr    = fetch16();
+        uint16_t target = read16(ptr);
+        if (ptr == COUT_VECTOR_PTR && m_coutLog != nullptr) {
+          uint8_t raw         = m_r.a;
+          uint8_t printable7b = static_cast<uint8_t>(raw & 0x7F);
+
+          *m_coutLog << "COUT A=$";
+          write_hex(*m_coutLog, raw, 2);
+          *m_coutLog << " text='";
+          if (printable7b >= 0x20 && printable7b <= 0x7E) {
+            *m_coutLog << static_cast<char>(printable7b);
+          } else {
+            *m_coutLog << '.';
+          }
+          *m_coutLog << "'\n";
+          m_coutLog->flush();
+        }
+        m_r.pc = target;
         return 5;
+      }
       case 0x7C:  // JMP (abs,X)
         m_r.pc = addr_absind_x();
         return 6;

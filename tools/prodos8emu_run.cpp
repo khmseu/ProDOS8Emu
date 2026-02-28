@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -17,6 +18,7 @@ struct CliOptions {
   std::string rom_path;
   std::string system_file_path;
   std::string volume_root;
+  bool        debug            = false;
   uint64_t    max_instructions = 1000000;  // Default: 1 million instructions
 };
 
@@ -28,6 +30,8 @@ void print_usage(const char* program_name) {
             << "  SYSTEM_FILE_PATH  Path to ProDOS 8 system file to execute\n\n"
             << "Options:\n"
             << "  -h, --help                Show this help message\n"
+            << "  --debug                   Enable debug logs (prodos8emu_mli.log, "
+               "prodos8emu_cout.log)\n"
             << "  --max-instructions N      Stop execution after N instructions\n"
             << "  --volume-root PATH        Root directory for volume mappings\n";
 }
@@ -45,6 +49,8 @@ ParseResult parse_args(int argc, char* argv[], CliOptions& opts) {
     if (arg == "-h" || arg == "--help") {
       print_usage(argv[0]);
       return ParseResult::Help;
+    } else if (arg == "--debug") {
+      opts.debug = true;
     } else if (arg == "--max-instructions") {
       if (i + 1 >= argc) {
         std::cerr << "Error: --max-instructions requires an argument\n";
@@ -116,14 +122,39 @@ int main(int argc, char* argv[]) {
             << "  rom=" << opts.rom_path << "\n"
             << "  sys=" << opts.system_file_path << "\n"
             << "  max=" << opts.max_instructions << "\n"
+            << "  debug=" << (opts.debug ? "yes" : "no") << "\n"
             << "  volroot=" << opts.volume_root << "\n\n";
 
   try {
+    std::ofstream mliLogFile;
+    std::ofstream coutLogFile;
+    if (opts.debug) {
+      const std::string mliLogPath  = "prodos8emu_mli.log";
+      const std::string coutLogPath = "prodos8emu_cout.log";
+
+      mliLogFile.open(mliLogPath);
+      if (!mliLogFile.is_open()) {
+        std::cerr << "Error: Could not open debug log file: " << mliLogPath << "\n";
+        return 1;
+      }
+
+      coutLogFile.open(coutLogPath);
+      if (!coutLogFile.is_open()) {
+        std::cerr << "Error: Could not open debug log file: " << coutLogPath << "\n";
+        return 1;
+      }
+
+      std::cout << "Debug logs:\n"
+                << "  mli=" << mliLogPath << "\n"
+                << "  cout=" << coutLogPath << "\n\n";
+    }
+
     // Initialize emulator components
     prodos8emu::Apple2Memory mem;
     prodos8emu::MLIContext   ctx(opts.volume_root);
     prodos8emu::CPU65C02     cpu(mem);
     cpu.attachMLI(ctx);
+    cpu.setDebugLogs(opts.debug ? &mliLogFile : nullptr, opts.debug ? &coutLogFile : nullptr);
 
     std::cout << "Loading ROM from " << opts.rom_path << "...\n";
     mem.loadROM(opts.rom_path);

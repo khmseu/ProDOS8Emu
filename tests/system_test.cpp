@@ -426,7 +426,7 @@ int main() {
     std::cout << "Test 12: System file loader - valid system file\n";
     prodos8emu::Apple2Memory mem;
 
-    // Create a minimal system file: starts with 0x4C (JMP abs)
+    // Create a minimal system file (using JMP for this test)
     fs::path sysFile = tempDir / "TESTSYS";
     {
       std::ofstream out(sysFile, std::ios::binary);
@@ -465,42 +465,40 @@ int main() {
     }
   }
 
-  // Test 13: System file loader - validation (missing JMP)
+  // Test 13: System file loader - accepts any non-empty file
   {
-    std::cout << "Test 13: System file loader - validation\n";
+    std::cout << "Test 13: System file loader - accepts any non-empty file\n";
     prodos8emu::Apple2Memory mem;
 
-    // Create a file that doesn't start with 0x4C
-    fs::path badFile = tempDir / "BADSYS";
+    // Create a file that doesn't start with 0x4C (still valid for ProDOS!)
+    fs::path sysFile = tempDir / "NOSYS";
     {
-      std::ofstream out(badFile, std::ios::binary);
-      out.put(0x60);  // RTS instead of JMP
-      for (int i = 0; i < 99; i++) {
-        out.put(0x00);
+      std::ofstream out(sysFile, std::ios::binary);
+      out.put(0xA2);  // LDX immediate
+      out.put(0xF0);  // #$F0
+      out.put(0x9A);  // TXS
+      for (int i = 0; i < 97; i++) {
+        out.put(0xEA);  // NOPs
       }
     }
 
-    bool threw = false;
     try {
-      prodos8emu::loadSystemFile(mem, badFile, 0x2000);
-    } catch (const std::runtime_error& e) {
-      threw = true;
-      std::string msg(e.what());
-      if (msg.find("0x4C") == std::string::npos && msg.find("JMP") == std::string::npos) {
-        std::cerr << "FAIL: Exception message should mention 0x4C or JMP, got: " << msg << "\n";
-        failures++;
-      }
-    } catch (...) {
-      threw = true;
-      std::cerr << "FAIL: Wrong exception type thrown\n";
-      failures++;
-    }
+      prodos8emu::loadSystemFile(mem, sysFile, 0x2000);
 
-    if (!threw) {
-      std::cerr << "FAIL: Expected exception for invalid system file\n";
+      // Verify it was loaded
+      auto& banks = mem.banks();
+      if (prodos8emu::read_u8(banks, 0x2000) != 0xA2) {
+        std::cerr << "FAIL: Expected 0xA2 at $2000\n";
+        failures++;
+      } else if (prodos8emu::read_u8(banks, 0x2001) != 0xF0) {
+        std::cerr << "FAIL: Expected 0xF0 at $2001\n";
+        failures++;
+      } else {
+        std::cout << "PASS: System file without JMP loaded correctly\n";
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "FAIL: Unexpected exception: " << e.what() << "\n";
       failures++;
-    } else {
-      std::cout << "PASS: Invalid system file rejected\n";
     }
   }
 

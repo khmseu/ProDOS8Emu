@@ -2,6 +2,8 @@
 
 #include <filesystem>
 #include <iostream>
+#include <sstream>
+#include <string>
 
 #include "prodos8emu/apple2mem.hpp"
 #include "prodos8emu/memory.hpp"
@@ -69,6 +71,9 @@ int main() {
 
     prodos8emu::CPU65C02 cpu(mem);
     cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    std::stringstream coutLog;
+    cpu.setDebugLogs(&mliLog, &coutLog);
     cpu.reset();
 
     // ProDOS MLI should return with decimal mode clear.
@@ -78,11 +83,12 @@ int main() {
     cpu.step();
     cpu.step();
 
-    uint8_t slot = prodos8emu::read_u8(mem.constBanks(), param + 1);
-    uint8_t a    = cpu.regs().a;
-    bool    c    = (cpu.regs().p & 0x01) != 0;
-    bool    z    = (cpu.regs().p & 0x02) != 0;
-    bool    d    = (cpu.regs().p & 0x08) != 0;
+    uint8_t     slot    = prodos8emu::read_u8(mem.constBanks(), param + 1);
+    uint8_t     a       = cpu.regs().a;
+    bool        c       = (cpu.regs().p & 0x01) != 0;
+    bool        z       = (cpu.regs().p & 0x02) != 0;
+    bool        d       = (cpu.regs().p & 0x08) != 0;
+    std::string mliText = mliLog.str();
 
     if (slot != 1) {
       std::cerr << "FAIL: Expected ALLOC_INTERRUPT to write slot=1, got " << (int)slot << "\n";
@@ -100,12 +106,73 @@ int main() {
     } else if (d) {
       std::cerr << "FAIL: Expected D clear on ProDOS MLI return\n";
       failures++;
+    } else if (mliText.find("ALLOC_INTERRUPT") == std::string::npos) {
+      std::cerr << "FAIL: Expected MLI log to include call name ALLOC_INTERRUPT\n";
+      failures++;
+    } else if (mliText.find("result=$00") == std::string::npos) {
+      std::cerr << "FAIL: Expected MLI log to include success result=$00\n";
+      failures++;
     } else if (cpu.regs().pc != static_cast<uint16_t>(start + 7)) {
       std::cerr << "FAIL: Expected PC to reach NOP+1 (JSR+3 then NOP), got 0x" << std::hex
                 << cpu.regs().pc << std::dec << "\n";
       failures++;
     } else {
       std::cout << "PASS: JSR $BF00 MLI trap\n";
+    }
+  }
+
+  // Test 2: JMP ($0036) logs A register as COUT stream output.
+  {
+    std::cout << "Test 2: JMP ($0036) COUT logging\n";
+
+    prodos8emu::Apple2Memory mem;
+
+    // For this CPU test, place vectors into the readable RAM mapping.
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = 0x0400;
+    // Program:
+    //   LDA #$C1
+    //   JMP ($0036)
+    //   NOP
+    writeProgram(mem, start,
+                 {
+                     0xA9,
+                     0xC1,
+                     0x6C,
+                     0x36,
+                     0x00,
+                     0xEA,
+                 });
+
+    // Point COUT vector to NOP so execution continues deterministically.
+    prodos8emu::write_u16_le(mem.banks(), 0x0036, static_cast<uint16_t>(start + 5));
+
+    // Set reset vector to start.
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    coutLog;
+    cpu.setDebugLogs(nullptr, &coutLog);
+    cpu.reset();
+
+    // Execute LDA, JMP ($0036), NOP.
+    cpu.step();
+    cpu.step();
+    cpu.step();
+
+    const std::string coutText = coutLog.str();
+
+    if (coutText.find("A=$C1") == std::string::npos) {
+      std::cerr << "FAIL: Expected COUT log to include A=$C1\n";
+      failures++;
+    } else if (cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+      std::cerr << "FAIL: Expected PC to reach NOP+1 after JMP vector, got 0x" << std::hex
+                << cpu.regs().pc << std::dec << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: JMP ($0036) COUT logging\n";
     }
   }
 
