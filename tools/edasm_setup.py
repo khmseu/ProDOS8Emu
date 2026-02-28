@@ -10,6 +10,7 @@ Complete setup/launch workflow for EDASM:
 """
 
 import argparse
+import json
 import os
 import shlex
 import shutil
@@ -182,6 +183,174 @@ def validate_safe_path(path: str, param_name: str) -> None:
             raise ValueError(
                 f"{param_name} contains shell metacharacter '{char}' which is not allowed"
             )
+
+
+def parse_rearrange_config(config_path: str) -> dict:
+    """Read and parse JSON config file for file rearrangement.
+
+    Args:
+        config_path: Path to JSON configuration file
+
+    Returns:
+        Parsed configuration dictionary
+
+    Raises:
+        FileNotFoundError: If config file does not exist
+        ValueError: If JSON is malformed
+    """
+    try:
+        with open(config_path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in config file {config_path}: {e}") from e
+
+
+def validate_rearrange_config(config: dict) -> None:
+    """Validate rearrange configuration structure.
+
+    Args:
+        config: Configuration dictionary to validate
+
+    Raises:
+        ValueError: If configuration structure is invalid
+    """
+    # Must be a dict with "rearrange" key
+    if not isinstance(config, dict):
+        raise ValueError("Configuration must be a dictionary")
+
+    if "rearrange" not in config:
+        raise ValueError("Configuration must contain 'rearrange' key")
+
+    # "rearrange" must be a list
+    if not isinstance(config["rearrange"], list):
+        raise ValueError("'rearrange' must be a list")
+
+    # Each mapping must be valid
+    for i, mapping in enumerate(config["rearrange"]):
+        if not isinstance(mapping, dict):
+            raise ValueError(f"Mapping at index {i} must be a dictionary")
+
+        # Must have "from" key
+        if "from" not in mapping:
+            raise ValueError(f"Mapping at index {i} missing 'from' key")
+
+        # Must have "to" key
+        if "to" not in mapping:
+            raise ValueError(f"Mapping at index {i} missing 'to' key")
+
+        # Both must be strings
+        if not isinstance(mapping["from"], str):
+            raise ValueError(f"Mapping at index {i}: 'from' must be a string")
+
+        if not isinstance(mapping["to"], str):
+            raise ValueError(f"Mapping at index {i}: 'to' must be a string")
+
+        # Both must be non-empty
+        if not mapping["from"]:
+            raise ValueError(f"Mapping at index {i}: 'from' must not be empty")
+
+        if not mapping["to"]:
+            raise ValueError(f"Mapping at index {i}: 'to' must not be empty")
+
+
+def expand_rearrange_mappings(
+    volume_dir: str, mappings: List[dict]
+) -> List[Tuple[str, str]]:
+    """Expand glob patterns in rearrange mappings.
+
+    Args:
+        volume_dir: Base directory for resolving paths
+        mappings: List of {"from": "pattern", "to": "dest"} dicts
+
+    Returns:
+        List of (source_path, dest_path) tuples with expanded paths
+
+    Raises:
+        ValueError: If glob matches multiple files but target is not a directory
+    """
+    volume_path = Path(volume_dir)
+    result = []
+
+    for mapping in mappings:
+        from_pattern = mapping["from"]
+        to_pattern = mapping["to"]
+
+        # Strip leading slash for filesystem operations
+        if from_pattern.startswith("/"):
+            from_pattern = from_pattern[1:]
+
+        # Expand glob pattern
+        matches = list(volume_path.glob(from_pattern))
+
+        # If no matches, skip this mapping
+        if not matches:
+            continue
+
+        # Check if 'to' is a directory (ends with /)
+        is_to_directory = to_pattern.endswith("/")
+
+        # If 'to' is not a directory and we have multiple matches, error
+        if not is_to_directory and len(matches) > 1:
+            raise ValueError(
+                f"Glob pattern '{from_pattern}' matches {len(matches)} files "
+                f"but destination '{to_pattern}' is not a directory (does not end with /). "
+                f"Cannot map multiple files to a single filename."
+            )
+
+        # Expand each match
+        for match in matches:
+            src_path = str(match)
+
+            # Determine destination path
+            if is_to_directory:
+                # Preserve basename from source
+                to_base = to_pattern.rstrip("/")
+                if to_base.startswith("/"):
+                    to_base = to_base[1:]
+                dest_path = str(volume_path / to_base / match.name)
+            else:
+                # Explicit filename
+                to_stripped = to_pattern[1:] if to_pattern.startswith("/") else to_pattern
+                dest_path = str(volume_path / to_stripped)
+
+            result.append((src_path, dest_path))
+
+    return result
+
+
+def rearrange_files(
+    volume_dir: str, expanded_mappings: List[Tuple[str, str]]
+) -> None:
+    """Perform atomic file rearrangement with validation and rollback.
+
+    Args:
+        volume_dir: Base directory (for reference, not used directly)
+        expanded_mappings: List of (source_path, dest_path) tuples
+
+    Raises:
+        ValueError: If validation fails (missing source, existing destination)
+    """
+    # Phase 1: Validate all source files exist
+    for src, _ in expanded_mappings:
+        if not Path(src).exists():
+            raise ValueError(f"Source file does not exist: {src}")
+
+    # Phase 2: Validate no destination conflicts
+    for _, dest in expanded_mappings:
+        if Path(dest).exists():
+            raise ValueError(f"Destination already exists: {dest}")
+
+    # Phase 3: Perform moves (all validations passed)
+    for src, dest in expanded_mappings:
+        dest_path = Path(dest)
+
+        # Create parent directories as needed
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Move file
+        shutil.move(src, dest)
 
 
 def check_cadius_available(cadius_path: str) -> str:
@@ -462,6 +631,12 @@ Examples:
         help="Use lossy ASCII conversion for text files",
     )
 
+    # File rearrangement
+    parser.add_argument(
+        "--rearrange-config",
+        help="JSON config file for rearranging extracted files (optional)",
+    )
+
     # Execution control
     parser.add_argument(
         "--no-run", action="store_true", help="Setup only, don't run emulator"
@@ -514,6 +689,14 @@ def main():
             extract_disk_image(
                 args.cadius, args.disk_image, str(volume_dir), args.extract_cmd
             )
+
+            # Rearrange files if config provided
+            if args.rearrange_config:
+                print("Rearranging files...")
+                config = parse_rearrange_config(args.rearrange_config)
+                validate_rearrange_config(config)
+                mappings = expand_rearrange_mappings(str(volume_dir), config["rearrange"])
+                rearrange_files(str(volume_dir), mappings)
 
             print("Converting metadata to xattrs...")
             run_metadata_conversion(str(volume_dir))

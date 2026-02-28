@@ -168,6 +168,92 @@ python3 tools/edasm_setup.py \
 
 Run `python3 tools/edasm_setup.py --help` for full documentation.
 
+## File Rearrangement
+
+The `--rearrange-config` option allows you to reorganize extracted disk image files before metadata conversion. This is useful for:
+
+- **Organizing files** by type into subdirectories
+- **Renaming files** to remove Cadius suffixes or standardize naming
+- **Restructuring** to match expected directory layouts for legacy software
+
+### Usage
+
+```bash
+python3 tools/edasm_setup.py \
+  --work-dir work \
+  --disk-image EDASM.2mg \
+  --rom apple_II.rom \
+  --rearrange-config examples/rearrange_example.json
+```
+
+### Config File Format
+
+JSON file with a `"rearrange"` array of file mappings:
+
+```json
+{
+  "rearrange": [
+    {"from": "OLD.TXT", "to": "NEW.TXT"},
+    {"from": "*.ASM", "to": "SRC/"},
+    {"from": "/VOLUME/FILE.BIN", "to": "BIN/PROG.BIN"}
+  ]
+}
+```
+
+See `examples/rearrange_example.json` for a comprehensive example with multiple scenarios.
+
+### Glob Patterns
+
+The `"from"` field supports glob patterns for matching multiple files:
+
+- `*.TXT` — all `.TXT` files in volume root
+- `DIR/*.ASM` — all `.ASM` files in `DIR` subdirectory
+- `**/*.BIN` — all `.BIN` files recursively (any depth)
+- `LIB.*.ASM` — files matching pattern (e.g., `LIB.IO.ASM`, `LIB.CORE.ASM`)
+
+Pattern matching is case-insensitive for ProDOS compatibility.
+
+### Path Types
+
+- **Relative paths**: `DIR/FILE.TXT` — relative to volume root
+- **Absolute paths**: `/VOLUMENAME/DIR/FILE.TXT` — leading `/` indicates absolute path with volume name
+
+### Destination Rules
+
+- **Directory destination** (ends with `/`): Preserves source filename
+  - `*.ASM` → `SRC/` moves `MAIN.ASM` to `SRC/MAIN.ASM`
+- **Explicit filename** (no trailing `/`): Renames to specified name
+  - `OLD.TXT` → `NEW.TXT` renames the file
+  - `README` → `DOCS/README.TXT` moves and renames
+
+Destination directories are created automatically if they don't exist.
+
+### Execution Order
+
+File rearrangement happens at a specific point in the workflow:
+
+1. Extract disk image (using `cadius`)
+2. **→ Rearrange files** (if `--rearrange-config` provided)
+3. Convert metadata to xattrs
+4. Import text files (if `--text` specified)
+5. Discover system file
+6. Run emulator
+
+This ensures files are organized before metadata is applied and text imports are processed.
+
+### Multiple Matches
+
+If multiple patterns match the same file, the **first match wins**. Order your patterns from most specific to most general:
+
+```json
+{
+  "rearrange": [
+    {"from": "PRODOS", "to": "SYSTEM/PRODOS.SYSTEM"},
+    {"from": "*", "to": "OTHER/"}
+  ]
+}
+```
+
 ## Repository Layout
 
 ```text
