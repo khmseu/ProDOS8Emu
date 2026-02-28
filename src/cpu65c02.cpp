@@ -605,18 +605,53 @@ namespace prodos8emu {
         uint16_t ptr    = fetch16();
         uint16_t target = read16(ptr);
         if (ptr == COUT_VECTOR_PTR && m_coutLog != nullptr) {
-          uint8_t raw         = m_r.a;
-          uint8_t printable7b = static_cast<uint8_t>(raw & 0x7F);
+          uint8_t ch = static_cast<uint8_t>(m_r.a & 0x7F);
 
-          *m_coutLog << "COUT A=$";
-          write_hex(*m_coutLog, raw, 2);
-          *m_coutLog << " text='";
-          if (printable7b >= 0x20 && printable7b <= 0x7E) {
-            *m_coutLog << static_cast<char>(printable7b);
-          } else {
-            *m_coutLog << '.';
+          // ProDOS convention: 0x0D (CR) -> output newline
+          if (ch == 0x0D) {
+            *m_coutLog << '\n';
           }
-          *m_coutLog << "'\n";
+          // Printable ASCII: output as-is
+          else if (ch >= 0x20 && ch <= 0x7E) {
+            *m_coutLog << static_cast<char>(ch);
+          }
+          // Control characters: output C-style escape sequences
+          else {
+            switch (ch) {
+              case 0x00:
+                *m_coutLog << "\\0";
+                break;
+              case 0x07:
+                *m_coutLog << "\\a";
+                break;
+              case 0x08:
+                *m_coutLog << "\\b";
+                break;
+              case 0x09:
+                *m_coutLog << "\\t";
+                break;
+              case 0x0A:
+                *m_coutLog << "\\n";
+                break;
+              case 0x0B:
+                *m_coutLog << "\\v";
+                break;
+              case 0x0C:
+                *m_coutLog << "\\f";
+                break;
+              case 0x1B:
+                *m_coutLog << "\\e";
+                break;
+              case 0x7F:
+                *m_coutLog << "\\x7f";
+                break;
+              default:
+                // Other control characters: use \xHH notation
+                *m_coutLog << "\\x";
+                write_hex(*m_coutLog, ch, 2);
+                break;
+            }
+          }
           m_coutLog->flush();
         }
         m_r.pc = target;

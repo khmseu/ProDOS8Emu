@@ -164,8 +164,9 @@ int main() {
 
     const std::string coutText = coutLog.str();
 
-    if (coutText.find("A=$C1") == std::string::npos) {
-      std::cerr << "FAIL: Expected COUT log to include A=$C1\n";
+    // 0xC1 & 0x7F = 0x41 = 'A'
+    if (coutText != "A") {
+      std::cerr << "FAIL: Expected COUT log to be 'A', got: '" << coutText << "'\n";
       failures++;
     } else if (cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
       std::cerr << "FAIL: Expected PC to reach NOP+1 after JMP vector, got 0x" << std::hex
@@ -173,6 +174,84 @@ int main() {
       failures++;
     } else {
       std::cout << "PASS: JMP ($0036) COUT logging\n";
+    }
+  }
+
+  // Test 3: COUT control character handling
+  {
+    std::cout << "Test 3: COUT control character handling\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = 0x0400;
+    // Program that outputs various control characters:
+    //   LDA #$0D   ; CR -> should output newline
+    //   JMP ($0036)
+    //   LDA #$89   ; 0x89 & 0x7F = 0x09 = TAB -> should output \t
+    //   JMP ($0036)
+    //   LDA #$87   ; 0x87 & 0x7F = 0x07 = BEL -> should output \a
+    //   JMP ($0036)
+    //   NOP
+    writeProgram(mem, start,
+                 {
+                     0xA9, 0x0D,        // LDA #$0D
+                     0x6C, 0x36, 0x00,  // JMP ($0036)
+                     0xA9, 0x89,        // LDA #$89
+                     0x6C, 0x36, 0x00,  // JMP ($0036)
+                     0xA9, 0x87,        // LDA #$87
+                     0x6C, 0x36, 0x00,  // JMP ($0036)
+                     0xEA,              // NOP
+                 });
+
+    // Point COUT vector to continue after each JMP
+    prodos8emu::write_u16_le(mem.banks(), 0x0036, static_cast<uint16_t>(start + 5));
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    coutLog;
+    cpu.setDebugLogs(nullptr, &coutLog);
+    cpu.reset();
+
+    // Execute first sequence: LDA #$0D, JMP ($0036)
+    cpu.step();
+    cpu.step();
+
+    // Update vector to continue after second JMP
+    prodos8emu::write_u16_le(mem.banks(), 0x0036, static_cast<uint16_t>(start + 10));
+
+    // Execute second sequence: LDA #$89, JMP ($0036)
+    cpu.step();
+    cpu.step();
+
+    // Update vector to continue after third JMP
+    prodos8emu::write_u16_le(mem.banks(), 0x0036, static_cast<uint16_t>(start + 15));
+
+    // Execute third sequence: LDA #$87, JMP ($0036)
+    cpu.step();
+    cpu.step();
+
+    const std::string coutText = coutLog.str();
+
+    // Expected: newline, then \t, then \a
+    if (coutText != "\n\\t\\a") {
+      std::cerr << "FAIL: Expected COUT log to be '\\n\\\\t\\\\a', got: '";
+      for (char c : coutText) {
+        if (c == '\n') {
+          std::cerr << "\\n";
+        } else if (c == '\\') {
+          std::cerr << "\\\\";
+        } else if (c >= 0x20 && c <= 0x7E) {
+          std::cerr << c;
+        } else {
+          std::cerr << "\\x" << std::hex << static_cast<int>(static_cast<uint8_t>(c)) << std::dec;
+        }
+      }
+      std::cerr << "'\n";
+      failures++;
+    } else {
+      std::cout << "PASS: COUT control character handling\n";
     }
   }
 
