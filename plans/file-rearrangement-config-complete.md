@@ -13,11 +13,13 @@
 ## All Files Created/Modified
 
 **Created:**
+
 - examples/rearrange_example.json
 - plans/file-rearrangement-config-plan.md
 - plans/file-rearrangement-config-complete.md
 
 **Modified:**
+
 - tools/edasm_setup.py
 - tests/python_edasm_setup_test.py
 - README.md
@@ -25,15 +27,18 @@
 ## Key Functions/Classes Added
 
 **tools/edasm_setup.py:**
+
 - `parse_rearrange_config(config_path: str) -> dict` - Parse JSON config file
 - `validate_rearrange_config(config: dict) -> None` - Validate config structure
 - `expand_rearrange_mappings(volume_dir: str, mappings: List[dict]) -> List[Tuple[str, str]]` - Expand globs to file mappings
 - `rearrange_files(volume_dir: str, expanded_mappings: List[Tuple[str, str]]) -> None` - Perform atomic file rearrangement
 
 **CLI:**
+
 - Added `--rearrange-config` argument to specify optional JSON config file
 
 **tests/python_edasm_setup_test.py:**
+
 - `TestRearrangeConfig` class (6 tests) - Config parsing and validation
 - `TestExpandRearrangeMappings` class (8 tests) - Glob expansion logic
 - `TestRearrangeFiles` class (6 tests) - File rearrangement operations
@@ -43,6 +48,7 @@
 ## Test Coverage
 
 **Total tests written:** 30 new tests (all passing)
+
 - Config parsing/validation: 6 tests
 - Glob expansion: 8 tests
 - File rearrangement: 6 tests
@@ -50,6 +56,7 @@
 - End-to-end: 6 tests
 
 **Overall test results:**
+
 - Python tests: 69/69 passing ✅
 - Full suite (CTest): 11/11 passing ✅
 - No regressions in existing functionality ✅
@@ -57,20 +64,24 @@
 ## Feature Capabilities
 
 **Glob Pattern Support:**
+
 - `*.TXT` - Match all .TXT files
 - `DIR/*.ASM` - Match files in subdirectory
 - `**/*.BIN` - Recursive matching
 
 **Path Types:**
+
 - Relative paths: `DIR/FILE.TXT` (relative to volume root)
 - Absolute paths: `/VOLUMENAME/DIR/FILE.TXT` (ProDOS absolute)
 
 **Destination Rules:**
+
 - Directory (trailing `/`): Preserves source basename
 - Explicit filename: Renames to specified name
 - Automatic parent directory creation
 
 **Safety Features:**
+
 - Atomic operations (all-or-nothing validation)
 - Conflict detection (destination already exists)
 - Missing source detection
@@ -90,6 +101,7 @@ The rearrangement step is positioned correctly in the workflow:
 ## Documentation
 
 **README.md:**
+
 - Added comprehensive "File Rearrangement" section
 - Usage examples with `--rearrange-config` flag
 - JSON schema documentation
@@ -99,6 +111,7 @@ The rearrangement step is positioned correctly in the workflow:
 - Execution order diagram
 
 **Example Config:**
+
 - Created `examples/rearrange_example.json`
 - 10 practical rearrangement scenarios
 - Inline documentation via `__comment` keys

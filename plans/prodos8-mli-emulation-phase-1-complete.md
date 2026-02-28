@@ -1,4 +1,4 @@
-## Phase 1 Complete: Project + Test Scaffolding
+# Phase 1 Complete: Project + Test Scaffolding
 
 CMake build + CTest-based smoke tests are in place, with a minimal public API surface to support incremental MLI implementation.
 

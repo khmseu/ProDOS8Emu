@@ -1,4 +1,4 @@
-## Plan: ProDOS 8 MLI Emulation Library
+# Plan: ProDOS 8 MLI Emulation Library
 
 Build a modern C++ library on Linux that emulates ProDOS 8 MLI calls with 1:1-style parameter blocks stored in emulated 6502 memory (16 banks × 4KB). Each MLI call is exposed as a function (method) taking `(memoryBanks, uint16_t paramBlockOffset)` and returning a ProDOS error code byte (0 on success). Linux filesystem operations are used where possible; ProDOS-only metadata is stored in Linux extended attributes (xattrs) under a `user.prodos8.*` namespace.
 
@@ -8,7 +8,7 @@ Decisions captured from user:
 - ProDOS access bits are reflected into Linux permissions (in addition to being enforced by MLI semantics).
 - xattrs are mandatory: if xattrs are unavailable/unsupported, calls that require them fail with an appropriate ProDOS error code.
 
-**Phases**
+## Phases
 
 1. **Phase 1: Project + Test Scaffolding**
    - **Objective:** Create a buildable/testable C++ library skeleton suitable for incremental MLI implementation.

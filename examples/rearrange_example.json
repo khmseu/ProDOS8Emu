@@ -1,65 +1,65 @@
 {
-    "__comment_overview": "Example configuration for edasm_setup.py --rearrange-config option",
-    "__comment_purpose": "File rearrangement allows you to reorganize disk image contents after metadata conversion (so filenames are already clean)",
-    "rearrange": [
-        {
-            "__comment": "Simple rename: Change a single file name",
-            "from": "PRODOS",
-            "to": "PRODOS.SYSTEM"
-        },
-        {
-            "__comment": "Move to subdirectory: Trailing slash preserves filename",
-            "from": "EDASM",
-            "to": "BIN/"
-        },
-        {
-            "__comment": "Move and rename: No trailing slash provides explicit destination name",
-            "from": "README.TXT",
-            "to": "DOCS/README.TEXT"
-        },
-        {
-            "__comment": "Glob pattern: Move all assembly source files to SRC subdirectory",
-            "from": "*.ASM",
-            "to": "SRC/"
-        },
-        {
-            "__comment": "Glob with subdirectory: Move specific file types from a directory",
-            "from": "TEMP/*.OBJ",
-            "to": "BUILD/"
-        },
-        {
-            "__comment": "Absolute path: Use leading slash for full paths including volume name",
-            "from": "/EDASM/SYSTEM/PRODOS",
-            "to": "SYSTEM/PRODOS.SYSTEM"
-        },
-        {
-            "__comment": "Recursive glob: Move all binary files from any subdirectory",
-            "from": "**/*.BIN",
-            "to": "BINARIES/"
-        },
-        {
-            "__comment": "Complex example: Organize library files into structured directories",
-            "from": "LIB.*.ASM",
-            "to": "LIB/SOURCE/"
-        },
-        {
-            "__comment": "Clean filename usage: Since rearrangement happens after metadata conversion, no Cadius suffixes",
-            "from": "PROGRAM",
-            "to": "PROGS/PROGRAM"
-        },
-        {
-            "__comment": "Group by type: Organize documentation files",
-            "from": "*.TXT",
-            "to": "DOCS/"
-        }
-    ],
-    "__comment_notes": [
-        "Pattern matching is case-insensitive for ProDOS compatibility",
-        "Destination directories are created automatically if they don't exist",
-        "If multiple patterns match the same file, first match wins",
-        "Rearrangement happens AFTER metadata conversion, so filenames are clean (no #FTAUXT suffixes)",
-        "Extended attributes (xattrs) are stored on files and move with them during rearrangement",
-        "Use relative paths for files within the volume root",
-        "Use absolute paths (starting with /) to explicitly specify volume name"
-    ]
+  "__comment_overview": "Example configuration for edasm_setup.py --rearrange-config option",
+  "__comment_purpose": "File rearrangement allows you to reorganize disk image contents after metadata conversion (so filenames are already clean)",
+  "rearrange": [
+    {
+      "__comment": "Simple rename: Change a single file name",
+      "from": "PRODOS",
+      "to": "PRODOS.SYSTEM"
+    },
+    {
+      "__comment": "Move to subdirectory: Trailing slash preserves filename",
+      "from": "EDASM",
+      "to": "BIN/"
+    },
+    {
+      "__comment": "Move and rename: No trailing slash provides explicit destination name",
+      "from": "README.TXT",
+      "to": "DOCS/README.TEXT"
+    },
+    {
+      "__comment": "Glob pattern: Move all assembly source files to SRC subdirectory",
+      "from": "*.ASM",
+      "to": "SRC/"
+    },
+    {
+      "__comment": "Glob with subdirectory: Move specific file types from a directory",
+      "from": "TEMP/*.OBJ",
+      "to": "BUILD/"
+    },
+    {
+      "__comment": "Absolute path: Use leading slash for full paths including volume name",
+      "from": "/EDASM/SYSTEM/PRODOS",
+      "to": "SYSTEM/PRODOS.SYSTEM"
+    },
+    {
+      "__comment": "Recursive glob: Move all binary files from any subdirectory",
+      "from": "**/*.BIN",
+      "to": "BINARIES/"
+    },
+    {
+      "__comment": "Complex example: Organize library files into structured directories",
+      "from": "LIB.*.ASM",
+      "to": "LIB/SOURCE/"
+    },
+    {
+      "__comment": "Clean filename usage: Since rearrangement happens after metadata conversion, no Cadius suffixes",
+      "from": "PROGRAM",
+      "to": "PROGS/PROGRAM"
+    },
+    {
+      "__comment": "Group by type: Organize documentation files",
+      "from": "*.TXT",
+      "to": "DOCS/"
+    }
+  ],
+  "__comment_notes": [
+    "Pattern matching is case-insensitive for ProDOS compatibility",
+    "Destination directories are created automatically if they don't exist",
+    "If multiple patterns match the same file, first match wins",
+    "Rearrangement happens AFTER metadata conversion, so filenames are clean (no #FTAUXT suffixes)",
+    "Extended attributes (xattrs) are stored on files and move with them during rearrangement",
+    "Use relative paths for files within the volume root",
+    "Use absolute paths (starting with /) to explicitly specify volume name"
+  ]
 }

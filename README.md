@@ -193,9 +193,9 @@ JSON file with a `"rearrange"` array of file mappings:
 ```json
 {
   "rearrange": [
-    {"from": "OLD.TXT", "to": "NEW.TXT"},
-    {"from": "*.ASM", "to": "SRC/"},
-    {"from": "/VOLUME/FILE.BIN", "to": "BIN/PROG.BIN"}
+    { "from": "OLD.TXT", "to": "NEW.TXT" },
+    { "from": "*.ASM", "to": "SRC/" },
+    { "from": "/VOLUME/FILE.BIN", "to": "BIN/PROG.BIN" }
   ]
 }
 ```
@@ -248,8 +248,8 @@ If multiple patterns match the same file, the **first match wins**. Order your p
 ```json
 {
   "rearrange": [
-    {"from": "PRODOS", "to": "SYSTEM/PRODOS.SYSTEM"},
-    {"from": "*", "to": "OTHER/"}
+    { "from": "PRODOS", "to": "SYSTEM/PRODOS.SYSTEM" },
+    { "from": "*", "to": "OTHER/" }
   ]
 }
 ```

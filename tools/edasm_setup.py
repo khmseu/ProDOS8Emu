@@ -312,7 +312,9 @@ def expand_rearrange_mappings(
                 dest_path = str(volume_path / to_base / match.name)
             else:
                 # Explicit filename
-                to_stripped = to_pattern[1:] if to_pattern.startswith("/") else to_pattern
+                to_stripped = (
+                    to_pattern[1:] if to_pattern.startswith("/") else to_pattern
+                )
                 dest_path = str(volume_path / to_stripped)
 
             result.append((src_path, dest_path))
@@ -320,9 +322,7 @@ def expand_rearrange_mappings(
     return result
 
 
-def rearrange_files(
-    volume_dir: str, expanded_mappings: List[Tuple[str, str]]
-) -> None:
+def rearrange_files(volume_dir: str, expanded_mappings: List[Tuple[str, str]]) -> None:
     """Perform atomic file rearrangement with validation and rollback.
 
     Args:
@@ -698,7 +698,9 @@ def main():
                 print("Rearranging files...")
                 config = parse_rearrange_config(args.rearrange_config)
                 validate_rearrange_config(config)
-                mappings = expand_rearrange_mappings(str(volume_dir), config["rearrange"])
+                mappings = expand_rearrange_mappings(
+                    str(volume_dir), config["rearrange"]
+                )
                 rearrange_files(str(volume_dir), mappings)
 
         # Import text files

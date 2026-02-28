@@ -436,7 +436,7 @@ class TestRearrangeConfig(unittest.TestCase):
 
     def test_parse_rearrange_config_missing_file(self):
         """Missing file should raise FileNotFoundError."""
-        non_existent_path = "/tmp/nonexistent_config_12345.json"
+        non_existent_path = "/tmp/nonexistent_config_12345.json"  # nosec B108
         with self.assertRaises(FileNotFoundError):
             parse_rearrange_config(non_existent_path)
 
@@ -531,13 +531,13 @@ class TestExpandRearrangeMappings(unittest.TestCase):
 
             # Should return three tuples
             self.assertEqual(len(result), 3)
-            
+
             # All should go to DEST/ with basenames preserved
             basenames = [Path(src).name for src, _ in result]
             self.assertIn("FILE1.TXT", basenames)
             self.assertIn("FILE2.TXT", basenames)
             self.assertIn("FILE3.TXT", basenames)
-            
+
             # Check destinations preserve basenames
             for src, dest in result:
                 expected_dest = str(Path(tmpdir) / "DEST" / Path(src).name)
@@ -842,7 +842,9 @@ class TestRearrangementIntegration(unittest.TestCase):
 
             # Create config file
             config_file = Path(tmpdir) / "config.json"
-            config_file.write_text(json.dumps({"rearrange": [{"src": "A", "dest": "B"}]}))
+            config_file.write_text(
+                json.dumps({"rearrange": [{"src": "A", "dest": "B"}]})
+            )
 
             # Create disk image
             disk_image = Path(tmpdir) / "test.2mg"
@@ -922,7 +924,9 @@ class TestRearrangementIntegration(unittest.TestCase):
 
             # Create config file and disk image
             config_file = Path(tmpdir) / "config.json"
-            config_file.write_text(json.dumps({"rearrange": [{"src": "A", "dest": "B"}]}))
+            config_file.write_text(
+                json.dumps({"rearrange": [{"src": "A", "dest": "B"}]})
+            )
             disk_image = Path(tmpdir) / "test.2mg"
             disk_image.write_bytes(b"dummy")
 
@@ -1041,7 +1045,9 @@ class TestRearrangementEndToEnd(unittest.TestCase):
 
             # Verify content preserved
             self.assertEqual((volume_dir / "TXTFILES" / "DOC1.TXT").read_text(), "doc1")
-            self.assertEqual((volume_dir / "ASMFILES" / "README.ASM").read_text(), "asm code")
+            self.assertEqual(
+                (volume_dir / "ASMFILES" / "README.ASM").read_text(), "asm code"
+            )
 
     def test_e2e_rearrange_preserves_xattrs_after_conversion(self):
         """Create temp volume with cadius-style names, rearrange, convert metadata, verify xattrs."""
