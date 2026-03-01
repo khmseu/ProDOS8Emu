@@ -801,6 +801,94 @@ int main() {
     }
   }
 
+  // Test: Open Directory - Verify directories can be opened and read ProDOS directory blocks
+  {
+    std::cout << "Test: Open Directory\n";
+    TestMemory             mem;
+    prodos8emu::MLIContext ctx(tempDir);
+
+    // Create a test directory with some files
+    fs::path testDir = volume1 / "SUBDIR";
+    fs::create_directories(testDir);
+
+    // Create a test file in the directory
+    fs::path testFile = testDir / "FILE1";
+    {
+      std::ofstream out(testFile, std::ios::binary);
+      out << "Test content";
+    }
+
+    // OPEN the directory (read-only access)
+    mem.writeCountedString(0x0400, "/V1/SUBDIR");
+    uint16_t paramBlock = 0x0300;
+    prodos8emu::write_u8(mem.banks(), paramBlock, 3);               // param_count
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 1, 0x0400);  // pathname ptr
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 3, 0x0800);  // io_buffer ptr
+
+    uint8_t err = ctx.openCall(mem.banks(), paramBlock);
+    if (err != prodos8emu::ERR_NO_ERROR) {
+      std::cerr << "FAIL: OPEN directory returned error 0x" << std::hex << (int)err << "\n";
+      failures++;
+    } else {
+      uint8_t refNum = prodos8emu::read_u8(mem.banks(), paramBlock + 5);
+      if (refNum != 1) {
+        std::cerr << "FAIL: Expected ref_num=1, got " << (int)refNum << "\n";
+        failures++;
+      } else {
+        // READ first 512-byte block from directory
+        prodos8emu::write_u8(mem.banks(), paramBlock, 4);  // param_count
+        prodos8emu::write_u8(mem.banks(), paramBlock + 1, refNum);
+        prodos8emu::write_u16_le(mem.banks(), paramBlock + 2, 0x0500);  // data_buffer
+        prodos8emu::write_u16_le(mem.banks(), paramBlock + 4, 512);     // request_count
+
+        err = ctx.readCall(mem.banks(), paramBlock);
+        if (err != prodos8emu::ERR_NO_ERROR) {
+          std::cerr << "FAIL: READ from directory returned error 0x" << std::hex << (int)err
+                    << "\n";
+          failures++;
+        } else {
+          uint16_t transCount = prodos8emu::read_u16_le(mem.banks(), paramBlock + 6);
+          if (transCount != 512) {
+            std::cerr << "FAIL: Expected trans_count=512, got " << transCount << "\n";
+            failures++;
+          } else {
+            // Verify it's a ProDOS directory block
+            // Check for valid prev/next pointers (should be 0 for single block)
+            uint16_t prevPtr = prodos8emu::read_u16_le(mem.banks(), 0x0500);
+            uint16_t nextPtr = prodos8emu::read_u16_le(mem.banks(), 0x0502);
+            if (prevPtr != 0 || nextPtr != 0) {
+              std::cerr << "FAIL: Invalid prev/next pointers: " << prevPtr << "/" << nextPtr
+                        << "\n";
+              failures++;
+            } else {
+              // Check header entry (storage_type should be 0x0E or 0x0F in high nibble)
+              uint8_t headerByte0 = prodos8emu::read_u8(mem.banks(), 0x0504);
+              uint8_t storageType = (headerByte0 >> 4) & 0x0F;
+              if (storageType != 0x0E && storageType != 0x0F) {
+                std::cerr << "FAIL: Invalid storage type in header: 0x" << std::hex
+                          << (int)storageType << "\n";
+                failures++;
+              } else {
+                // Close the directory
+                prodos8emu::write_u8(mem.banks(), paramBlock, 1);           // param_count
+                prodos8emu::write_u8(mem.banks(), paramBlock + 1, refNum);  // ref_num
+
+                err = ctx.closeCall(mem.constBanks(), paramBlock);
+                if (err != prodos8emu::ERR_NO_ERROR) {
+                  std::cerr << "FAIL: CLOSE directory returned error 0x" << std::hex << (int)err
+                            << "\n";
+                  failures++;
+                } else {
+                  std::cout << "PASS: Open Directory\n";
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Clean up
   fs::remove_all(tempDir);
 

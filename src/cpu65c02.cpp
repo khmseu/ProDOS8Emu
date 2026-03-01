@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <ostream>
 
+#include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
 #include "prodos8emu/mli.hpp"
 
@@ -83,6 +84,290 @@ namespace prodos8emu {
       os.fill(fill);
     }
 
+    void dump_stack(std::ostream& os, const ConstMemoryBanks& banks, uint8_t sp) {
+      // 6502 stack is at $0100-$01FF, SP points to next available location
+      // Stack grows downward, so used portion is from $0100+SP+1 to $01FF
+      uint16_t stackTop = 0x01FF;
+      uint16_t stackPtr = 0x0100 + sp;
+
+      os << "\nStack dump (SP=$";
+      write_hex(os, sp, 2);
+      os << ", used bytes: " << (stackTop - stackPtr) << "):\n";
+
+      if (stackPtr >= stackTop) {
+        os << "  (stack empty)\n";
+        return;
+      }
+
+      // Dump in rows of 16 bytes
+      for (uint16_t addr = stackPtr + 1; addr <= stackTop; addr++) {
+        if ((addr - 0x0100) % 16 == 0 || addr == stackPtr + 1) {
+          if (addr != stackPtr + 1) {
+            os << "\n";
+          }
+          os << "  $";
+          write_hex(os, addr, 4);
+          os << ":";
+        }
+        os << " ";
+        uint8_t byte = read_u8(banks, addr);
+        write_hex(os, byte, 2);
+      }
+      os << "\n";
+    }
+
+    void dump_pc_ring(std::ostream& os, const uint16_t* pcRingFrom, const uint16_t* pcRingTo,
+                      const uint32_t* pcRingCount, size_t ringSize, size_t ringIndex) {
+      os << "\nPC ring buffer (last " << ringSize << " explicit PC changes, newest first):\n";
+
+      // ringIndex points to the next slot to write, so ringIndex-1 is the most recent
+      // We walk backwards through the ring buffer
+      size_t count = 0;
+      for (size_t i = 0; i < ringSize; i++) {
+        // Calculate the index walking backwards from most recent
+        size_t   idx     = (ringIndex + ringSize - 1 - i) % ringSize;
+        uint16_t fromPC  = pcRingFrom[idx];
+        uint16_t toPC    = pcRingTo[idx];
+        uint32_t pcCount = pcRingCount[idx];
+
+        // Stop if we hit an uninitialized entry (from=0, to=0 before buffer fills up)
+        if (fromPC == 0 && toPC == 0 && i >= ringIndex) {
+          break;
+        }
+
+        if (count % 4 == 0) {
+          if (count > 0) {
+            os << "\n";
+          }
+          os << "  ";
+        } else {
+          os << " ";
+        }
+        os << "$";
+        write_hex(os, fromPC, 4);
+        os << "->$";
+        write_hex(os, toPC, 4);
+        if (pcCount > 1) {
+          os << "x" << pcCount;
+        }
+        count++;
+      }
+      if (count > 0) {
+        os << "\n";
+      } else {
+        os << "  (empty)\n";
+      }
+    }
+
+    const char* error_name(uint8_t errorCode) {
+      switch (errorCode) {
+        case ERR_NO_ERROR:
+          return "";
+        case ERR_BAD_CALL_NUMBER:
+          return "BAD_CALL_NUMBER";
+        case ERR_BAD_CALL_PARAM_COUNT:
+          return "BAD_CALL_PARAM_COUNT";
+        case ERR_INTERRUPT_TABLE_FULL:
+          return "INTERRUPT_TABLE_FULL";
+        case ERR_IO_ERROR:
+          return "IO_ERROR";
+        case ERR_NO_DEVICE:
+          return "NO_DEVICE";
+        case ERR_WRITE_PROTECTED:
+          return "WRITE_PROTECTED";
+        case ERR_DISK_SWITCHED:
+          return "DISK_SWITCHED";
+        case ERR_INVALID_PATH_SYNTAX:
+          return "INVALID_PATH_SYNTAX";
+        case ERR_TOO_MANY_FILES_OPEN:
+          return "TOO_MANY_FILES_OPEN";
+        case ERR_BAD_REF_NUM:
+          return "BAD_REF_NUM";
+        case ERR_PATH_NOT_FOUND:
+          return "PATH_NOT_FOUND";
+        case ERR_VOL_NOT_FOUND:
+          return "VOL_NOT_FOUND";
+        case ERR_FILE_NOT_FOUND:
+          return "FILE_NOT_FOUND";
+        case ERR_DUPLICATE_FILENAME:
+          return "DUPLICATE_FILENAME";
+        case ERR_VOLUME_FULL:
+          return "VOLUME_FULL";
+        case ERR_VOL_DIR_FULL:
+          return "VOL_DIR_FULL";
+        case ERR_INCOMPATIBLE_VERSION:
+          return "INCOMPATIBLE_VERSION";
+        case ERR_UNSUPPORTED_STOR_TYPE:
+          return "UNSUPPORTED_STOR_TYPE";
+        case ERR_EOF_ENCOUNTERED:
+          return "EOF_ENCOUNTERED";
+        case ERR_POSITION_OUT_OF_RANGE:
+          return "POSITION_OUT_OF_RANGE";
+        case ERR_ACCESS_ERROR:
+          return "ACCESS_ERROR";
+        case ERR_FILE_OPEN:
+          return "FILE_OPEN";
+        case ERR_DIR_COUNT_ERROR:
+          return "DIR_COUNT_ERROR";
+        case ERR_NOT_PRODOS_VOL:
+          return "NOT_PRODOS_VOL";
+        case ERR_INVALID_PARAMETER:
+          return "INVALID_PARAMETER";
+        case ERR_VCB_TABLE_FULL:
+          return "VCB_TABLE_FULL";
+        case ERR_BAD_BUFFER_ADDR:
+          return "BAD_BUFFER_ADDR";
+        case ERR_DUPLICATE_VOLUME:
+          return "DUPLICATE_VOLUME";
+        case ERR_FILE_STRUCTURE_DAMAGED:
+          return "FILE_STRUCTURE_DAMAGED";
+        default:
+          return "";
+      }
+    }
+
+    /**
+     * Read a counted string from memory (ProDOS pathname format).
+     * First byte is length, followed by that many characters.
+     * Returns empty string if length > maxLen or length == 0.
+     * If outLength is provided, sets it to the actual length byte read.
+     */
+    std::string read_pathname(const ConstMemoryBanks& banks, uint16_t pathnamePtr,
+                              uint8_t maxLen = 64, uint8_t* outLength = nullptr) {
+      uint8_t length = read_u8(banks, pathnamePtr);
+      if (outLength != nullptr) {
+        *outLength = length;
+      }
+
+      if (length == 0 || length > maxLen) {
+        return "";
+      }
+
+      std::string result;
+      result.reserve(length);
+      for (uint8_t i = 0; i < length; i++) {
+        uint8_t ch = read_u8(banks, static_cast<uint16_t>(pathnamePtr + 1 + i));
+        // ProDOS pathnames: high bit clear, uppercase ASCII
+        result.push_back(static_cast<char>(ch & 0x7F));
+      }
+      return result;
+    }
+
+    /**
+     * Extract pathname(s) from MLI parameter block for logging.
+     * Returns formatted string with pathname info, or empty if call doesn't use pathnames.
+     */
+    std::string extract_mli_pathnames(const ConstMemoryBanks& banks, uint8_t callNumber,
+                                      uint16_t paramBlockAddr) {
+      std::string result;
+
+      switch (callNumber) {
+        // Single pathname at offset +1
+        case 0xC0:  // CREATE
+        case 0xC1:  // DESTROY
+        case 0xC3:  // SET_FILE_INFO
+        case 0xC4:  // GET_FILE_INFO
+        case 0xC8:  // OPEN
+        {
+          uint16_t    pathnamePtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          uint8_t     length      = 0;
+          std::string pathname    = read_pathname(banks, pathnamePtr, 64, &length);
+
+          if (!pathname.empty()) {
+            result = " path='" + pathname + "'";
+          } else if (length == 0) {
+            result = " path=<empty>";
+          } else if (length > 64) {
+            result = " path=<invalid:len=" + std::to_string(length) + ">";
+          }
+          break;
+        }
+
+        // RENAME: old pathname at +1, new pathname at +3
+        case 0xC2:  // RENAME
+        {
+          uint16_t    oldPtr  = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          uint16_t    newPtr  = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 3));
+          std::string oldPath = read_pathname(banks, oldPtr);
+          std::string newPath = read_pathname(banks, newPtr);
+          if (!oldPath.empty() && !newPath.empty()) {
+            result = " old='" + oldPath + "' new='" + newPath + "'";
+          }
+          break;
+        }
+
+        // SET_PREFIX: pathname at +1
+        case 0xC6:  // SET_PREFIX
+        {
+          uint16_t    pathnamePtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          uint8_t     length      = 0;
+          std::string pathname    = read_pathname(banks, pathnamePtr, 64, &length);
+
+          if (!pathname.empty()) {
+            result = " prefix='" + pathname + "'";
+          } else if (length == 0) {
+            result = " prefix=<empty>";
+          } else if (length > 64) {
+            result = " prefix=<invalid:len=" + std::to_string(length) + ">";
+          }
+          break;
+        }
+
+        // GET_PREFIX: data_buffer at +1 (pathname returned there, read after call)
+        case 0xC7:  // GET_PREFIX
+        {
+          uint16_t    dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          uint8_t     length        = 0;
+          std::string pathname      = read_pathname(banks, dataBufferPtr, 64, &length);
+
+          if (!pathname.empty()) {
+            result = " prefix='" + pathname + "'";
+          } else if (length == 0) {
+            result = " prefix=<empty>";
+          } else if (length > 64) {
+            result = " prefix=<invalid:len=" + std::to_string(length) + ">";
+          }
+          break;
+        }
+
+        // ON_LINE: data_buffer at +2 (volume names returned there, read after call)
+        case 0xC5:  // ON_LINE
+        {
+          uint8_t  unitNum       = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          uint16_t dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 2));
+
+          // Read first volume entry (16-byte record)
+          // Byte 0: (drive << 7) | (slot << 4) | name_length
+          uint8_t byte0  = read_u8(banks, dataBufferPtr);
+          uint8_t length = byte0 & 0x0F;
+
+          if (length > 0 && length <= 15) {
+            std::string volName;
+            volName.reserve(length);
+            for (uint8_t i = 0; i < length; i++) {
+              uint8_t ch = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + 1 + i));
+              volName.push_back(static_cast<char>(ch & 0x7F));
+            }
+
+            if (unitNum == 0) {
+              result = " volumes='" + volName + "'...";  // May be more volumes
+            } else {
+              result = " volume='" + volName + "'";
+            }
+          } else if (length == 0) {
+            result = " volume=<none>";
+          }
+          break;
+        }
+
+        // Calls that don't involve pathnames or where we don't log them
+        default:
+          break;
+      }
+
+      return result;
+    }
+
   }  // namespace
 
   CPU65C02::CPU65C02(Apple2Memory& mem) : m_mem(mem) {
@@ -99,6 +384,30 @@ namespace prodos8emu {
   void CPU65C02::setDebugLogs(std::ostream* mliLog, std::ostream* coutLog) {
     m_mliLog  = mliLog;
     m_coutLog = coutLog;
+  }
+
+  void CPU65C02::recordPCChange(uint16_t fromPC, uint16_t toPC) {
+    // Filter out ROM-internal transitions ($F800-$FFFF -> $F800-$FFFF)
+    if (fromPC >= 0xF800 && toPC >= 0xF800) {
+      return;
+    }
+
+    // Check if this is the same transition as the most recent entry
+    if (m_pcRingIndex > 0 || m_pcRingFrom[PC_RING_SIZE - 1] != 0) {
+      // Find the most recent entry
+      size_t prevIndex = (m_pcRingIndex + PC_RING_SIZE - 1) % PC_RING_SIZE;
+      if (m_pcRingFrom[prevIndex] == fromPC && m_pcRingTo[prevIndex] == toPC) {
+        // Same transition as last entry, just increment the counter
+        m_pcRingCount[prevIndex]++;
+        return;
+      }
+    }
+
+    // New transition: add to ring buffer with count = 1
+    m_pcRingFrom[m_pcRingIndex]  = fromPC;
+    m_pcRingTo[m_pcRingIndex]    = toPC;
+    m_pcRingCount[m_pcRingIndex] = 1;
+    m_pcRingIndex                = (m_pcRingIndex + 1) % PC_RING_SIZE;
   }
 
   uint8_t CPU65C02::read8(uint16_t addr) {
@@ -200,7 +509,10 @@ namespace prodos8emu {
     m_r.sp = 0xFF;
     m_r.p  = static_cast<uint8_t>(FLAG_I | FLAG_U);
 
-    m_r.pc = read16(VEC_RESET);
+    uint16_t resetVector = read16(VEC_RESET);
+    m_r.pc               = resetVector;
+    recordPCChange(0x0000, resetVector);  // from=0 for reset
+    m_instructionCount = 0;
   }
 
   uint64_t CPU65C02::run(uint64_t maxInstructions) {
@@ -378,6 +690,7 @@ namespace prodos8emu {
       dummyReadLastInstructionByte();
     }
     m_r.pc = to;
+    recordPCChange(from, to);
   }
 
   uint32_t CPU65C02::jsr_abs(uint16_t target) {
@@ -388,23 +701,46 @@ namespace prodos8emu {
       //   .byte callNumber
       //   .word paramBlockAddr
       // On return, execution continues after these 3 bytes.
+      uint16_t callPC     = m_r.pc;  // PC at MLI call (points to call number)
       uint8_t  callNumber = read8(m_r.pc);
       uint16_t paramBlock = read16(static_cast<uint16_t>(m_r.pc + 1));
-      m_r.pc              = static_cast<uint16_t>(m_r.pc + 3);
+      uint16_t returnPC   = static_cast<uint16_t>(m_r.pc + 3);
+      m_r.pc              = returnPC;
+      recordPCChange(0xBF00, returnPC);  // from=$BF00 (MLI entry point)
 
       uint8_t err = mli_dispatch(*m_mli, m_mem.banks(), callNumber, paramBlock);
 
       if (m_mliLog != nullptr) {
-        *m_mliLog << "MLI call=$";
+        *m_mliLog << "@" << m_instructionCount << " PC=$";
+        write_hex(*m_mliLog, callPC, 4);
+        *m_mliLog << " MLI call=$";
         write_hex(*m_mliLog, callNumber, 2);
         *m_mliLog << " (" << mli_call_name(callNumber) << ") param=$";
         write_hex(*m_mliLog, paramBlock, 4);
+
+        // Extract and log pathnames if applicable
+        std::string pathInfo = extract_mli_pathnames(m_mem.constBanks(), callNumber, paramBlock);
+        if (!pathInfo.empty()) {
+          *m_mliLog << pathInfo;
+        }
+
         *m_mliLog << " result=$";
         write_hex(*m_mliLog, err, 2);
         if (err == 0) {
           *m_mliLog << " OK\n";
         } else {
-          *m_mliLog << " ERROR\n";
+          const char* errName = error_name(err);
+          if (errName[0] != '\0') {
+            *m_mliLog << " ERROR (" << errName << ")\n";
+            // Dump stack and PC ring on UNSUPPORTED_STOR_TYPE error
+            if (err == ERR_UNSUPPORTED_STOR_TYPE) {
+              dump_stack(*m_mliLog, m_mem.constBanks(), m_r.sp);
+              dump_pc_ring(*m_mliLog, m_pcRingFrom, m_pcRingTo, m_pcRingCount, PC_RING_SIZE,
+                           m_pcRingIndex);
+            }
+          } else {
+            *m_mliLog << " ERROR\n";
+          }
         }
         m_mliLog->flush();
       }
@@ -421,9 +757,11 @@ namespace prodos8emu {
 
     // Normal JSR behavior.
     // After operand fetch, PC points at the next instruction; JSR pushes (PC-1).
-    uint16_t ret = static_cast<uint16_t>(m_r.pc - 1);
+    uint16_t ret   = static_cast<uint16_t>(m_r.pc - 1);
+    uint16_t jsrPC = static_cast<uint16_t>(ret - 2);  // JSR instruction address
     push16(ret);
     m_r.pc = target;
+    recordPCChange(jsrPC, target);
     return 6;
   }
 
@@ -463,6 +801,7 @@ namespace prodos8emu {
           dummyReadLastInstructionByte();
         }
         m_r.pc = to;
+        recordPCChange(from, to);
       }
       return 5;
     }
@@ -472,12 +811,15 @@ namespace prodos8emu {
     switch (op) {
       case 0x00: {  // BRK
         // BRK is treated as a 2-byte instruction; PC is incremented once more.
-        m_r.pc = static_cast<uint16_t>(m_r.pc + 1);
+        uint16_t brkPC = static_cast<uint16_t>(m_r.pc - 1);  // BRK instruction address
+        m_r.pc         = static_cast<uint16_t>(m_r.pc + 1);
         push16(m_r.pc);
         push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
         setFlag(FLAG_I, true);
         setFlag(FLAG_D, false);  // 65C02 clears D on interrupt
-        m_r.pc = read16(VEC_IRQ);
+        uint16_t irqVector = read16(VEC_IRQ);
+        m_r.pc             = irqVector;
+        recordPCChange(brkPC, irqVector);
         return 7;
       }
 
@@ -598,10 +940,15 @@ namespace prodos8emu {
         return 4;
 
       // Jumps/returns
-      case 0x4C:  // JMP abs
-        m_r.pc = fetch16();
+      case 0x4C: {                                            // JMP abs
+        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+        uint16_t target = fetch16();
+        m_r.pc          = target;
+        recordPCChange(jmpPC, target);
         return 3;
-      case 0x6C: {  // JMP (abs)
+      }
+      case 0x6C: {                                            // JMP (abs)
+        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
         uint16_t ptr    = fetch16();
         uint16_t target = read16(ptr);
         if (ptr == COUT_VECTOR_PTR && m_coutLog != nullptr) {
@@ -655,22 +1002,35 @@ namespace prodos8emu {
           m_coutLog->flush();
         }
         m_r.pc = target;
+        recordPCChange(jmpPC, target);
         return 5;
       }
-      case 0x7C:  // JMP (abs,X)
-        m_r.pc = addr_absind_x();
+      case 0x7C: {                                            // JMP (abs,X)
+        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+        uint16_t target = addr_absind_x();
+        m_r.pc          = target;
+        recordPCChange(jmpPC, target);
         return 6;
+      }
       case 0x20: {  // JSR abs
         uint16_t target = fetch16();
         return jsr_abs(target);
       }
-      case 0x60:  // RTS
-        m_r.pc = static_cast<uint16_t>(pull16() + 1);
+      case 0x60: {                                                // RTS
+        uint16_t rtsPC      = static_cast<uint16_t>(m_r.pc - 1);  // RTS instruction address
+        uint16_t returnAddr = static_cast<uint16_t>(pull16() + 1);
+        m_r.pc              = returnAddr;
+        recordPCChange(rtsPC, returnAddr);
         return 6;
-      case 0x40:  // RTI
-        m_r.p  = static_cast<uint8_t>(pull8() | FLAG_U);
-        m_r.pc = pull16();
+      }
+      case 0x40: {                                              // RTI
+        uint16_t rtiPC    = static_cast<uint16_t>(m_r.pc - 1);  // RTI instruction address
+        m_r.p             = static_cast<uint8_t>(pull8() | FLAG_U);
+        uint16_t returnPC = pull16();
+        m_r.pc            = returnPC;
+        recordPCChange(rtiPC, returnPC);
         return 6;
+      }
 
       // Branches
       case 0x80:  // BRA
@@ -1526,6 +1886,7 @@ namespace prodos8emu {
       return 0;
     }
 
+    m_instructionCount++;
     uint8_t op = fetch8();
     return execute(op);
   }

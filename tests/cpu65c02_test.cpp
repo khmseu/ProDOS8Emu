@@ -1,6 +1,7 @@
 #include "prodos8emu/cpu65c02.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -252,6 +253,148 @@ int main() {
       failures++;
     } else {
       std::cout << "PASS: COUT control character handling\n";
+    }
+  }
+
+  // Test 4: MLI pathname logging
+  {
+    std::cout << "Test 4: MLI pathname logging\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    // Create a test volume and file
+    fs::path volume = tempDir / "VOL1";
+    fs::create_directories(volume);
+    fs::path testFile = volume / "TESTFILE";
+    std::ofstream(testFile) << "test data";
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    // Pathname counted string at $0400: "/VOL1/TESTFILE"
+    const uint16_t    pathnameAddr = 0x0400;
+    const std::string pathname     = "/VOL1/TESTFILE";
+    prodos8emu::write_u8(mem.banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+    for (size_t i = 0; i < pathname.length(); i++) {
+      prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                           static_cast<uint8_t>(pathname[i]));
+    }
+
+    // Parameter block at $0300 for GET_FILE_INFO ($C4)
+    // +0 param_count = 10
+    // +1 pathname_ptr = $0400
+    const uint16_t param = 0x0300;
+    prodos8emu::write_u8(mem.banks(), param + 0, 10);
+    prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+
+    // Program at $0200: JSR $BF00, .byte $C4, .word $0300, NOP
+    const uint16_t start = 0x0200;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC4,  // GET_FILE_INFO
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    // Execute JSR trap + NOP
+    cpu.step();
+    cpu.step();
+
+    std::string mliText = mliLog.str();
+
+    if (mliText.find("GET_FILE_INFO") == std::string::npos) {
+      std::cerr << "FAIL: Expected MLI log to include GET_FILE_INFO\n";
+      failures++;
+    } else if (mliText.find("path='/VOL1/TESTFILE'") == std::string::npos) {
+      std::cerr << "FAIL: Expected MLI log to include path='/VOL1/TESTFILE', got:\n"
+                << mliText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: MLI pathname logging\n";
+    }
+  }
+
+  // Test 5: MLI error name display
+  {
+    std::cout << "Test 5: MLI error name display\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    // Create a test volume (no file)
+    fs::path volume = tempDir / "VOL2";
+    fs::create_directories(volume);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    // Pathname counted string at $0400: "/VOL2/NONEXISTENT"
+    const uint16_t    pathnameAddr = 0x0400;
+    const std::string pathname     = "/VOL2/NONEXISTENT";
+    prodos8emu::write_u8(mem.banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+    for (size_t i = 0; i < pathname.length(); i++) {
+      prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                           static_cast<uint8_t>(pathname[i]));
+    }
+
+    // Parameter block at $0300 for OPEN ($C8)
+    // +0 param_count = 3
+    // +1 pathname_ptr = $0400
+    // +3 io_buffer = $2000
+    // +5 ref_num = 0 (output)
+    const uint16_t param = 0x0300;
+    prodos8emu::write_u8(mem.banks(), param + 0, 3);
+    prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+    prodos8emu::write_u16_le(mem.banks(), param + 3, 0x2000);
+
+    // Program at $0200: JSR $BF00, .byte $C8, .word $0300, NOP
+    const uint16_t start = 0x0200;
+    writeProgram(mem, start,
+                 {
+                     0x20, 0x00, 0xBF,
+                     0xC8,  // OPEN
+                     static_cast<uint8_t>(param & 0xFF), static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,  // NOP
+                 });
+
+    // Set reset vector to $0200
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+
+    std::ostringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    // Execute JSR trap + NOP
+    cpu.step();
+    cpu.step();
+
+    std::string mliText = mliLog.str();
+
+    if (mliText.find("OPEN") == std::string::npos) {
+      std::cerr << "FAIL: Expected MLI log to include OPEN\n";
+      failures++;
+    } else if (mliText.find("ERROR (FILE_NOT_FOUND)") == std::string::npos) {
+      std::cerr << "FAIL: Expected MLI log to include ERROR (FILE_NOT_FOUND), got:\n"
+                << mliText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: MLI error name display\n";
     }
   }
 

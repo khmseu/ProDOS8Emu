@@ -45,8 +45,14 @@ namespace prodos8emu {
 
     std::string pathname = readNormalizedCountedString(banks, pathnamePtr);
 
+    // Empty pathname clears the prefix (ProDOS convention)
+    if (pathname.empty()) {
+      m_prefix.clear();
+      return ERR_NO_ERROR;
+    }
+
     // Reject partial pathname with empty prefix
-    if (!pathname.empty() && pathname[0] != '/' && m_prefix.empty()) {
+    if (pathname[0] != '/' && m_prefix.empty()) {
       return ERR_INVALID_PATH_SYNTAX;
     }
 

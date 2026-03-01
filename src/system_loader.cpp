@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "prodos8emu/memory.hpp"
+#include "prodos8emu/path.hpp"
 
 namespace prodos8emu {
 
@@ -72,6 +73,60 @@ namespace prodos8emu {
 
     // Set power-up byte at $03F4 to $A5 (valid marker)
     write_u8(banks, 0x03F4, 0xA5);
+  }
+
+  void initSystemProgramName(Apple2Memory&                mem,
+                             const std::filesystem::path& systemFilePath,
+                             const std::filesystem::path& volumeRoot) {
+    // Compute relative path from volumeRoot to systemFilePath
+    std::filesystem::path relativePath;
+    try {
+      relativePath = std::filesystem::relative(systemFilePath, volumeRoot);
+    } catch (const std::exception& e) {
+      throw std::runtime_error("Failed to compute relative path from volume root to system file: " +
+                               std::string(e.what()));
+    }
+
+    // Check that systemFilePath is actually within volumeRoot
+    if (relativePath.empty() || relativePath.native()[0] == '.') {
+      throw std::runtime_error("System file path is not within volume root: " +
+                               systemFilePath.string() + " vs " + volumeRoot.string());
+    }
+
+    // Build ProDOS path: "/" + relativePath components separated by "/"
+    std::string prodosPath = "/";
+    for (const auto& component : relativePath) {
+      if (component != "/") {
+        std::string comp = component.string();
+        // Normalize each character (uppercase, clear high bit)
+        for (char& ch : comp) {
+          ch = normalizeChar(ch);
+        }
+        prodosPath += comp;
+        prodosPath += "/";
+      }
+    }
+
+    // Remove trailing slash
+    if (prodosPath.size() > 1 && prodosPath.back() == '/') {
+      prodosPath.pop_back();
+    }
+
+    // Validate length (max 64 bytes)
+    if (prodosPath.size() > 64) {
+      char buf[256];
+      std::snprintf(buf, sizeof(buf),
+                    "ProDOS path too long: %zu bytes exceeds maximum of 64 bytes",
+                    prodosPath.size());
+      throw std::runtime_error(buf);
+    }
+
+    // Write counted string at $280
+    auto& banks = mem.banks();
+    write_u8(banks, 0x0280, static_cast<uint8_t>(prodosPath.size()));
+    for (size_t i = 0; i < prodosPath.size(); i++) {
+      write_u8(banks, static_cast<uint16_t>(0x0281 + i), static_cast<uint8_t>(prodosPath[i]));
+    }
   }
 
 }  // namespace prodos8emu

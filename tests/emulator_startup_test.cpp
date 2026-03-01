@@ -153,6 +153,34 @@ int main() {
         failures++;
       }
 
+      // Step 3a: Initialize system program name at $280
+      prodos8emu::initSystemProgramName(mem, sysPath, tempDir);
+      std::cout << "  Initialized system program name\n";
+
+      // Verify system program name is set correctly
+      // Expected: "/TEST.SYSTEM" (12 characters)
+      uint8_t nameLen = prodos8emu::read_u8(mem.constBanks(), 0x0280);
+      if (nameLen != 12) {
+        std::cerr << "FAIL: System program name length at $0280 should be 12, got " << (int)nameLen
+                  << "\n";
+        failures++;
+      }
+
+      // Read the pathname from memory
+      std::string pathname;
+      for (size_t i = 0; i < nameLen; i++) {
+        pathname += static_cast<char>(prodos8emu::read_u8(mem.constBanks(), 0x0281 + i));
+      }
+
+      std::string expectedPath = "/TEST.SYSTEM";
+      if (pathname != expectedPath) {
+        std::cerr << "FAIL: System program name should be '" << expectedPath << "', got '"
+                  << pathname << "'\n";
+        failures++;
+      } else {
+        std::cout << "  System program name correct: " << pathname << "\n";
+      }
+
       // Step 4: Override reset vector to point to $2000
       // Enable LC read/write to modify the reset vector area
       mem.setLCReadEnabled(true);

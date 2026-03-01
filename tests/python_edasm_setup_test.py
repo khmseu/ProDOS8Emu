@@ -135,28 +135,28 @@ class TestTextMappingParsing(unittest.TestCase):
     """Test parsing of --text SRC[:DEST] arguments."""
 
     def test_simple_source_only(self):
-        """SRC without :DEST should map to basename of SRC."""
+        """SRC without :DEST should map to uppercase basename of SRC."""
         src, dest = parse_text_mapping("main.asm")
         self.assertEqual(src, "main.asm")
-        self.assertEqual(dest, "main.asm")
+        self.assertEqual(dest, "MAIN.ASM")
 
     def test_source_with_path_only(self):
-        """SRC with path but no :DEST should map to basename."""
+        """SRC with path but no :DEST should map to uppercase basename."""
         src, dest = parse_text_mapping("/path/to/source.asm")
         self.assertEqual(src, "/path/to/source.asm")
-        self.assertEqual(dest, "source.asm")
+        self.assertEqual(dest, "SOURCE.ASM")
 
     def test_explicit_dest(self):
-        """SRC:DEST should map to specified DEST."""
+        """SRC:DEST should map to uppercased DEST."""
         src, dest = parse_text_mapping("file.txt:target.txt")
         self.assertEqual(src, "file.txt")
-        self.assertEqual(dest, "target.txt")
+        self.assertEqual(dest, "TARGET.TXT")
 
     def test_explicit_dest_with_path(self):
-        """SRC:DEST with DEST path should preserve it."""
+        """SRC:DEST with DEST path should uppercase all components."""
         src, dest = parse_text_mapping("file.txt:subdir/target.txt")
         self.assertEqual(src, "file.txt")
-        self.assertEqual(dest, "subdir/target.txt")
+        self.assertEqual(dest, "SUBDIR/TARGET.TXT")
 
     def test_empty_string_fails(self):
         """Empty string should fail."""

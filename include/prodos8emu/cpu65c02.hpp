@@ -58,8 +58,18 @@ namespace prodos8emu {
 
     CPU65C02Regs m_r;
 
-    bool m_waiting = false;  // WAI
-    bool m_stopped = false;  // STP
+    bool     m_waiting          = false;  // WAI
+    bool     m_stopped          = false;  // STP
+    uint64_t m_instructionCount = 0;      // Total instructions executed
+
+    // PC ring buffer for tracking explicit PC changes (JMP, JSR, RTS, branches, etc.)
+    // Stores from->to address pairs, with loop compression via counts
+    // Filters out ROM-internal transitions ($F800-$FFFF -> $F800-$FFFF)
+    static constexpr size_t PC_RING_SIZE                = 100;
+    uint16_t                m_pcRingFrom[PC_RING_SIZE]  = {};
+    uint16_t                m_pcRingTo[PC_RING_SIZE]    = {};
+    uint32_t                m_pcRingCount[PC_RING_SIZE] = {};
+    size_t                  m_pcRingIndex               = 0;
 
     // Flags
     static constexpr uint8_t FLAG_C = 0x01;
@@ -119,6 +129,9 @@ namespace prodos8emu {
 
     // Branch helper
     void branch(bool cond);
+
+    // Record explicit PC change in ring buffer
+    void recordPCChange(uint16_t fromPC, uint16_t toPC);
 
     // JSR trap
     uint32_t jsr_abs(uint16_t target);

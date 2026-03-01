@@ -165,6 +165,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Initializing warm restart vector...\n";
     prodos8emu::initWarmStartVector(mem, 0x2000);
 
+    std::cout << "Initializing system program name at $280...\n";
+    prodos8emu::initSystemProgramName(mem, opts.system_file_path, opts.volume_root);
+
     std::cout << "Setting reset vector to $2000...\n";
     // Enable LC read/write to modify reset vector area
     mem.setLCReadEnabled(true);

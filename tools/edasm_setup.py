@@ -48,6 +48,32 @@ def validate_disk_image_extension(path: str) -> bool:
     )
 
 
+def uppercase_prodos_path(path: str) -> str:
+    """Convert all components of a path to uppercase for ProDOS.
+
+    Args:
+        path: Path string (relative or absolute)
+
+    Returns:
+        Path with all components uppercased
+    """
+    if not path:
+        return path
+
+    # Preserve leading slash if present
+    has_leading_slash = path.startswith("/")
+
+    # Split path into components and uppercase each
+    components = [c.upper() for c in path.split("/") if c]
+
+    # Reconstruct path
+    result = "/".join(components)
+    if has_leading_slash:
+        result = "/" + result
+
+    return result
+
+
 def parse_text_mapping(spec: str) -> Tuple[str, str]:
     """Parse --text SRC[:DEST] argument.
 
@@ -55,7 +81,7 @@ def parse_text_mapping(spec: str) -> Tuple[str, str]:
         spec: Text mapping specification
 
     Returns:
-        (source_path, dest_path) tuple
+        (source_path, dest_path_uppercased) tuple
 
     Raises:
         ValueError: If spec format is invalid
@@ -72,10 +98,10 @@ def parse_text_mapping(spec: str) -> Tuple[str, str]:
             raise ValueError("Invalid text mapping: empty source")
         if not dest:
             raise ValueError("Invalid text mapping: empty destination")
-        return src, dest
+        return src, uppercase_prodos_path(dest)
     else:
-        # No dest specified, use basename of source
-        return spec, os.path.basename(spec)
+        # No dest specified, use uppercase basename of source
+        return spec, os.path.basename(spec).upper()
 
 
 def validate_system_file(path: str) -> bool:
@@ -304,17 +330,21 @@ def expand_rearrange_mappings(
 
             # Determine destination path
             if is_to_directory:
-                # Preserve basename from source
+                # Preserve basename from source (uppercased for ProDOS)
                 to_base = to_pattern.rstrip("/")
                 if to_base.startswith("/"):
                     to_base = to_base[1:]
-                dest_path = str(volume_path / to_base / match.name)
+                # Uppercase all path components for ProDOS
+                dest_rel = str(Path(to_base) / match.name.upper())
+                dest_path = str(volume_path / dest_rel)
             else:
-                # Explicit filename
+                # Explicit filename (uppercase for ProDOS)
                 to_stripped = (
                     to_pattern[1:] if to_pattern.startswith("/") else to_pattern
                 )
-                dest_path = str(volume_path / to_stripped)
+                # Uppercase all path components
+                dest_rel = uppercase_prodos_path(to_stripped)
+                dest_path = str(volume_path / dest_rel)
 
             result.append((src_path, dest_path))
 

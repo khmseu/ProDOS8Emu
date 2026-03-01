@@ -48,4 +48,33 @@ namespace prodos8emu {
    */
   void initWarmStartVector(Apple2Memory& mem, uint16_t entryAddr);
 
+  /**
+   * Initialize the system program name at $280.
+   *
+   * Writes the system program pathname at $280 as a counted string (length byte
+   * followed by pathname characters). The pathname is constructed as a full ProDOS
+   * path including volume name, relative to the volume root.
+   *
+   * From ProDOS 8 Technical Reference, Section 5.1.2:
+   * "The complete or partial pathname of the system program is stored at $280,
+   * starting with a length byte. The string is a full pathname if it starts with
+   * a slash."
+   *
+   * Example:
+   *   systemFilePath: /path/to/volumes/EDASM/EDASM.SYSTEM
+   *   volumeRoot:     /path/to/volumes
+   *   Result at $280: counted string "/EDASM/EDASM.SYSTEM"
+   *
+   * @param mem Apple2Memory instance to initialize.
+   * @param systemFilePath Full filesystem path to the system file.
+   * @param volumeRoot Base directory containing ProDOS volumes.
+   *
+   * @throws std::runtime_error if:
+   *         - systemFilePath is not within volumeRoot
+   *         - Resulting ProDOS path exceeds 64 bytes
+   */
+  void initSystemProgramName(Apple2Memory&                mem,
+                             const std::filesystem::path& systemFilePath,
+                             const std::filesystem::path& volumeRoot);
+
 }  // namespace prodos8emu

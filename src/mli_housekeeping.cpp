@@ -19,52 +19,52 @@
 
 namespace prodos8emu {
 
+  // ProDOS date/time encoding/decoding helpers
+  // Date format: bits 0-4: day (1-31), bits 5-8: month (1-12), bits 9-15: year (0-127, offset
+  // from 1900) Time format: bits 0-5: minute (0-59), bits 8-12: hour (0-23)
+
+  /**
+   * Encode a Unix timestamp to ProDOS date word.
+   */
+  uint16_t encodeProDOSDate(time_t timestamp) {
+    struct tm* t = localtime(&timestamp);
+    if (!t) return 0;
+
+    int day   = t->tm_mday;     // 1-31
+    int month = t->tm_mon + 1;  // 0-11 -> 1-12
+    int year  = t->tm_year;     // years since 1900
+
+    // Clamp values
+    if (day < 1) day = 1;
+    if (day > 31) day = 31;
+    if (month < 1) month = 1;
+    if (month > 12) month = 12;
+    if (year < 0) year = 0;
+    if (year > 127) year = 127;
+
+    return static_cast<uint16_t>((day & 0x1F) | ((month & 0x0F) << 5) | ((year & 0x7F) << 9));
+  }
+
+  /**
+   * Encode a Unix timestamp to ProDOS time word.
+   */
+  uint16_t encodeProDOSTime(time_t timestamp) {
+    struct tm* t = localtime(&timestamp);
+    if (!t) return 0;
+
+    int minute = t->tm_min;   // 0-59
+    int hour   = t->tm_hour;  // 0-23
+
+    // Clamp values
+    if (minute < 0) minute = 0;
+    if (minute > 59) minute = 59;
+    if (hour < 0) hour = 0;
+    if (hour > 23) hour = 23;
+
+    return static_cast<uint16_t>((minute & 0x3F) | ((hour & 0x1F) << 8));
+  }
+
   namespace {
-
-    // ProDOS date/time encoding/decoding helpers
-    // Date format: bits 0-4: day (1-31), bits 5-8: month (1-12), bits 9-15: year (0-127, offset
-    // from 1900) Time format: bits 0-5: minute (0-59), bits 8-12: hour (0-23)
-
-    /**
-     * Encode a Unix timestamp to ProDOS date word.
-     */
-    uint16_t encodeProDOSDate(time_t timestamp) {
-      struct tm* t = localtime(&timestamp);
-      if (!t) return 0;
-
-      int day   = t->tm_mday;     // 1-31
-      int month = t->tm_mon + 1;  // 0-11 -> 1-12
-      int year  = t->tm_year;     // years since 1900
-
-      // Clamp values
-      if (day < 1) day = 1;
-      if (day > 31) day = 31;
-      if (month < 1) month = 1;
-      if (month > 12) month = 12;
-      if (year < 0) year = 0;
-      if (year > 127) year = 127;
-
-      return static_cast<uint16_t>((day & 0x1F) | ((month & 0x0F) << 5) | ((year & 0x7F) << 9));
-    }
-
-    /**
-     * Encode a Unix timestamp to ProDOS time word.
-     */
-    uint16_t encodeProDOSTime(time_t timestamp) {
-      struct tm* t = localtime(&timestamp);
-      if (!t) return 0;
-
-      int minute = t->tm_min;   // 0-59
-      int hour   = t->tm_hour;  // 0-23
-
-      // Clamp values
-      if (minute < 0) minute = 0;
-      if (minute > 59) minute = 59;
-      if (hour < 0) hour = 0;
-      if (hour > 23) hour = 23;
-
-      return static_cast<uint16_t>((minute & 0x3F) | ((hour & 0x1F) << 8));
-    }
 
     /**
      * Decode ProDOS date and time words to Unix timestamp.

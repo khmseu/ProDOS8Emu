@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "memory.hpp"
 
@@ -484,12 +486,14 @@ namespace prodos8emu {
 
    private:
     struct OpenFile {
-      int      fd;
-      uint32_t mark;      // current file position (24-bit, max 0x00FFFFFF)
-      uint16_t ioBuffer;  // io_buffer pointer in emulated memory
-      bool     newlineEnabled;
-      uint8_t  newlineMask;
-      uint8_t  newlineChar;
+      int                                   fd;
+      uint32_t                              mark;  // current file position (24-bit, max 0x00FFFFFF)
+      uint16_t                              ioBuffer;  // io_buffer pointer in emulated memory
+      bool                                  newlineEnabled;
+      uint8_t                               newlineMask;
+      uint8_t                               newlineChar;
+      bool                                  isDirectory;      // true if this is a directory file
+      std::vector<std::array<uint8_t, 512>> directoryBlocks;  // synthesized ProDOS directory blocks
     };
 
     bool                                  m_initialized;
@@ -503,6 +507,19 @@ namespace prodos8emu {
    * Get library version string.
    */
   std::string getVersion();
+
+  /**
+   * Encode a Unix timestamp to ProDOS date word.
+   * Date format: bits 0-4: day (1-31), bits 5-8: month (1-12), bits 9-15: year (0-127, offset from
+   * 1900)
+   */
+  uint16_t encodeProDOSDate(time_t timestamp);
+
+  /**
+   * Encode a Unix timestamp to ProDOS time word.
+   * Time format: bits 0-5: minute (0-59), bits 8-12: hour (0-23)
+   */
+  uint16_t encodeProDOSTime(time_t timestamp);
 
   /**
    * Top-level MLI dispatcher.
