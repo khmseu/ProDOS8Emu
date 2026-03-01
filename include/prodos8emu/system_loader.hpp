@@ -73,8 +73,27 @@ namespace prodos8emu {
    *         - systemFilePath is not within volumeRoot
    *         - Resulting ProDOS path exceeds 64 bytes
    */
-  void initSystemProgramName(Apple2Memory&                mem,
-                             const std::filesystem::path& systemFilePath,
+  void initSystemProgramName(Apple2Memory& mem, const std::filesystem::path& systemFilePath,
                              const std::filesystem::path& volumeRoot);
+
+  /**
+   * Initialize the ProDOS global page variables (MACHID and SLTBYT).
+   *
+   * Sets up ProDOS global page variables at $BF98-$BF99:
+   * - MACHID at $BF98: Machine identification byte (0x00 for Apple IIe)
+   * - SLTBYT at $BF99: Slot ROM bitmap, where bit N=1 indicates slot N has ROM
+   *
+   * From ProDOS 8 Technical Reference:
+   * "SLTBYT indicates which slots are determined to have ROMS."
+   *
+   * By default, sets bits 1-7 in SLTBYT to indicate disk controllers are present
+   * in all peripheral slots. This matches the slots reported by ON_LINE, which can
+   * return volumes mapped to slots 1-7 with drives 0-1 (14 total volume slots).
+   *
+   * @param mem Apple2Memory instance to initialize.
+   * @param sltbyt Slot ROM bitmap (default: 0xFE = slots 1-7 have ROMs).
+   * @param machid Machine ID byte (default: 0x00 for Apple IIe).
+   */
+  void initProDOSGlobalPage(Apple2Memory& mem, uint8_t sltbyt = 0xFE, uint8_t machid = 0x00);
 
 }  // namespace prodos8emu

@@ -484,6 +484,22 @@ namespace prodos8emu {
      */
     uint8_t writeBlockCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
 
+    /**
+     * Check if a refnum refers to an open directory.
+     *
+     * @param refNum File reference number (1-8)
+     * @return true if refnum is open and is a directory, false otherwise
+     */
+    bool isDirectoryRefNum(uint8_t refNum) const;
+
+    /**
+     * Get the current MARK (file position) for a refnum.
+     *
+     * @param refNum File reference number (1-8)
+     * @return Current MARK value, or 0 if refnum is not open
+     */
+    uint32_t getMarkForRefNum(uint8_t refNum) const;
+
    private:
     struct OpenFile {
       int                                   fd;

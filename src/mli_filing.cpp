@@ -231,9 +231,8 @@ namespace prodos8emu {
         writeLittleEndian16(&block[2], nextBlock);
 
         // Entries start at byte 4
-        uint8_t* entryPtr     = &block[4];
-        size_t   entryIdx     = 0;
-        size_t   entriesInBlk = (blockIdx == 0) ? 12 : 13;  // Key block has header
+        uint8_t* entryPtr = &block[4];
+        size_t   entryIdx = 0;
 
         // Key block: add header entry first
         if (blockIdx == 0) {
@@ -307,11 +306,12 @@ namespace prodos8emu {
             // Determine storage type based on blocks
             if (meta.blocks_used == 0) {
               meta.storage_type = STORAGE_TYPE_SEEDLING;
-              meta.blocks_used =
-                  1;  // ProDOS minimum\n            } else if (meta.blocks_used <= 256) {
+              meta.blocks_used  = 1;  // ProDOS minimum
+            } else if (meta.blocks_used <= 256) {
               meta.storage_type = STORAGE_TYPE_SEEDLING;
             } else {
               meta.storage_type = STORAGE_TYPE_SAPLING;
+              (void)STORAGE_TYPE_TREE;
             }
 
             // Load file_type and aux_type from xattrs (default to BIN $06 if not found)

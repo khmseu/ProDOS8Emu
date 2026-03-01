@@ -162,6 +162,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Loading system file from " << opts.system_file_path << "...\n";
     prodos8emu::loadSystemFile(mem, opts.system_file_path, 0x2000);
 
+    std::cout << "Initializing ProDOS global page (MACHID, SLTBYT)...\n";
+    prodos8emu::initProDOSGlobalPage(mem);
+
     std::cout << "Initializing warm restart vector...\n";
     prodos8emu::initWarmStartVector(mem, 0x2000);
 
@@ -187,6 +190,12 @@ int main(int argc, char* argv[]) {
 
     // Run CPU with bounded instruction count
     uint64_t instructionCount = cpu.run(opts.max_instructions);
+
+    // If we hit max instructions, dump stack and PC ring for debugging
+    if (instructionCount >= opts.max_instructions && !cpu.isStopped() && !cpu.isWaiting()) {
+      std::cout << "\n=== Max Instruction Count Reached - Debug Info ===\n";
+      cpu.dumpDebugInfo(std::cout);
+    }
 
     // Print final status
     std::cout << "\n=== Execution Summary ===\n";

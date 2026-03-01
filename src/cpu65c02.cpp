@@ -257,8 +257,8 @@ namespace prodos8emu {
      * Extract pathname(s) from MLI parameter block for logging.
      * Returns formatted string with pathname info, or empty if call doesn't use pathnames.
      */
-    std::string extract_mli_pathnames(const ConstMemoryBanks& banks, uint8_t callNumber,
-                                      uint16_t paramBlockAddr) {
+    std::string extract_mli_pathnames(const ConstMemoryBanks& banks, MLIContext* mli,
+                                      uint8_t callNumber, uint16_t paramBlockAddr, uint8_t err) {
       std::string result;
 
       switch (callNumber) {
@@ -279,6 +279,12 @@ namespace prodos8emu {
             result = " path=<empty>";
           } else if (length > 64) {
             result = " path=<invalid:len=" + std::to_string(length) + ">";
+          }
+
+          // OPEN: log output refnum on success
+          if (callNumber == 0xC8 && err == 0) {
+            uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 5));
+            result += " ref=" + std::to_string(refNum);
           }
           break;
         }
@@ -316,16 +322,19 @@ namespace prodos8emu {
         // GET_PREFIX: data_buffer at +1 (pathname returned there, read after call)
         case 0xC7:  // GET_PREFIX
         {
-          uint16_t    dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
-          uint8_t     length        = 0;
-          std::string pathname      = read_pathname(banks, dataBufferPtr, 64, &length);
+          // Only read buffer if call succeeded
+          if (err == 0) {
+            uint16_t dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+            uint8_t  length        = 0;
+            std::string pathname   = read_pathname(banks, dataBufferPtr, 64, &length);
 
-          if (!pathname.empty()) {
-            result = " prefix='" + pathname + "'";
-          } else if (length == 0) {
-            result = " prefix=<empty>";
-          } else if (length > 64) {
-            result = " prefix=<invalid:len=" + std::to_string(length) + ">";
+            if (!pathname.empty()) {
+              result = " prefix='" + pathname + "'";
+            } else if (length == 0) {
+              result = " prefix=<empty>";
+            } else if (length > 64) {
+              result = " prefix=<invalid:len=" + std::to_string(length) + ">";
+            }
           }
           break;
         }
@@ -333,30 +342,249 @@ namespace prodos8emu {
         // ON_LINE: data_buffer at +2 (volume names returned there, read after call)
         case 0xC5:  // ON_LINE
         {
+          // Only read buffer if call succeeded
+          if (err != 0) {
+            break;  // Don't parse garbage data on error
+          }
+
           uint8_t  unitNum       = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
           uint16_t dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 2));
 
-          // Read first volume entry (16-byte record)
-          // Byte 0: (drive << 7) | (slot << 4) | name_length
-          uint8_t byte0  = read_u8(banks, dataBufferPtr);
-          uint8_t length = byte0 & 0x0F;
+          if (unitNum == 0) {
+            // Multiple volumes: read all entries until terminator (byte0 == 0)
+            result           = " volumes='";
+            bool     first   = true;
+            uint16_t offset  = dataBufferPtr;
+            int      maxRecs = 15;  // Safety limit (14 volumes + terminator)
 
-          if (length > 0 && length <= 15) {
-            std::string volName;
-            volName.reserve(length);
-            for (uint8_t i = 0; i < length; i++) {
-              uint8_t ch = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + 1 + i));
-              volName.push_back(static_cast<char>(ch & 0x7F));
-            }
+            for (int i = 0; i < maxRecs; i++) {
+              uint8_t byte0 = read_u8(banks, offset);
+              if (byte0 == 0) break;  // Terminator
 
-            if (unitNum == 0) {
-              result = " volumes='" + volName + "'...";  // May be more volumes
-            } else {
-              result = " volume='" + volName + "'";
+              uint8_t length = byte0 & 0x0F;
+              uint8_t slot   = (byte0 >> 4) & 0x07;
+              uint8_t drive  = (byte0 >> 7) & 0x01;
+
+              if (length > 0 && length <= 15) {
+                if (!first) result += ", ";
+                first = false;
+
+                // Read volume name
+                std::string volName;
+                volName.reserve(length);
+                for (uint8_t j = 0; j < length; j++) {
+                  uint8_t ch = read_u8(banks, static_cast<uint16_t>(offset + 1 + j));
+                  volName.push_back(static_cast<char>(ch & 0x7F));
+                }
+
+                result += volName + "[S" + std::to_string(slot) + "D" + std::to_string(drive) + "]";
+              }
+
+              offset += 16;
             }
-          } else if (length == 0) {
-            result = " volume=<none>";
+            result += "'";
+          } else {
+            // Single volume: read first entry
+            uint8_t byte0  = read_u8(banks, dataBufferPtr);
+            uint8_t length = byte0 & 0x0F;
+            uint8_t slot   = (byte0 >> 4) & 0x07;
+            uint8_t drive  = (byte0 >> 7) & 0x01;
+
+            if (length > 0 && length <= 15) {
+              std::string volName;
+              volName.reserve(length);
+              for (uint8_t i = 0; i < length; i++) {
+                uint8_t ch = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + 1 + i));
+                volName.push_back(static_cast<char>(ch & 0x7F));
+              }
+
+              result = " volume='" + volName + "[S" + std::to_string(slot) + "D" +
+                       std::to_string(drive) + "]'";
+            } else if (length == 0) {
+              result = " volume=<none>";
+            }
           }
+          break;
+        }
+
+        // READ: data_buffer at +2, might be directory entries
+        case 0xCA:  // READ
+        {
+          // Always log refnum
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+
+          // Check if this is a directory read using the MLI context
+          bool isDirectoryRead = (mli != nullptr && err == 0 && mli->isDirectoryRefNum(refNum));
+
+          // Only parse directory entries if this is a directory read
+          if (!isDirectoryRead) {
+            break;
+          }
+
+          uint16_t dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 2));
+          uint16_t transCount    = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 6));
+
+          // Get the MARK (file position) after the READ completes
+          // Subtract transCount to get the starting position of this read
+          uint32_t markAfter  = mli->getMarkForRefNum(refNum);
+          uint32_t markBefore = markAfter - transCount;
+
+          // Calculate position within 512-byte block structure
+          uint32_t blockNum    = markBefore / 512;
+          uint32_t blockOffset = markBefore % 512;
+
+          // Add MARK and block position to log
+          result += " mark=$" + std::to_string(markBefore);
+          result += " blk=" + std::to_string(blockNum) + "+" + std::to_string(blockOffset);
+
+          // Skip if no data was read
+          if (transCount == 0) {
+            break;
+          }
+
+          // Identify what's being read based on block position
+          // ProDOS directory blocks: 512 bytes each
+          // Bytes 0-3: prev/next block pointers
+          // Block 0: bytes 4-42 = header entry, bytes 43-510 = up to 12 file entries
+          // Block N: bytes 4-510 = up to 13 file entries (no header)
+          // Byte 511: unused
+          std::string posInfo;
+          if (blockOffset >= 0 && blockOffset <= 3) {
+            posInfo = " [ptrs]";
+          } else if (blockNum == 0 && blockOffset >= 4 && blockOffset <= 42) {
+            posInfo = " [hdr]";
+          } else if (blockOffset >= 4 && blockOffset <= 510) {
+            // Calculate entry number within this block
+            uint32_t entryOffset = blockOffset - 4;
+            uint32_t entryNum    = entryOffset / 39;
+            posInfo              = " [ent" + std::to_string(entryNum) + "]";
+          } else if (blockOffset == 511) {
+            posInfo = " [pad]";
+          }
+          result += posInfo;
+
+          // Parse directory entries from the read buffer
+          // EdAsm reads small chunks (39 or 43 bytes), not full 512-byte blocks
+          // Each read may contain block pointers (first 4 bytes) + one or more entries
+          std::string entries;
+          bool        first        = true;
+          int         validEntries = 0;
+
+          // Try parsing entries (each entry is 39 bytes / 0x27)
+          // Scan for entries starting at any offset (not just offset 4)
+          for (uint16_t offset = 0; offset + 0x27 <= transCount; offset++) {
+            // Check if this looks like the start of an entry
+            // Entry byte 0 = storage_type (high nibble) + name_length (low nibble)
+            uint8_t byte0       = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + offset));
+            uint8_t storageType = (byte0 >> 4) & 0x0F;
+            uint8_t nameLen     = byte0 & 0x0F;
+
+            // Skip inactive (byte0==0)
+            if (nameLen == 0 && storageType == 0) {
+              continue;
+            }
+
+            // Extract the name and verify it looks valid
+            std::string entryName;
+            bool        allValid = true;
+            entryName.reserve(nameLen);
+
+            for (uint8_t i = 0; i < nameLen; i++) {
+              if (offset + 1 + i >= transCount) {
+                allValid = false;
+                break;
+              }
+              uint8_t ch = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + offset + 1 + i));
+              ch         = ch & 0x7F;  // Clear high bit
+
+              entryName.push_back(static_cast<char>(ch));
+            }
+
+            if (allValid) {
+              validEntries++;
+              if (first) {
+                entries = " entries='";
+                first   = false;
+              } else {
+                entries += ", ";
+              }
+              entries += entryName;
+              // Skip ahead by 38 bytes for next potential entry (offset will increment by 1 in
+              // loop)
+              offset += 38;
+            }
+          }
+
+          // Show entries if we found any
+          if (validEntries >= 1) {
+            entries += "'";
+            result += entries;
+          }
+          break;
+        }
+
+        // NEWLINE: log input refnum
+        case 0xC9:  // NEWLINE
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+          break;
+        }
+
+        // WRITE: log input refnum
+        case 0xCB:  // WRITE
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+          break;
+        }
+
+        // CLOSE: log input refnum
+        case 0xCC:  // CLOSE
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+          break;
+        }
+
+        // FLUSH: log input refnum
+        case 0xCD:  // FLUSH
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+          break;
+        }
+
+        // SET_MARK: log input refnum
+        case 0xCE:  // SET_MARK
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+          break;
+        }
+
+        // GET_MARK: log input refnum
+        case 0xCF:  // GET_MARK
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+          break;
+        }
+
+        // SET_EOF: log input refnum
+        case 0xD0:  // SET_EOF
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
+          break;
+        }
+
+        // GET_EOF: log input refnum
+        case 0xD1:  // GET_EOF
+        {
+          uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result         = " ref=" + std::to_string(refNum);
           break;
         }
 
@@ -525,6 +753,11 @@ namespace prodos8emu {
       }
     }
     return executed;
+  }
+
+  void CPU65C02::dumpDebugInfo(std::ostream& os) const {
+    dump_stack(os, m_mem.constBanks(), m_r.sp);
+    dump_pc_ring(os, m_pcRingFrom, m_pcRingTo, m_pcRingCount, PC_RING_SIZE, m_pcRingIndex);
   }
 
   uint16_t CPU65C02::addr_zp() {
@@ -719,7 +952,8 @@ namespace prodos8emu {
         write_hex(*m_mliLog, paramBlock, 4);
 
         // Extract and log pathnames if applicable
-        std::string pathInfo = extract_mli_pathnames(m_mem.constBanks(), callNumber, paramBlock);
+        std::string pathInfo =
+            extract_mli_pathnames(m_mem.constBanks(), m_mli, callNumber, paramBlock, err);
         if (!pathInfo.empty()) {
           *m_mliLog << pathInfo;
         }
@@ -753,6 +987,12 @@ namespace prodos8emu {
       // ProDOS MLI returns with decimal mode cleared.
       setFlag(FLAG_D, false);
       return 6;
+    }
+
+    // Special trap: JSR $DCB8 redirects to $DCBD with A=$A0.
+    if (target == 0xDCB8) {
+      m_r.a  = 0xA0;
+      target = 0xDCBD;
     }
 
     // Normal JSR behavior.

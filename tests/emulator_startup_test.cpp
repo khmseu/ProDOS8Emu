@@ -133,6 +133,28 @@ int main() {
       prodos8emu::loadSystemFile(mem, sysPath, 0x2000);
       std::cout << "  Loaded system file at $2000\n";
 
+      // Step 2a: Initialize ProDOS global page (MACHID, SLTBYT)
+      prodos8emu::initProDOSGlobalPage(mem);
+      std::cout << "  Initialized ProDOS global page\n";
+
+      // Verify MACHID is set correctly (default: 0x00)
+      uint8_t machid = prodos8emu::read_u8(mem.constBanks(), 0xBF98);
+      if (machid != 0x00) {
+        std::cerr << "FAIL: MACHID at $BF98 should be $00, got $" << std::hex << (int)machid
+                  << std::dec << "\n";
+        failures++;
+      }
+
+      // Verify SLTBYT is set correctly (default: 0xFE = slots 1-7)
+      uint8_t sltbyt = prodos8emu::read_u8(mem.constBanks(), 0xBF99);
+      if (sltbyt != 0xFE) {
+        std::cerr << "FAIL: SLTBYT at $BF99 should be $FE, got $" << std::hex << (int)sltbyt
+                  << std::dec << "\n";
+        failures++;
+      } else {
+        std::cout << "  SLTBYT correct ($FE = slots 1-7 have ROMs)\n";
+      }
+
       // Step 3: Initialize warm restart vector
       prodos8emu::initWarmStartVector(mem, 0x2000);
       std::cout << "  Initialized warm start vector\n";

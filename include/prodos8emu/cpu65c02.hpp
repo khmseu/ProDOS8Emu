@@ -50,6 +50,9 @@ namespace prodos8emu {
       return m_waiting;
     }
 
+    // Dump stack and PC ring buffer to output stream (for debugging)
+    void dumpDebugInfo(std::ostream& os) const;
+
    private:
     Apple2Memory& m_mem;
     MLIContext*   m_mli     = nullptr;

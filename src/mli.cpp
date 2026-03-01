@@ -95,6 +95,22 @@ namespace prodos8emu {
     return ERR_NO_ERROR;
   }
 
+  bool MLIContext::isDirectoryRefNum(uint8_t refNum) const {
+    auto it = m_openFiles.find(refNum);
+    if (it == m_openFiles.end()) {
+      return false;
+    }
+    return it->second.isDirectory;
+  }
+
+  uint32_t MLIContext::getMarkForRefNum(uint8_t refNum) const {
+    auto it = m_openFiles.find(refNum);
+    if (it == m_openFiles.end()) {
+      return 0;
+    }
+    return it->second.mark;
+  }
+
   std::string getVersion() {
     return PRODOS8EMU_VERSION;
   }

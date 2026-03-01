@@ -75,8 +75,7 @@ namespace prodos8emu {
     write_u8(banks, 0x03F4, 0xA5);
   }
 
-  void initSystemProgramName(Apple2Memory&                mem,
-                             const std::filesystem::path& systemFilePath,
+  void initSystemProgramName(Apple2Memory& mem, const std::filesystem::path& systemFilePath,
                              const std::filesystem::path& volumeRoot) {
     // Compute relative path from volumeRoot to systemFilePath
     std::filesystem::path relativePath;
@@ -115,8 +114,7 @@ namespace prodos8emu {
     // Validate length (max 64 bytes)
     if (prodosPath.size() > 64) {
       char buf[256];
-      std::snprintf(buf, sizeof(buf),
-                    "ProDOS path too long: %zu bytes exceeds maximum of 64 bytes",
+      std::snprintf(buf, sizeof(buf), "ProDOS path too long: %zu bytes exceeds maximum of 64 bytes",
                     prodosPath.size());
       throw std::runtime_error(buf);
     }
@@ -127,6 +125,16 @@ namespace prodos8emu {
     for (size_t i = 0; i < prodosPath.size(); i++) {
       write_u8(banks, static_cast<uint16_t>(0x0281 + i), static_cast<uint8_t>(prodosPath[i]));
     }
+  }
+
+  void initProDOSGlobalPage(Apple2Memory& mem, uint8_t sltbyt, uint8_t machid) {
+    auto& banks = mem.banks();
+
+    // Write MACHID at $BF98
+    write_u8(banks, 0xBF98, machid);
+
+    // Write SLTBYT at $BF99
+    write_u8(banks, 0xBF99, sltbyt);
   }
 
 }  // namespace prodos8emu
