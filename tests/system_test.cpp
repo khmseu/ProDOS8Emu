@@ -422,6 +422,59 @@ int main() {
     }
   }
 
+  // Test 11b: QUIT ($65) success
+  {
+    std::cout << "Test 11b: QUIT ($65) success\n";
+    TestMemory             mem;
+    prodos8emu::MLIContext ctx(tempDir);
+
+    uint16_t paramBlock = 0x0300;
+    prodos8emu::write_u8(mem.banks(), paramBlock + 0, 4);  // param_count
+    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0);  // quit_type
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 2, 0);
+    prodos8emu::write_u8(mem.banks(), paramBlock + 4, 0);
+    prodos8emu::write_u16_le(mem.banks(), paramBlock + 5, 0);
+
+    uint8_t err = ctx.quitCall(mem.constBanks(), paramBlock);
+    if (err != prodos8emu::ERR_NO_ERROR) {
+      std::cerr << "FAIL: QUIT expected ERR_NO_ERROR, got 0x" << std::hex << (int)err << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: QUIT ($65) success\n";
+    }
+  }
+
+  // Test 11c: QUIT ($65) parameter validation
+  {
+    std::cout << "Test 11c: QUIT ($65) parameter validation\n";
+    TestMemory             mem;
+    prodos8emu::MLIContext ctx(tempDir);
+
+    uint16_t paramBlock = 0x0300;
+
+    // Wrong param_count
+    prodos8emu::write_u8(mem.banks(), paramBlock + 0, 3);
+    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 0);
+    uint8_t errCount = ctx.quitCall(mem.constBanks(), paramBlock);
+
+    // Wrong quit_type
+    prodos8emu::write_u8(mem.banks(), paramBlock + 0, 4);
+    prodos8emu::write_u8(mem.banks(), paramBlock + 1, 1);
+    uint8_t errType = ctx.quitCall(mem.constBanks(), paramBlock);
+
+    if (errCount != prodos8emu::ERR_BAD_CALL_PARAM_COUNT) {
+      std::cerr << "FAIL: QUIT wrong param_count expected ERR_BAD_CALL_PARAM_COUNT, got 0x"
+                << std::hex << (int)errCount << "\n";
+      failures++;
+    } else if (errType != prodos8emu::ERR_INVALID_PARAMETER) {
+      std::cerr << "FAIL: QUIT wrong quit_type expected ERR_INVALID_PARAMETER, got 0x" << std::hex
+                << (int)errType << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: QUIT ($65) parameter validation\n";
+    }
+  }
+
   // Test 12: System file loader - valid system file
   {
     std::cout << "Test 12: System file loader - valid system file\n";

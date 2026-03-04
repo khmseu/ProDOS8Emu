@@ -798,7 +798,7 @@ int main() {
         prodos8emu::write_u16_le(mem.banks(), paramBlock + 2, 0x0500);
         prodos8emu::write_u16_le(mem.banks(), paramBlock + 4, 10);
 
-        err       = ctx.readCall(mem.banks(), paramBlock);
+        err        = ctx.readCall(mem.banks(), paramBlock);
         transCount = prodos8emu::read_u16_le(mem.banks(), paramBlock + 6);
         if (err != prodos8emu::ERR_EOF_ENCOUNTERED) {
           std::cerr << "FAIL: Expected ERR_EOF_ENCOUNTERED after partial read, got 0x" << std::hex

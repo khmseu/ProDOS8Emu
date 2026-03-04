@@ -59,6 +59,8 @@ namespace prodos8emu {
         return ctx.getBufCall(banks, paramBlockAddr);
 
       // System
+      case 0x65:
+        return ctx.quitCall(constBanks, paramBlockAddr);
       case 0x40:
         return ctx.allocInterruptCall(banks, paramBlockAddr);
       case 0x41:

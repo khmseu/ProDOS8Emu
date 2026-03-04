@@ -403,6 +403,24 @@ namespace prodos8emu {
     uint8_t getBufCall(MemoryBanks& banks, uint16_t paramBlockAddr);
 
     /**
+     * MLI Call: QUIT ($65)
+     *
+     * Quit a system program and return to the ProDOS dispatcher.
+     *
+     * Parameter block:
+     *   +0: param_count (1 byte) - must be 4
+     *   +1: quit_type (1 byte) - must be 0 for standard QUIT
+     *   +2: reserved pointer (2 bytes) - ignored
+     *   +4: reserved byte (1 byte) - ignored
+     *   +5: reserved pointer (2 bytes) - ignored
+     *
+     * @param banks Memory banks (const)
+     * @param paramBlockAddr Address of parameter block
+     * @return ProDOS error code
+     */
+    uint8_t quitCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr);
+
+    /**
      * MLI Call: GET_TIME ($82)
      *
      * Read the system clock and update the ProDOS global time locations

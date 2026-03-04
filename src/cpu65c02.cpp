@@ -62,6 +62,8 @@ namespace prodos8emu {
           return "SET_BUF";
         case 0xD3:
           return "GET_BUF";
+        case 0x65:
+          return "QUIT";
         case 0x40:
           return "ALLOC_INTERRUPT";
         case 0x41:
@@ -1014,6 +1016,13 @@ namespace prodos8emu {
 
       // ProDOS MLI returns with decimal mode cleared.
       setFlag(FLAG_D, false);
+
+      // QUIT ($65): stop emulation after standard MLI handling/logging.
+      if (callNumber == 0x65 && err == ERR_NO_ERROR) {
+        m_stopped = true;
+        m_waiting = false;
+      }
+
       return 6;
     }
 

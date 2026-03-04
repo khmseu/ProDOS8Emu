@@ -122,6 +122,71 @@ int main() {
     }
   }
 
+  // Test 1b: JSR $BF00 QUIT ($65) stops emulation after logging
+  {
+    std::cout << "Test 1b: JSR $BF00 QUIT stops CPU\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t param = 0x0310;
+    prodos8emu::write_u8(mem.banks(), param + 0, 4);  // param_count
+    prodos8emu::write_u8(mem.banks(), param + 1, 0);  // quit_type
+    prodos8emu::write_u16_le(mem.banks(), param + 2, 0);
+    prodos8emu::write_u8(mem.banks(), param + 4, 0);
+    prodos8emu::write_u16_le(mem.banks(), param + 5, 0);
+
+    const uint16_t start = 0x0220;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0x65,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    std::stringstream coutLog;
+    cpu.setDebugLogs(&mliLog, &coutLog);
+    cpu.reset();
+
+    cpu.step();
+    uint16_t pcAfterQuit = cpu.regs().pc;
+    cpu.step();  // Should be a no-op once stopped
+
+    std::string mliText = mliLog.str();
+
+    if (!cpu.isStopped()) {
+      std::cerr << "FAIL: Expected CPU to stop after QUIT ($65)\n";
+      failures++;
+    } else if (pcAfterQuit != static_cast<uint16_t>(start + 6)) {
+      std::cerr << "FAIL: Expected PC at return address after QUIT, got 0x" << std::hex
+                << pcAfterQuit << std::dec << "\n";
+      failures++;
+    } else if (cpu.regs().pc != pcAfterQuit) {
+      std::cerr << "FAIL: Expected stopped CPU to keep PC unchanged\n";
+      failures++;
+    } else if (mliText.find("QUIT") == std::string::npos) {
+      std::cerr << "FAIL: Expected MLI log to include QUIT\n";
+      failures++;
+    } else if (mliText.find("result=$00") == std::string::npos) {
+      std::cerr << "FAIL: Expected QUIT log to include success result=$00\n";
+      failures++;
+    } else {
+      std::cout << "PASS: JSR $BF00 QUIT stops CPU\n";
+    }
+  }
+
   // Test 2: JMP ($0036) logs A register as COUT stream output.
   {
     std::cout << "Test 2: JMP ($0036) COUT logging\n";

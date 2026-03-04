@@ -53,6 +53,20 @@ namespace prodos8emu {
     return ERR_NO_ERROR;
   }
 
+  uint8_t MLIContext::quitCall(const ConstMemoryBanks& banks, uint16_t paramBlockAddr) {
+    uint8_t paramCount = read_u8(banks, paramBlockAddr);
+    if (paramCount != 4) {
+      return ERR_BAD_CALL_PARAM_COUNT;
+    }
+
+    uint8_t quitType = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+    if (quitType != 0) {
+      return ERR_INVALID_PARAMETER;
+    }
+
+    return ERR_NO_ERROR;
+  }
+
   uint8_t MLIContext::getTimeCall(MemoryBanks& banks, uint16_t paramBlockAddr) {
     // Per ProDOS 8 Technical Reference Manual Section 4.6.1:
     // "This call has no parameter list, and it cannot generate an error."
