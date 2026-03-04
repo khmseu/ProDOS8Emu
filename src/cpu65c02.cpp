@@ -670,33 +670,6 @@ namespace prodos8emu {
       return;
     }
 
-    // Trace writes to key memory locations when trace log is enabled
-    if (m_traceLog != nullptr) {
-      // Track DevCtlS writes (assuming it's in zero page or low memory)
-      // DevCtlS location varies, but watch for writes that might be setting it up
-      if (addr >= 0x0000 && addr <= 0x00FF) {
-        // Zero page writes - log interesting ones
-        if (m_instructionCount % 50000 == 0) {
-          *m_traceLog << "@" << m_instructionCount << " WRITE ZP[$";
-          write_hex(*m_traceLog, addr, 2);
-          *m_traceLog << "]=$";
-          write_hex(*m_traceLog, value, 2);
-          *m_traceLog << "\n";
-        }
-      }
-
-      // Track writes to common assembler variables (typical ranges)
-      if (addr >= 0x0200 && addr <= 0x03FF) {
-        if (m_instructionCount % 50000 == 0) {
-          *m_traceLog << "@" << m_instructionCount << " WRITE [$";
-          write_hex(*m_traceLog, addr, 4);
-          *m_traceLog << "]=$";
-          write_hex(*m_traceLog, value, 2);
-          *m_traceLog << "\n";
-        }
-      }
-    }
-
     write_u8(m_mem.banks(), addr, value);
   }
 

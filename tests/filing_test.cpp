@@ -787,11 +787,29 @@ int main() {
       if (transCount != 2) {
         std::cerr << "FAIL: Expected trans_count=2, got " << transCount << "\n";
         failures++;
-      } else if (err != prodos8emu::ERR_EOF_ENCOUNTERED) {
-        std::cerr << "FAIL: Expected ERR_EOF_ENCOUNTERED, got 0x" << std::hex << (int)err << "\n";
+      } else if (err != prodos8emu::ERR_NO_ERROR) {
+        std::cerr << "FAIL: Expected ERR_NO_ERROR on partial EOF read, got 0x" << std::hex
+                  << (int)err << "\n";
         failures++;
       } else {
-        std::cout << "PASS: Read partial at EOF\n";
+        // Next read should return EOF with zero bytes transferred.
+        prodos8emu::write_u8(mem.banks(), paramBlock, 4);
+        prodos8emu::write_u8(mem.banks(), paramBlock + 1, refNum);
+        prodos8emu::write_u16_le(mem.banks(), paramBlock + 2, 0x0500);
+        prodos8emu::write_u16_le(mem.banks(), paramBlock + 4, 10);
+
+        err       = ctx.readCall(mem.banks(), paramBlock);
+        transCount = prodos8emu::read_u16_le(mem.banks(), paramBlock + 6);
+        if (err != prodos8emu::ERR_EOF_ENCOUNTERED) {
+          std::cerr << "FAIL: Expected ERR_EOF_ENCOUNTERED after partial read, got 0x" << std::hex
+                    << (int)err << "\n";
+          failures++;
+        } else if (transCount != 0) {
+          std::cerr << "FAIL: Expected trans_count=0 after EOF, got " << transCount << "\n";
+          failures++;
+        } else {
+          std::cout << "PASS: Read partial at EOF\n";
+        }
       }
 
       // Close
