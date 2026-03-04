@@ -24,6 +24,7 @@ namespace prodos8emu {
     void attachMLI(MLIContext& mli);
     void detachMLI();
     void setDebugLogs(std::ostream* mliLog, std::ostream* coutLog);
+    void setTraceLog(std::ostream* traceLog);
 
     // Reset vectors are read from $FFFC/$FFFD.
     void reset();
@@ -55,9 +56,10 @@ namespace prodos8emu {
 
    private:
     Apple2Memory& m_mem;
-    MLIContext*   m_mli     = nullptr;
-    std::ostream* m_mliLog  = nullptr;
-    std::ostream* m_coutLog = nullptr;
+    MLIContext*   m_mli      = nullptr;
+    std::ostream* m_mliLog   = nullptr;
+    std::ostream* m_coutLog  = nullptr;
+    std::ostream* m_traceLog = nullptr;
 
     CPU65C02Regs m_r;
 

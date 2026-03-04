@@ -39,6 +39,7 @@ _codeql_detected_source_root
 .cache/
 .fake
 *.log
+EDASM.SRC/
 inputs/
 third_party_docs/
 work/

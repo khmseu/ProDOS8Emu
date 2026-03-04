@@ -1,5 +1,6 @@
 #include "prodos8emu/mli.hpp"
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "prodos8emu/errors.hpp"
@@ -109,6 +110,38 @@ namespace prodos8emu {
       return 0;
     }
     return it->second.mark;
+  }
+
+  uint32_t MLIContext::getEofForRefNum(uint8_t refNum) const {
+    auto it = m_openFiles.find(refNum);
+    if (it == m_openFiles.end()) {
+      return 0;
+    }
+
+    const OpenFile& of = it->second;
+
+    if (of.isDirectory) {
+      uint64_t eof = static_cast<uint64_t>(of.directoryBlocks.size()) * 512ull;
+      if (eof > 0x00FFFFFFull) {
+        return 0x00FFFFFFu;
+      }
+      return static_cast<uint32_t>(eof);
+    }
+
+    struct stat st;
+    if (::fstat(of.fd, &st) != 0) {
+      return 0;
+    }
+
+    if (st.st_size < 0) {
+      return 0;
+    }
+
+    uint64_t eof = static_cast<uint64_t>(st.st_size);
+    if (eof > 0x00FFFFFFull) {
+      return 0x00FFFFFFu;
+    }
+    return static_cast<uint32_t>(eof);
   }
 
   std::string getVersion() {

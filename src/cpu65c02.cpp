@@ -2,6 +2,7 @@
 
 #include <iomanip>
 #include <ostream>
+#include <sstream>
 
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
@@ -414,6 +415,19 @@ namespace prodos8emu {
           uint8_t refNum = read_u8(banks, static_cast<uint16_t>(paramBlockAddr + 1));
           result         = " ref=" + std::to_string(refNum);
 
+          uint16_t requestCount = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 4));
+          uint16_t transCount   = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 6));
+          result += " req=" + std::to_string(requestCount);
+          result += " trans=" + std::to_string(transCount);
+
+          if (mli != nullptr) {
+            uint32_t markAfter = mli->getMarkForRefNum(refNum);
+            uint32_t markBefore = (markAfter >= transCount) ? (markAfter - transCount) : 0;
+            uint32_t eof = mli->getEofForRefNum(refNum);
+            result += " mark=$" + std::to_string(markBefore);
+            result += " eof=$" + std::to_string(eof);
+          }
+
           // Check if this is a directory read using the MLI context
           bool isDirectoryRead = (mli != nullptr && err == 0 && mli->isDirectoryRefNum(refNum));
 
@@ -423,12 +437,12 @@ namespace prodos8emu {
           }
 
           uint16_t dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 2));
-          uint16_t transCount    = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 6));
+          uint16_t dirTransCount = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 6));
 
           // Get the MARK (file position) after the READ completes
           // Subtract transCount to get the starting position of this read
           uint32_t markAfter  = mli->getMarkForRefNum(refNum);
-          uint32_t markBefore = markAfter - transCount;
+          uint32_t markBefore = markAfter - dirTransCount;
 
           // Calculate position within 512-byte block structure
           uint32_t blockNum    = markBefore / 512;
@@ -439,7 +453,7 @@ namespace prodos8emu {
           result += " blk=" + std::to_string(blockNum) + "+" + std::to_string(blockOffset);
 
           // Skip if no data was read
-          if (transCount == 0) {
+          if (dirTransCount == 0) {
             break;
           }
 
@@ -614,6 +628,10 @@ namespace prodos8emu {
     m_coutLog = coutLog;
   }
 
+  void CPU65C02::setTraceLog(std::ostream* traceLog) {
+    m_traceLog = traceLog;
+  }
+
   void CPU65C02::recordPCChange(uint16_t fromPC, uint16_t toPC) {
     // Filter out ROM-internal transitions ($F800-$FFFF -> $F800-$FFFF)
     if (fromPC >= 0xF800 && toPC >= 0xF800) {
@@ -651,6 +669,34 @@ namespace prodos8emu {
       m_mem.applySoftSwitch(addr, false);
       return;
     }
+
+    // Trace writes to key memory locations when trace log is enabled
+    if (m_traceLog != nullptr) {
+      // Track DevCtlS writes (assuming it's in zero page or low memory)
+      // DevCtlS location varies, but watch for writes that might be setting it up
+      if (addr >= 0x0000 && addr <= 0x00FF) {
+        // Zero page writes - log interesting ones
+        if (m_instructionCount % 50000 == 0) {
+          *m_traceLog << "@" << m_instructionCount << " WRITE ZP[$";
+          write_hex(*m_traceLog, addr, 2);
+          *m_traceLog << "]=$";
+          write_hex(*m_traceLog, value, 2);
+          *m_traceLog << "\n";
+        }
+      }
+
+      // Track writes to common assembler variables (typical ranges)
+      if (addr >= 0x0200 && addr <= 0x03FF) {
+        if (m_instructionCount % 50000 == 0) {
+          *m_traceLog << "@" << m_instructionCount << " WRITE [$";
+          write_hex(*m_traceLog, addr, 4);
+          *m_traceLog << "]=$";
+          write_hex(*m_traceLog, value, 2);
+          *m_traceLog << "\n";
+        }
+      }
+    }
+
     write_u8(m_mem.banks(), addr, value);
   }
 
@@ -943,40 +989,49 @@ namespace prodos8emu {
 
       uint8_t err = mli_dispatch(*m_mli, m_mem.banks(), callNumber, paramBlock);
 
-      if (m_mliLog != nullptr) {
-        *m_mliLog << "@" << m_instructionCount << " PC=$";
-        write_hex(*m_mliLog, callPC, 4);
-        *m_mliLog << " MLI call=$";
-        write_hex(*m_mliLog, callNumber, 2);
-        *m_mliLog << " (" << mli_call_name(callNumber) << ") param=$";
-        write_hex(*m_mliLog, paramBlock, 4);
+      if (m_mliLog != nullptr || m_traceLog != nullptr) {
+        std::ostringstream mli_msg;
+        mli_msg << "@" << m_instructionCount << " PC=$";
+        write_hex(mli_msg, callPC, 4);
+        mli_msg << " MLI call=$";
+        write_hex(mli_msg, callNumber, 2);
+        mli_msg << " (" << mli_call_name(callNumber) << ") param=$";
+        write_hex(mli_msg, paramBlock, 4);
 
         // Extract and log pathnames if applicable
         std::string pathInfo =
             extract_mli_pathnames(m_mem.constBanks(), m_mli, callNumber, paramBlock, err);
         if (!pathInfo.empty()) {
-          *m_mliLog << pathInfo;
+          mli_msg << pathInfo;
         }
 
-        *m_mliLog << " result=$";
-        write_hex(*m_mliLog, err, 2);
+        mli_msg << " result=$";
+        write_hex(mli_msg, err, 2);
         if (err == 0) {
-          *m_mliLog << " OK\n";
+          mli_msg << " OK\n";
         } else {
           const char* errName = error_name(err);
           if (errName[0] != '\0') {
-            *m_mliLog << " ERROR (" << errName << ")\n";
-            // Dump stack and PC ring on UNSUPPORTED_STOR_TYPE error
-            if (err == ERR_UNSUPPORTED_STOR_TYPE) {
-              dump_stack(*m_mliLog, m_mem.constBanks(), m_r.sp);
-              dump_pc_ring(*m_mliLog, m_pcRingFrom, m_pcRingTo, m_pcRingCount, PC_RING_SIZE,
-                           m_pcRingIndex);
-            }
+            mli_msg << " ERROR (" << errName << ")\n";
           } else {
-            *m_mliLog << " ERROR\n";
+            mli_msg << " ERROR\n";
           }
         }
-        m_mliLog->flush();
+
+        // Write to both logs
+        if (m_mliLog != nullptr) {
+          *m_mliLog << mli_msg.str();
+          // Dump stack and PC ring on UNSUPPORTED_STOR_TYPE error
+          if (err == ERR_UNSUPPORTED_STOR_TYPE) {
+            dump_stack(*m_mliLog, m_mem.constBanks(), m_r.sp);
+            dump_pc_ring(*m_mliLog, m_pcRingFrom, m_pcRingTo, m_pcRingCount, PC_RING_SIZE,
+                         m_pcRingIndex);
+          }
+          m_mliLog->flush();
+        }
+        if (m_traceLog != nullptr) {
+          *m_traceLog << mli_msg.str();
+        }
       }
 
       // ProDOS convention: Carry set on error, A holds error code.
@@ -2127,8 +2182,167 @@ namespace prodos8emu {
     }
 
     m_instructionCount++;
+
+    // Trace execution in key PC ranges when trace log is enabled
+    if (m_traceLog != nullptr) {
+      uint16_t pc = m_r.pc;
+
+      // Trace system startup and editor initialization ($2000-$BFFF)
+      // Log more frequently early in execution, less frequently later
+      uint64_t log_interval = 1000;
+      if (m_instructionCount < 10000) {
+        log_interval = 100;  // Log every 100 instructions initially
+      } else if (m_instructionCount < 100000) {
+        log_interval = 1000;  // Log every 1000 after initial startup
+      } else {
+        log_interval = 10000;  // Log every 10000 after that
+      }
+
+      if (m_instructionCount % log_interval == 0) {
+        if ((pc >= 0x2000 && pc < 0xC000)) {  // System and editor/assembler code
+          *m_traceLog << "@" << m_instructionCount << " PC=$";
+          write_hex(*m_traceLog, pc, 4);
+          *m_traceLog << " A=$";
+          write_hex(*m_traceLog, m_r.a, 2);
+          *m_traceLog << " X=$";
+          write_hex(*m_traceLog, m_r.x, 2);
+          *m_traceLog << " Y=$";
+          write_hex(*m_traceLog, m_r.y, 2);
+          *m_traceLog << " SP=$";
+          write_hex(*m_traceLog, m_r.sp, 2);
+          *m_traceLog << "\n";
+        }
+      }
+
+      // Log known key entry points always
+      switch (pc) {
+        case 0x7800:  // EdAsm.Asm entry point
+          *m_traceLog << "@" << m_instructionCount << " PC=$7800 >>> ENTER EdAsm.Asm\n";
+          break;
+        case 0x7816:  // ExecAsm (Asm2.S line 17)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7816 >>> ENTER ExecAsm";
+          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xB3))
+                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x7E09:  // DoPass1 (Asm2.S line 1015)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7E09 >>> ENTER DoPass1";
+          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xB3))
+                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x7F58:  // DoPass2 (Asm2.S line 1164)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7F58 >>> ENTER DoPass2";
+          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xB3))
+                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x7E45:  // FlushObj (Asm2.S line 46)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7E45 >>> FlushObj";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x99DF:  // L99DF - actual flush routine (ASM3.S line 2640)
+          *m_traceLog << "@" << m_instructionCount << " PC=$99DF >>> L99DF (flush obj code)";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x8A82:  // L8A82 - ORG directive entry (ASM3.S line 62)
+          *m_traceLog << "@" << m_instructionCount << " PC=$8A82 >>> ORG directive";
+          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xB3))
+                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x8A9A:  // L8A9A - ORG checks GenF for disk write (ASM3.S line ~72)
+          *m_traceLog << "@" << m_instructionCount << " PC=$8A9A >>> ORG GenF check";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x8AAE:  // L8AAE - ORG opens file and clears suppression (ASM3.S line ~81)
+          *m_traceLog << "@" << m_instructionCount << " PC=$8AAE >>> ORG open file path";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
+                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0x9918:  // Open4RW (ASM3.S line 2478)
+          *m_traceLog << "@" << m_instructionCount << " PC=$9918 >>> Open4RW\n";
+          break;
+        case 0x7C98:  // PrtSetup (Asm2.S line 840)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7C98 >>> PrtSetup\n";
+          break;
+        case 0x7D07:  // ParseDCS (Asm2.S line 907)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7D07 >>> ParseDCS\n";
+          break;
+        case 0x7D2E:  // IsFileLst (Asm2.S line 926)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7D2E >>> IsFileLst\n";
+          break;
+        case 0x7D3A:  // Lst2File (Asm2.S line 938)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7D3A >>> Lst2File\n";
+          break;
+        case 0xA70B:  // XA70B - command line input (EI)
+          *m_traceLog << "@" << m_instructionCount << " PC=$A70B >>> XA70B (get user cmd)\n";
+          break;
+        case 0xB6E6:  // DoAsmbly - prepare for assembly (EI line 759)
+          *m_traceLog << "@" << m_instructionCount << " PC=$B6E6 >>> DoAsmbly (prep for ASM)\n";
+          break;
+      }
+    }
+
     uint8_t op = fetch8();
-    return execute(op);
+
+    // Track GenF ($BF), ListingF ($68), DskListF ($90), and PassNbr ($B3) changes
+    uint8_t old_genf = 0, old_listingf = 0, old_dsklistf = 0, old_passnbr = 0;
+    bool track_flags = (m_traceLog != nullptr);
+    if (track_flags) {
+      old_genf = read8(0xBF);
+      old_listingf = read8(0x68);
+      old_dsklistf = read8(0x90);
+      old_passnbr = read8(0xB3);
+    }
+
+    uint32_t cycles = execute(op);
+
+    // Log if GenF, ListingF, DskListF, or PassNbr changed
+    if (track_flags) {
+      uint8_t new_genf = read8(0xBF);
+      uint8_t new_listingf = read8(0x68);
+      uint8_t new_dsklistf = read8(0x90);
+      uint8_t new_passnbr = read8(0xB3);
+
+      if (new_passnbr != old_passnbr) {
+        *m_traceLog << "@" << m_instructionCount << " PC=$"
+                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
+                    << " PassNbr($B3): $" << std::setw(2)
+                    << static_cast<unsigned>(old_passnbr) << " -> $" << std::setw(2)
+                    << static_cast<unsigned>(new_passnbr)
+                    << " (PASS " << std::dec << static_cast<unsigned>(new_passnbr + 1) << " START)\n";
+      }
+
+      if (new_genf != old_genf) {
+        *m_traceLog << "@" << m_instructionCount << " PC=$"
+                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
+                    << " GenF($BF): $" << std::setw(2)
+                    << static_cast<unsigned>(old_genf) << " -> $" << std::setw(2)
+                    << static_cast<unsigned>(new_genf) << std::dec << "\n";
+      }
+
+      if (new_listingf != old_listingf) {
+        *m_traceLog << "@" << m_instructionCount << " PC=$"
+                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
+                    << " ListingF($68): $" << std::setw(2)
+                    << static_cast<unsigned>(old_listingf) << " -> $" << std::setw(2)
+                    << static_cast<unsigned>(new_listingf) << std::dec << "\n";
+      }
+
+      if (new_dsklistf != old_dsklistf) {
+        *m_traceLog << "@" << m_instructionCount << " PC=$"
+                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
+                    << " DskListF($90): $" << std::setw(2)
+                    << static_cast<unsigned>(old_dsklistf) << " -> $" << std::setw(2)
+                    << static_cast<unsigned>(new_dsklistf) << std::dec << "\n";
+      }
+    }
+
+    return cycles;
   }
 
 }  // namespace prodos8emu

@@ -500,18 +500,29 @@ namespace prodos8emu {
     // For directories, synthesize ProDOS directory blocks
     if (isDirectory) {
       // Extract directory name from pathname (last component)
+      // ProDOS directory headers should contain only the basename, not paths with slashes
       std::string dirName;
-      size_t      lastSlash = pathname.find_last_of('/');
-      if (lastSlash != std::string::npos && lastSlash + 1 < pathname.length()) {
-        dirName = pathname.substr(lastSlash + 1);
+
+      // Remove trailing slash if present
+      std::string cleanPath = pathname;
+      while (!cleanPath.empty() && cleanPath.back() == '/') {
+        cleanPath.pop_back();
+      }
+
+      size_t lastSlash = cleanPath.find_last_of('/');
+      if (lastSlash != std::string::npos && lastSlash + 1 < cleanPath.length()) {
+        dirName = cleanPath.substr(lastSlash + 1);
+      } else if (lastSlash == std::string::npos) {
+        dirName = cleanPath;
       } else {
-        dirName = pathname;
+        // Edge case: pathname is something like "/" alone
+        dirName = cleanPath;
       }
 
       // Determine if this is a volume directory (pathname has only one component after /)
-      // For simplicity, we treat all directories as subdirectories
       bool isVolume = false;
-      if (lastSlash == 0 && pathname.find('/', 1) == std::string::npos) {
+      if (cleanPath.length() > 0 && cleanPath[0] == '/' &&
+          cleanPath.find('/', 1) == std::string::npos) {
         // Root-level directory (/VOLUME) - treat as volume
         isVolume = true;
       }
@@ -626,17 +637,22 @@ namespace prodos8emu {
 
     uint16_t transCount = 0;
     uint8_t  retErr     = ERR_NO_ERROR;
+    bool     hitEof     = false;
 
     for (uint16_t i = 0; i < requestCount; i++) {
       if (of.mark >= eof) {
-        retErr = ERR_EOF_ENCOUNTERED;
+        hitEof = true;
         break;
       }
 
       uint8_t byte;
       ssize_t n = ::pread(of.fd, &byte, 1, static_cast<off_t>(of.mark));
       if (n <= 0) {
-        retErr = (n == 0) ? ERR_EOF_ENCOUNTERED : ERR_IO_ERROR;
+        if (n == 0) {
+          hitEof = true;
+        } else {
+          retErr = ERR_IO_ERROR;
+        }
         break;
       }
 
@@ -651,7 +667,15 @@ namespace prodos8emu {
     }
 
     write_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 6), transCount);
-    return retErr;
+    if (retErr != ERR_NO_ERROR) {
+      return retErr;
+    }
+
+    if (hitEof && transCount == 0) {
+      return ERR_EOF_ENCOUNTERED;
+    }
+
+    return ERR_NO_ERROR;
   }
 
   uint8_t MLIContext::writeCall(MemoryBanks& banks, uint16_t paramBlockAddr) {

@@ -500,6 +500,18 @@ namespace prodos8emu {
      */
     uint32_t getMarkForRefNum(uint8_t refNum) const;
 
+    /**
+     * Get the current EOF (file size) for a refnum.
+     *
+     * For regular files, returns current host file size in bytes (capped to 24-bit range).
+     * For directories, returns synthesized directory size in bytes.
+     * Returns 0 if refnum is not open or EOF cannot be determined.
+     *
+     * @param refNum File reference number (1-8)
+     * @return EOF value in bytes, or 0 on error/not-open
+     */
+    uint32_t getEofForRefNum(uint8_t refNum) const;
+
    private:
     struct OpenFile {
       int                                   fd;
