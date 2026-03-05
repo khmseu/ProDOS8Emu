@@ -423,9 +423,9 @@ namespace prodos8emu {
           result += " trans=" + std::to_string(transCount);
 
           if (mli != nullptr) {
-            uint32_t markAfter = mli->getMarkForRefNum(refNum);
+            uint32_t markAfter  = mli->getMarkForRefNum(refNum);
             uint32_t markBefore = (markAfter >= transCount) ? (markAfter - transCount) : 0;
-            uint32_t eof = mli->getEofForRefNum(refNum);
+            uint32_t eof        = mli->getEofForRefNum(refNum);
             result += " mark=$" + std::to_string(markBefore);
             result += " eof=$" + std::to_string(eof);
           }
@@ -2169,33 +2169,6 @@ namespace prodos8emu {
     if (m_traceLog != nullptr) {
       uint16_t pc = m_r.pc;
 
-      // Trace system startup and editor initialization ($2000-$BFFF)
-      // Log more frequently early in execution, less frequently later
-      uint64_t log_interval = 1000;
-      if (m_instructionCount < 10000) {
-        log_interval = 100;  // Log every 100 instructions initially
-      } else if (m_instructionCount < 100000) {
-        log_interval = 1000;  // Log every 1000 after initial startup
-      } else {
-        log_interval = 10000;  // Log every 10000 after that
-      }
-
-      if (m_instructionCount % log_interval == 0) {
-        if ((pc >= 0x2000 && pc < 0xC000)) {  // System and editor/assembler code
-          *m_traceLog << "@" << m_instructionCount << " PC=$";
-          write_hex(*m_traceLog, pc, 4);
-          *m_traceLog << " A=$";
-          write_hex(*m_traceLog, m_r.a, 2);
-          *m_traceLog << " X=$";
-          write_hex(*m_traceLog, m_r.x, 2);
-          *m_traceLog << " Y=$";
-          write_hex(*m_traceLog, m_r.y, 2);
-          *m_traceLog << " SP=$";
-          write_hex(*m_traceLog, m_r.sp, 2);
-          *m_traceLog << "\n";
-        }
-      }
-
       // Log known key entry points always
       switch (pc) {
         case 0x7800:  // EdAsm.Asm entry point
@@ -2203,47 +2176,53 @@ namespace prodos8emu {
           break;
         case 0x7816:  // ExecAsm (Asm2.S line 17)
           *m_traceLog << "@" << m_instructionCount << " PC=$7816 >>> ENTER ExecAsm";
-          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xB3))
-                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
-        case 0x7E09:  // DoPass1 (Asm2.S line 1015)
-          *m_traceLog << "@" << m_instructionCount << " PC=$7E09 >>> ENTER DoPass1";
-          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xB3))
-                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+        case 0x7E30:  // DoPass1 (Asm2.S line 1015)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7E30 >>> ENTER DoPass1";
+          *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
-        case 0x7F58:  // DoPass2 (Asm2.S line 1164)
-          *m_traceLog << "@" << m_instructionCount << " PC=$7F58 >>> ENTER DoPass2";
-          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xB3))
-                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+        case 0x7F0F:  // DoPass2 (Asm2.S line 1164)
+          *m_traceLog << "@" << m_instructionCount << " PC=$7F0F >>> ENTER DoPass2";
+          *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          break;
+        case 0xD000:  // DoPass3 (Asm1.S line 25)
+          *m_traceLog << "@" << m_instructionCount << " PC=$D000 >>> ENTER DoPass3";
+          *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
         case 0x7E45:  // FlushObj (Asm2.S line 46)
           *m_traceLog << "@" << m_instructionCount << " PC=$7E45 >>> FlushObj";
-          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
         case 0x99DF:  // L99DF - actual flush routine (ASM3.S line 2640)
           *m_traceLog << "@" << m_instructionCount << " PC=$99DF >>> L99DF (flush obj code)";
-          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
         case 0x8A82:  // L8A82 - ORG directive entry (ASM3.S line 62)
           *m_traceLog << "@" << m_instructionCount << " PC=$8A82 >>> ORG directive";
-          *m_traceLog << " PassNbr(ZP$B3)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xB3))
-                      << " GenF(ZP$BF)=$" << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
         case 0x8A9A:  // L8A9A - ORG checks GenF for disk write (ASM3.S line ~72)
           *m_traceLog << "@" << m_instructionCount << " PC=$8A9A >>> ORG GenF check";
-          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
         case 0x8AAE:  // L8AAE - ORG opens file and clears suppression (ASM3.S line ~81)
           *m_traceLog << "@" << m_instructionCount << " PC=$8AAE >>> ORG open file path";
-          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0') << std::setw(2)
-                      << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+          *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
+                      << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
           break;
         case 0x9918:  // Open4RW (ASM3.S line 2478)
           *m_traceLog << "@" << m_instructionCount << " PC=$9918 >>> Open4RW\n";
@@ -2271,56 +2250,75 @@ namespace prodos8emu {
 
     uint8_t op = fetch8();
 
-    // Track GenF ($BF), ListingF ($68), DskListF ($90), and PassNbr ($B3) changes
+    auto passnbr67_mutator_name = [](uint8_t opcode) -> const char* {
+      switch (opcode) {
+        case 0x85:  // STA zp
+        case 0x95:  // STA zp,X
+        case 0x8D:  // STA abs
+        case 0x9D:  // STA abs,X
+        case 0x99:  // STA abs,Y
+        case 0x81:  // STA (zp,X)
+        case 0x91:  // STA (zp),Y
+        case 0x92:  // STA (zp)
+          return "STA";
+        case 0xE6:  // INC zp
+        case 0xF6:  // INC zp,X
+        case 0xEE:  // INC abs
+        case 0xFE:  // INC abs,X
+          return "INC";
+        default:
+          return nullptr;
+      }
+    };
+
+    // Track GenF ($BF), ListingF ($68), DskListF ($90), and PassNbr ($67)
+    // for STA/INC-driven transitions.
     uint8_t old_genf = 0, old_listingf = 0, old_dsklistf = 0, old_passnbr = 0;
-    bool track_flags = (m_traceLog != nullptr);
+    bool    track_flags = (m_traceLog != nullptr);
     if (track_flags) {
-      old_genf = read8(0xBF);
+      old_genf     = read8(0xBF);
       old_listingf = read8(0x68);
       old_dsklistf = read8(0x90);
-      old_passnbr = read8(0xB3);
+      old_passnbr  = read8(0x67);
     }
 
     uint32_t cycles = execute(op);
 
     // Log if GenF, ListingF, DskListF, or PassNbr changed
     if (track_flags) {
-      uint8_t new_genf = read8(0xBF);
+      uint8_t new_genf     = read8(0xBF);
       uint8_t new_listingf = read8(0x68);
       uint8_t new_dsklistf = read8(0x90);
-      uint8_t new_passnbr = read8(0xB3);
+      uint8_t new_passnbr  = read8(0x67);
 
-      if (new_passnbr != old_passnbr) {
-        *m_traceLog << "@" << m_instructionCount << " PC=$"
-                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
-                    << " PassNbr($B3): $" << std::setw(2)
-                    << static_cast<unsigned>(old_passnbr) << " -> $" << std::setw(2)
-                    << static_cast<unsigned>(new_passnbr)
-                    << " (PASS " << std::dec << static_cast<unsigned>(new_passnbr + 1) << " START)\n";
+      const char* passnbr_mutator = passnbr67_mutator_name(op);
+      if (passnbr_mutator != nullptr && new_passnbr != old_passnbr) {
+        *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                    << std::setfill('0') << std::setw(4) << m_r.pc << " " << passnbr_mutator
+                    << " PassNbr($67): $" << std::setw(2) << static_cast<unsigned>(old_passnbr)
+                    << " -> $" << std::setw(2) << static_cast<unsigned>(new_passnbr) << std::dec
+                    << "\n";
       }
 
       if (new_genf != old_genf) {
-        *m_traceLog << "@" << m_instructionCount << " PC=$"
-                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
-                    << " GenF($BF): $" << std::setw(2)
-                    << static_cast<unsigned>(old_genf) << " -> $" << std::setw(2)
+        *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                    << std::setfill('0') << std::setw(4) << m_r.pc << " GenF($BF): $"
+                    << std::setw(2) << static_cast<unsigned>(old_genf) << " -> $" << std::setw(2)
                     << static_cast<unsigned>(new_genf) << std::dec << "\n";
       }
 
       if (new_listingf != old_listingf) {
-        *m_traceLog << "@" << m_instructionCount << " PC=$"
-                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
-                    << " ListingF($68): $" << std::setw(2)
-                    << static_cast<unsigned>(old_listingf) << " -> $" << std::setw(2)
-                    << static_cast<unsigned>(new_listingf) << std::dec << "\n";
+        *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                    << std::setfill('0') << std::setw(4) << m_r.pc << " ListingF($68): $"
+                    << std::setw(2) << static_cast<unsigned>(old_listingf) << " -> $"
+                    << std::setw(2) << static_cast<unsigned>(new_listingf) << std::dec << "\n";
       }
 
       if (new_dsklistf != old_dsklistf) {
-        *m_traceLog << "@" << m_instructionCount << " PC=$"
-                    << std::hex << std::uppercase << std::setfill('0') << std::setw(4) << m_r.pc
-                    << " DskListF($90): $" << std::setw(2)
-                    << static_cast<unsigned>(old_dsklistf) << " -> $" << std::setw(2)
-                    << static_cast<unsigned>(new_dsklistf) << std::dec << "\n";
+        *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                    << std::setfill('0') << std::setw(4) << m_r.pc << " DskListF($90): $"
+                    << std::setw(2) << static_cast<unsigned>(old_dsklistf) << " -> $"
+                    << std::setw(2) << static_cast<unsigned>(new_dsklistf) << std::dec << "\n";
       }
     }
 
