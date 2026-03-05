@@ -142,6 +142,9 @@ namespace prodos8emu {
     uint32_t handle_mli_jsr_trap();
     uint32_t jsr_abs(uint16_t target);
 
+    // Opcode-family helpers
+    bool execute_control_flow_opcode(uint8_t op, uint32_t& cycles);
+
     // Execute opcode
     uint32_t execute(uint8_t opcode);
   };

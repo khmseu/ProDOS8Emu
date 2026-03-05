@@ -1060,6 +1060,177 @@ namespace prodos8emu {
     return 6;
   }
 
+  bool CPU65C02::execute_control_flow_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      case 0x00: {  // BRK
+        // BRK is treated as a 2-byte instruction; PC is incremented once more.
+        uint16_t brkPC = static_cast<uint16_t>(m_r.pc - 1);  // BRK instruction address
+        m_r.pc         = static_cast<uint16_t>(m_r.pc + 1);
+        push16(m_r.pc);
+        push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
+        setFlag(FLAG_I, true);
+        setFlag(FLAG_D, false);  // 65C02 clears D on interrupt
+        uint16_t irqVector = read16(VEC_IRQ);
+        m_r.pc             = irqVector;
+        recordPCChange(brkPC, irqVector);
+        cycles = 7;
+        return true;
+      }
+
+      case 0xEA:  // NOP
+        cycles = 2;
+        return true;
+
+      case 0xDB:  // STP
+        m_stopped = true;
+        cycles    = 3;
+        return true;
+
+      case 0xCB:  // WAI
+        m_waiting = true;
+        cycles    = 3;
+        return true;
+
+      case 0x4C: {                                            // JMP abs
+        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+        uint16_t target = fetch16();
+        m_r.pc          = target;
+        recordPCChange(jmpPC, target);
+        cycles = 3;
+        return true;
+      }
+      case 0x6C: {                                            // JMP (abs)
+        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+        uint16_t ptr    = fetch16();
+        uint16_t target = read16(ptr);
+        if (ptr == COUT_VECTOR_PTR && m_coutLog != nullptr) {
+          uint8_t ch = static_cast<uint8_t>(m_r.a & 0x7F);
+
+          // ProDOS convention: 0x0D (CR) -> output newline
+          if (ch == 0x0D) {
+            *m_coutLog << '\n';
+          }
+          // Printable ASCII: output as-is
+          else if (ch >= 0x20 && ch <= 0x7E) {
+            *m_coutLog << static_cast<char>(ch);
+          }
+          // Control characters: output C-style escape sequences
+          else {
+            switch (ch) {
+              case 0x00:
+                *m_coutLog << "\\0";
+                break;
+              case 0x07:
+                *m_coutLog << "\\a";
+                break;
+              case 0x08:
+                *m_coutLog << "\\b";
+                break;
+              case 0x09:
+                *m_coutLog << "\\t";
+                break;
+              case 0x0A:
+                *m_coutLog << "\\n";
+                break;
+              case 0x0B:
+                *m_coutLog << "\\v";
+                break;
+              case 0x0C:
+                *m_coutLog << "\\f";
+                break;
+              case 0x1B:
+                *m_coutLog << "\\e";
+                break;
+              case 0x7F:
+                *m_coutLog << "\\x7f";
+                break;
+              default:
+                // Other control characters: use \xHH notation
+                *m_coutLog << "\\x";
+                write_hex(*m_coutLog, ch, 2);
+                break;
+            }
+          }
+          m_coutLog->flush();
+        }
+        m_r.pc = target;
+        recordPCChange(jmpPC, target);
+        cycles = 5;
+        return true;
+      }
+      case 0x7C: {                                            // JMP (abs,X)
+        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+        uint16_t target = addr_absind_x();
+        m_r.pc          = target;
+        recordPCChange(jmpPC, target);
+        cycles = 6;
+        return true;
+      }
+      case 0x20: {  // JSR abs
+        uint16_t target = fetch16();
+        cycles          = jsr_abs(target);
+        return true;
+      }
+      case 0x60: {                                                // RTS
+        uint16_t rtsPC      = static_cast<uint16_t>(m_r.pc - 1);  // RTS instruction address
+        uint16_t returnAddr = static_cast<uint16_t>(pull16() + 1);
+        m_r.pc              = returnAddr;
+        recordPCChange(rtsPC, returnAddr);
+        cycles = 6;
+        return true;
+      }
+      case 0x40: {                                              // RTI
+        uint16_t rtiPC    = static_cast<uint16_t>(m_r.pc - 1);  // RTI instruction address
+        m_r.p             = static_cast<uint8_t>(pull8() | FLAG_U);
+        uint16_t returnPC = pull16();
+        m_r.pc            = returnPC;
+        recordPCChange(rtiPC, returnPC);
+        cycles = 6;
+        return true;
+      }
+
+      case 0x80:  // BRA
+        branch(true);
+        cycles = 3;
+        return true;
+      case 0x10:
+        branch(!getFlag(FLAG_N));
+        cycles = 2;
+        return true;
+      case 0x30:
+        branch(getFlag(FLAG_N));
+        cycles = 2;
+        return true;
+      case 0x50:
+        branch(!getFlag(FLAG_V));
+        cycles = 2;
+        return true;
+      case 0x70:
+        branch(getFlag(FLAG_V));
+        cycles = 2;
+        return true;
+      case 0x90:
+        branch(!getFlag(FLAG_C));
+        cycles = 2;
+        return true;
+      case 0xB0:
+        branch(getFlag(FLAG_C));
+        cycles = 2;
+        return true;
+      case 0xD0:
+        branch(!getFlag(FLAG_Z));
+        cycles = 2;
+        return true;
+      case 0xF0:
+        branch(getFlag(FLAG_Z));
+        cycles = 2;
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
   uint32_t CPU65C02::execute(uint8_t op) {
     // Rockwell/WDC 65C02 bit manipulation/branch opcodes.
     // RMBn: 07,17,27,37,47,57,67,77 (clear bit n in zp)
@@ -1101,34 +1272,14 @@ namespace prodos8emu {
       return 5;
     }
 
+    uint32_t controlCycles = 0;
+    if (execute_control_flow_opcode(op, controlCycles)) {
+      return controlCycles;
+    }
+
     // Default for reserved/unknown opcodes: treat as 1-byte NOP.
     // Many 65C02 implementations treat undefined opcodes as NOP.
     switch (op) {
-      case 0x00: {  // BRK
-        // BRK is treated as a 2-byte instruction; PC is incremented once more.
-        uint16_t brkPC = static_cast<uint16_t>(m_r.pc - 1);  // BRK instruction address
-        m_r.pc         = static_cast<uint16_t>(m_r.pc + 1);
-        push16(m_r.pc);
-        push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
-        setFlag(FLAG_I, true);
-        setFlag(FLAG_D, false);  // 65C02 clears D on interrupt
-        uint16_t irqVector = read16(VEC_IRQ);
-        m_r.pc             = irqVector;
-        recordPCChange(brkPC, irqVector);
-        return 7;
-      }
-
-      case 0xEA:  // NOP
-        return 2;
-
-      case 0xDB:  // STP
-        m_stopped = true;
-        return 3;
-
-      case 0xCB:  // WAI
-        m_waiting = true;
-        return 3;
-
       // Flag operations
       case 0x18:
         setFlag(FLAG_C, false);
@@ -1233,128 +1384,6 @@ namespace prodos8emu {
         m_r.y = pull8();
         setNZ(m_r.y);
         return 4;
-
-      // Jumps/returns
-      case 0x4C: {                                            // JMP abs
-        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
-        uint16_t target = fetch16();
-        m_r.pc          = target;
-        recordPCChange(jmpPC, target);
-        return 3;
-      }
-      case 0x6C: {                                            // JMP (abs)
-        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
-        uint16_t ptr    = fetch16();
-        uint16_t target = read16(ptr);
-        if (ptr == COUT_VECTOR_PTR && m_coutLog != nullptr) {
-          uint8_t ch = static_cast<uint8_t>(m_r.a & 0x7F);
-
-          // ProDOS convention: 0x0D (CR) -> output newline
-          if (ch == 0x0D) {
-            *m_coutLog << '\n';
-          }
-          // Printable ASCII: output as-is
-          else if (ch >= 0x20 && ch <= 0x7E) {
-            *m_coutLog << static_cast<char>(ch);
-          }
-          // Control characters: output C-style escape sequences
-          else {
-            switch (ch) {
-              case 0x00:
-                *m_coutLog << "\\0";
-                break;
-              case 0x07:
-                *m_coutLog << "\\a";
-                break;
-              case 0x08:
-                *m_coutLog << "\\b";
-                break;
-              case 0x09:
-                *m_coutLog << "\\t";
-                break;
-              case 0x0A:
-                *m_coutLog << "\\n";
-                break;
-              case 0x0B:
-                *m_coutLog << "\\v";
-                break;
-              case 0x0C:
-                *m_coutLog << "\\f";
-                break;
-              case 0x1B:
-                *m_coutLog << "\\e";
-                break;
-              case 0x7F:
-                *m_coutLog << "\\x7f";
-                break;
-              default:
-                // Other control characters: use \xHH notation
-                *m_coutLog << "\\x";
-                write_hex(*m_coutLog, ch, 2);
-                break;
-            }
-          }
-          m_coutLog->flush();
-        }
-        m_r.pc = target;
-        recordPCChange(jmpPC, target);
-        return 5;
-      }
-      case 0x7C: {                                            // JMP (abs,X)
-        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
-        uint16_t target = addr_absind_x();
-        m_r.pc          = target;
-        recordPCChange(jmpPC, target);
-        return 6;
-      }
-      case 0x20: {  // JSR abs
-        uint16_t target = fetch16();
-        return jsr_abs(target);
-      }
-      case 0x60: {                                                // RTS
-        uint16_t rtsPC      = static_cast<uint16_t>(m_r.pc - 1);  // RTS instruction address
-        uint16_t returnAddr = static_cast<uint16_t>(pull16() + 1);
-        m_r.pc              = returnAddr;
-        recordPCChange(rtsPC, returnAddr);
-        return 6;
-      }
-      case 0x40: {                                              // RTI
-        uint16_t rtiPC    = static_cast<uint16_t>(m_r.pc - 1);  // RTI instruction address
-        m_r.p             = static_cast<uint8_t>(pull8() | FLAG_U);
-        uint16_t returnPC = pull16();
-        m_r.pc            = returnPC;
-        recordPCChange(rtiPC, returnPC);
-        return 6;
-      }
-
-      // Branches
-      case 0x80:  // BRA
-        branch(true);
-        return 3;
-      case 0x10:
-        branch(!getFlag(FLAG_N));
-        return 2;
-      case 0x30:
-        branch(getFlag(FLAG_N));
-        return 2;
-      case 0x50:
-        branch(!getFlag(FLAG_V));
-        return 2;
-      case 0x70:
-        branch(getFlag(FLAG_V));
-        return 2;
-      case 0x90:
-        branch(!getFlag(FLAG_C));
-        return 2;
-      case 0xB0:
-        branch(getFlag(FLAG_C));
-        return 2;
-      case 0xD0:
-        branch(!getFlag(FLAG_Z));
-        return 2;
-      case 0xF0:
-        branch(getFlag(FLAG_Z));
-        return 2;
 
       // Loads
       case 0xA9:  // LDA #imm

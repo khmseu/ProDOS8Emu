@@ -1244,6 +1244,289 @@ int main() {
     }
   }
 
+  // Test 16: branch_page_cross_behavior_preserved
+  {
+    std::cout << "Test 16: branch_page_cross_behavior_preserved\n";
+
+    bool testFailed = false;
+
+    {
+      // BNE not taken: PC advances to next instruction, cycles remain at opcode baseline.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x04F0;
+      writeProgram(mem, start,
+                   {
+                       0xD0,
+                       0x05,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+      cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x02);  // Z=1 => BNE not taken
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 2) {
+        std::cerr << "FAIL: Expected BNE not-taken cycles=2, got " << cycles << "\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+        std::cerr << "FAIL: Expected BNE not-taken PC=start+2, got 0x" << std::hex << cpu.regs().pc
+                  << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // BNE taken with page cross: branch target crosses from $04xx to $05xx.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x04FD;
+      writeProgram(mem, start,
+                   {
+                       0xD0,
+                       0x01,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+      cpu.regs().p = static_cast<uint8_t>(cpu.regs().p & ~0x02);  // Z=0 => BNE taken
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 2) {
+        std::cerr << "FAIL: Expected BNE taken page-cross cycles=2, got " << cycles << "\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.regs().pc != 0x0500) {
+        std::cerr << "FAIL: Expected BNE taken page-cross target PC=$0500, got 0x" << std::hex
+                  << cpu.regs().pc << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // BRA unconditional branch with page cross keeps BRA cycle contract.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x04FD;
+      writeProgram(mem, start,
+                   {
+                       0x80,
+                       0x01,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 3) {
+        std::cerr << "FAIL: Expected BRA page-cross cycles=3, got " << cycles << "\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.regs().pc != 0x0500) {
+        std::cerr << "FAIL: Expected BRA page-cross target PC=$0500, got 0x" << std::hex
+                  << cpu.regs().pc << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: branch_page_cross_behavior_preserved\n";
+    }
+  }
+
+  // Test 17: brk_rti_stack_and_flags_behavior_preserved
+  {
+    std::cout << "Test 17: brk_rti_stack_and_flags_behavior_preserved\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start      = 0x0600;
+    const uint16_t irqHandler = 0x0700;
+
+    writeProgram(mem, start,
+                 {
+                     0x00,
+                     0xEA,
+                 });
+    writeProgram(mem, irqHandler,
+                 {
+                     0x40,
+                 });
+
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFE, irqHandler);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.reset();
+
+    cpu.regs().p = 0x29;  // C=1,D=1,U=1
+
+    uint32_t brkCycles = cpu.step();
+
+    uint8_t stackedStatus = prodos8emu::read_u8(mem.constBanks(), 0x01FD);
+    uint8_t stackedPCLo   = prodos8emu::read_u8(mem.constBanks(), 0x01FE);
+    uint8_t stackedPCHi   = prodos8emu::read_u8(mem.constBanks(), 0x01FF);
+
+    bool brkI = (cpu.regs().p & 0x04) != 0;
+    bool brkD = (cpu.regs().p & 0x08) != 0;
+
+    uint32_t rtiCycles = cpu.step();
+
+    uint8_t expectedStackedStatus = static_cast<uint8_t>(0x29 | 0x10 | 0x20);
+    uint8_t expectedRestoredP     = static_cast<uint8_t>(expectedStackedStatus | 0x20);
+
+    if (brkCycles != 7) {
+      std::cerr << "FAIL: Expected BRK cycles=7, got " << brkCycles << "\n";
+      failures++;
+    } else if (cpu.regs().sp != 0xFF) {
+      std::cerr << "FAIL: Expected SP restored to $FF after RTI, got 0x" << std::hex
+                << static_cast<int>(cpu.regs().sp) << std::dec << "\n";
+      failures++;
+    } else if (stackedPCLo != 0x02 || stackedPCHi != 0x06) {
+      std::cerr << "FAIL: Expected BRK stack return PC bytes $02 $06, got $" << std::hex
+                << static_cast<int>(stackedPCLo) << " $" << static_cast<int>(stackedPCHi)
+                << std::dec << "\n";
+      failures++;
+    } else if (stackedStatus != expectedStackedStatus) {
+      std::cerr << "FAIL: Expected BRK stacked status $" << std::hex
+                << static_cast<int>(expectedStackedStatus) << ", got $"
+                << static_cast<int>(stackedStatus) << std::dec << "\n";
+      failures++;
+    } else if (!brkI) {
+      std::cerr << "FAIL: Expected BRK to set I flag\n";
+      failures++;
+    } else if (brkD) {
+      std::cerr << "FAIL: Expected BRK to clear D flag\n";
+      failures++;
+    } else if (rtiCycles != 6) {
+      std::cerr << "FAIL: Expected RTI cycles=6, got " << rtiCycles << "\n";
+      failures++;
+    } else if (cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: Expected RTI to restore PC to BRK+2, got 0x" << std::hex << cpu.regs().pc
+                << std::dec << "\n";
+      failures++;
+    } else if (cpu.regs().p != expectedRestoredP) {
+      std::cerr << "FAIL: Expected RTI to restore P=$" << std::hex
+                << static_cast<int>(expectedRestoredP) << ", got $"
+                << static_cast<int>(cpu.regs().p) << std::dec << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: brk_rti_stack_and_flags_behavior_preserved\n";
+    }
+  }
+
+  // Test 18: wai_stp_control_flow_preserved
+  {
+    std::cout << "Test 18: wai_stp_control_flow_preserved\n";
+
+    bool testFailed = false;
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0800;
+      writeProgram(mem, start,
+                   {
+                       0xCB,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t waiCycles  = cpu.step();
+      uint16_t pcAfterWai = cpu.regs().pc;
+      uint32_t waitCycles = cpu.step();
+
+      if (waiCycles != 3) {
+        std::cerr << "FAIL: Expected WAI cycles=3, got " << waiCycles << "\n";
+        failures++;
+        testFailed = true;
+      } else if (!cpu.isWaiting()) {
+        std::cerr << "FAIL: Expected CPU waiting state after WAI\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.isStopped()) {
+        std::cerr << "FAIL: Expected CPU not stopped after WAI\n";
+        failures++;
+        testFailed = true;
+      } else if (waitCycles != 0) {
+        std::cerr << "FAIL: Expected step() to return 0 while waiting, got " << waitCycles << "\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.regs().pc != pcAfterWai) {
+        std::cerr << "FAIL: Expected PC unchanged while waiting\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0810;
+      writeProgram(mem, start,
+                   {
+                       0xDB,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t stpCycles     = cpu.step();
+      uint16_t pcAfterStp    = cpu.regs().pc;
+      uint32_t stoppedCycles = cpu.step();
+
+      if (stpCycles != 3) {
+        std::cerr << "FAIL: Expected STP cycles=3, got " << stpCycles << "\n";
+        failures++;
+        testFailed = true;
+      } else if (!cpu.isStopped()) {
+        std::cerr << "FAIL: Expected CPU stopped state after STP\n";
+        failures++;
+        testFailed = true;
+      } else if (stoppedCycles != 0) {
+        std::cerr << "FAIL: Expected step() to return 0 while stopped, got " << stoppedCycles
+                  << "\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.regs().pc != pcAfterStp) {
+        std::cerr << "FAIL: Expected PC unchanged while stopped\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: wai_stp_control_flow_preserved\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {
