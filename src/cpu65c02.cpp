@@ -1326,6 +1326,369 @@ namespace prodos8emu {
     }
   }
 
+  bool CPU65C02::execute_load_store_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      // Loads
+      case 0xA9:  // LDA #imm
+        m_r.a = fetch8();
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+      case 0xA5:
+        m_r.a = read8(addr_zp());
+        setNZ(m_r.a);
+        cycles = 3;
+        return true;
+      case 0xB5:
+        m_r.a = read8(addr_zpx());
+        setNZ(m_r.a);
+        cycles = 4;
+        return true;
+      case 0xAD:
+        m_r.a = read8(addr_abs());
+        setNZ(m_r.a);
+        cycles = 4;
+        return true;
+      case 0xBD: {
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.a       = read8_pageCrossed(a, pc);
+        setNZ(m_r.a);
+        cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+        return true;
+      }
+      case 0xB9: {
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.a       = read8_pageCrossed(a, pc);
+        setNZ(m_r.a);
+        cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+        return true;
+      }
+      case 0xA1:
+        m_r.a = read8(addr_indx());
+        setNZ(m_r.a);
+        cycles = 6;
+        return true;
+      case 0xB1: {
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        m_r.a       = read8_pageCrossed(a, pc);
+        setNZ(m_r.a);
+        cycles = static_cast<uint32_t>(5 + (pc ? 1 : 0));
+        return true;
+      }
+      case 0xB2:  // LDA (zp)
+        m_r.a = read8(addr_zpind());
+        setNZ(m_r.a);
+        cycles = 5;
+        return true;
+
+      case 0xA2:  // LDX #imm
+        m_r.x = fetch8();
+        setNZ(m_r.x);
+        cycles = 2;
+        return true;
+      case 0xA6:
+        m_r.x = read8(addr_zp());
+        setNZ(m_r.x);
+        cycles = 3;
+        return true;
+      case 0xB6:
+        m_r.x = read8(addr_zpy());
+        setNZ(m_r.x);
+        cycles = 4;
+        return true;
+      case 0xAE:
+        m_r.x = read8(addr_abs());
+        setNZ(m_r.x);
+        cycles = 4;
+        return true;
+      case 0xBE: {
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        m_r.x       = read8_pageCrossed(a, pc);
+        setNZ(m_r.x);
+        cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+        return true;
+      }
+
+      case 0xA0:  // LDY #imm
+        m_r.y = fetch8();
+        setNZ(m_r.y);
+        cycles = 2;
+        return true;
+      case 0xA4:
+        m_r.y = read8(addr_zp());
+        setNZ(m_r.y);
+        cycles = 3;
+        return true;
+      case 0xB4:
+        m_r.y = read8(addr_zpx());
+        setNZ(m_r.y);
+        cycles = 4;
+        return true;
+      case 0xAC:
+        m_r.y = read8(addr_abs());
+        setNZ(m_r.y);
+        cycles = 4;
+        return true;
+      case 0xBC: {
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        m_r.y       = read8_pageCrossed(a, pc);
+        setNZ(m_r.y);
+        cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+        return true;
+      }
+
+      // Stores
+      case 0x85:
+        write8(addr_zp(), m_r.a);
+        cycles = 3;
+        return true;
+      case 0x95:
+        write8(addr_zpx(), m_r.a);
+        cycles = 4;
+        return true;
+      case 0x8D:
+        write8(addr_abs(), m_r.a);
+        cycles = 4;
+        return true;
+      case 0x9D: {
+        bool pc = false;
+        write8(addr_absx(pc), m_r.a);
+        cycles = 5;
+        return true;
+      }
+      case 0x99: {
+        bool pc = false;
+        write8(addr_absy(pc), m_r.a);
+        cycles = 5;
+        return true;
+      }
+      case 0x81:
+        write8(addr_indx(), m_r.a);
+        cycles = 6;
+        return true;
+      case 0x91: {
+        bool pc = false;
+        write8(addr_indy(pc), m_r.a);
+        cycles = 6;
+        return true;
+      }
+      case 0x92:  // STA (zp)
+        write8(addr_zpind(), m_r.a);
+        cycles = 5;
+        return true;
+
+      case 0x86:
+        write8(addr_zp(), m_r.x);
+        cycles = 3;
+        return true;
+      case 0x96:
+        write8(addr_zpy(), m_r.x);
+        cycles = 4;
+        return true;
+      case 0x8E:
+        write8(addr_abs(), m_r.x);
+        cycles = 4;
+        return true;
+
+      case 0x84:
+        write8(addr_zp(), m_r.y);
+        cycles = 3;
+        return true;
+      case 0x94:
+        write8(addr_zpx(), m_r.y);
+        cycles = 4;
+        return true;
+      case 0x8C:
+        write8(addr_abs(), m_r.y);
+        cycles = 4;
+        return true;
+
+      // STZ
+      case 0x64:
+        write8(addr_zp(), 0);
+        cycles = 3;
+        return true;
+      case 0x74:
+        write8(addr_zpx(), 0);
+        cycles = 4;
+        return true;
+      case 0x9C:
+        write8(addr_abs(), 0);
+        cycles = 4;
+        return true;
+      case 0x9E: {
+        bool pc = false;
+        write8(addr_absx(pc), 0);
+        cycles = 5;
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_bit_family_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      case 0x89: {  // BIT #imm (65C02)
+        uint8_t v = fetch8();
+        setFlag(FLAG_Z, (m_r.a & v) == 0);
+        cycles = 2;
+        return true;
+      }
+      case 0x24: {
+        uint8_t v = read8(addr_zp());
+        setFlag(FLAG_Z, (m_r.a & v) == 0);
+        setFlag(FLAG_N, (v & 0x80) != 0);
+        setFlag(FLAG_V, (v & 0x40) != 0);
+        cycles = 3;
+        return true;
+      }
+      case 0x2C: {
+        uint8_t v = read8(addr_abs());
+        setFlag(FLAG_Z, (m_r.a & v) == 0);
+        setFlag(FLAG_N, (v & 0x80) != 0);
+        setFlag(FLAG_V, (v & 0x40) != 0);
+        cycles = 4;
+        return true;
+      }
+      case 0x34: {
+        uint8_t v = read8(addr_zpx());
+        setFlag(FLAG_Z, (m_r.a & v) == 0);
+        setFlag(FLAG_N, (v & 0x80) != 0);
+        setFlag(FLAG_V, (v & 0x40) != 0);
+        cycles = 4;
+        return true;
+      }
+      case 0x3C: {
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        uint8_t  v  = read8_pageCrossed(a, pc);
+        setFlag(FLAG_Z, (m_r.a & v) == 0);
+        setFlag(FLAG_N, (v & 0x80) != 0);
+        setFlag(FLAG_V, (v & 0x40) != 0);
+        cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+        return true;
+      }
+
+      // TSB/TRB
+      case 0x04:
+        tsb(addr_zp());
+        cycles = 5;
+        return true;
+      case 0x0C:
+        tsb(addr_abs());
+        cycles = 6;
+        return true;
+      case 0x14:
+        trb(addr_zp());
+        cycles = 5;
+        return true;
+      case 0x1C:
+        trb(addr_abs());
+        cycles = 6;
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_nop_variant_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      // Unused opcodes on WDC 65C02: documented as NOP variants.
+      // See: 6502.org 65C02 opcodes, section "Unused opcodes (undocumented NOPs)".
+      // 1-byte, 1-cycle NOPs (no operand)
+      case 0x03:
+      case 0x0B:
+      case 0x13:
+      case 0x1B:
+      case 0x23:
+      case 0x2B:
+      case 0x33:
+      case 0x3B:
+      case 0x43:
+      case 0x4B:
+      case 0x53:
+      case 0x5B:
+      case 0x63:
+      case 0x6B:
+      case 0x73:
+      case 0x7B:
+      case 0x83:
+      case 0x8B:
+      case 0x93:
+      case 0x9B:
+      case 0xA3:
+      case 0xAB:
+      case 0xB3:
+      case 0xBB:
+      case 0xC3:
+      case 0xD3:
+      case 0xE3:
+      case 0xEB:
+      case 0xF3:
+      case 0xFB:
+        cycles = 1;
+        return true;
+
+      // 2-byte, 2-cycle NOP immediate
+      case 0x02:
+      case 0x22:
+      case 0x42:
+      case 0x62:
+      case 0x82:
+      case 0xC2:
+      case 0xE2:
+        (void)fetch8();
+        cycles = 2;
+        return true;
+
+      // 2-byte NOP with zp read
+      case 0x44: {
+        uint8_t zp = fetch8();
+        (void)read8(zp);
+        cycles = 3;
+        return true;
+      }
+
+      // 2-byte NOP with zp,X read
+      case 0x54:
+      case 0xD4:
+      case 0xF4: {
+        uint8_t zp = fetch8();
+        (void)read8(static_cast<uint8_t>(zp + m_r.x));
+        cycles = 4;
+        return true;
+      }
+
+      // 3-byte NOP with absolute read
+      case 0xDC:
+      case 0xFC: {
+        uint16_t a = fetch16();
+        (void)read8(a);
+        cycles = 4;
+        return true;
+      }
+
+      // 3-byte NOP with unusual read behavior (treat as absolute read for now)
+      case 0x5C: {
+        uint16_t a = fetch16();
+        (void)read8(a);
+        cycles = 8;
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  }
+
   bool CPU65C02::read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles) {
     switch (mode) {
       case 0x09:
@@ -1555,6 +1918,15 @@ namespace prodos8emu {
     if (execute_accumulator_opcode(op, lowRiskCycles)) {
       return lowRiskCycles;
     }
+    if (execute_load_store_opcode(op, lowRiskCycles)) {
+      return lowRiskCycles;
+    }
+    if (execute_bit_family_opcode(op, lowRiskCycles)) {
+      return lowRiskCycles;
+    }
+    if (execute_nop_variant_opcode(op, lowRiskCycles)) {
+      return lowRiskCycles;
+    }
 
     // Default for reserved/unknown opcodes: treat as 1-byte NOP.
     // Many 65C02 implementations treat undefined opcodes as NOP.
@@ -1576,169 +1948,6 @@ namespace prodos8emu {
         m_r.y = static_cast<uint8_t>(m_r.y - 1);
         setNZ(m_r.y);
         return 2;
-
-      // Loads
-      case 0xA9:  // LDA #imm
-        m_r.a = fetch8();
-        setNZ(m_r.a);
-        return 2;
-      case 0xA5:
-        m_r.a = read8(addr_zp());
-        setNZ(m_r.a);
-        return 3;
-      case 0xB5:
-        m_r.a = read8(addr_zpx());
-        setNZ(m_r.a);
-        return 4;
-      case 0xAD:
-        m_r.a = read8(addr_abs());
-        setNZ(m_r.a);
-        return 4;
-      case 0xBD: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        m_r.a       = read8_pageCrossed(a, pc);
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0xB9: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        m_r.a       = read8_pageCrossed(a, pc);
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0xA1:
-        m_r.a = read8(addr_indx());
-        setNZ(m_r.a);
-        return 6;
-      case 0xB1: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        m_r.a       = read8_pageCrossed(a, pc);
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(5 + (pc ? 1 : 0));
-      }
-      case 0xB2:  // LDA (zp)
-        m_r.a = read8(addr_zpind());
-        setNZ(m_r.a);
-        return 5;
-
-      case 0xA2:  // LDX #imm
-        m_r.x = fetch8();
-        setNZ(m_r.x);
-        return 2;
-      case 0xA6:
-        m_r.x = read8(addr_zp());
-        setNZ(m_r.x);
-        return 3;
-      case 0xB6:
-        m_r.x = read8(addr_zpy());
-        setNZ(m_r.x);
-        return 4;
-      case 0xAE:
-        m_r.x = read8(addr_abs());
-        setNZ(m_r.x);
-        return 4;
-      case 0xBE: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        m_r.x       = read8_pageCrossed(a, pc);
-        setNZ(m_r.x);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-
-      case 0xA0:  // LDY #imm
-        m_r.y = fetch8();
-        setNZ(m_r.y);
-        return 2;
-      case 0xA4:
-        m_r.y = read8(addr_zp());
-        setNZ(m_r.y);
-        return 3;
-      case 0xB4:
-        m_r.y = read8(addr_zpx());
-        setNZ(m_r.y);
-        return 4;
-      case 0xAC:
-        m_r.y = read8(addr_abs());
-        setNZ(m_r.y);
-        return 4;
-      case 0xBC: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        m_r.y       = read8_pageCrossed(a, pc);
-        setNZ(m_r.y);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-
-      // Stores
-      case 0x85:
-        write8(addr_zp(), m_r.a);
-        return 3;
-      case 0x95:
-        write8(addr_zpx(), m_r.a);
-        return 4;
-      case 0x8D:
-        write8(addr_abs(), m_r.a);
-        return 4;
-      case 0x9D: {
-        bool pc = false;
-        write8(addr_absx(pc), m_r.a);
-        return 5;
-      }
-      case 0x99: {
-        bool pc = false;
-        write8(addr_absy(pc), m_r.a);
-        return 5;
-      }
-      case 0x81:
-        write8(addr_indx(), m_r.a);
-        return 6;
-      case 0x91: {
-        bool pc = false;
-        write8(addr_indy(pc), m_r.a);
-        return 6;
-      }
-      case 0x92:  // STA (zp)
-        write8(addr_zpind(), m_r.a);
-        return 5;
-
-      case 0x86:
-        write8(addr_zp(), m_r.x);
-        return 3;
-      case 0x96:
-        write8(addr_zpy(), m_r.x);
-        return 4;
-      case 0x8E:
-        write8(addr_abs(), m_r.x);
-        return 4;
-
-      case 0x84:
-        write8(addr_zp(), m_r.y);
-        return 3;
-      case 0x94:
-        write8(addr_zpx(), m_r.y);
-        return 4;
-      case 0x8C:
-        write8(addr_abs(), m_r.y);
-        return 4;
-
-      // STZ
-      case 0x64:
-        write8(addr_zp(), 0);
-        return 3;
-      case 0x74:
-        write8(addr_zpx(), 0);
-        return 4;
-      case 0x9C:
-        write8(addr_abs(), 0);
-        return 4;
-      case 0x9E: {
-        bool pc = false;
-        write8(addr_absx(pc), 0);
-        return 5;
-      }
 
       // Logical/ALU families (ORA/AND/EOR/ADC/SBC/CMP A)
       case 0x09:
@@ -1842,134 +2051,6 @@ namespace prodos8emu {
       case 0x6E:
       case 0x7E:
         return execute_rmw_family_opcode(op);
-
-      // BIT
-      case 0x89: {  // BIT #imm (65C02)
-        uint8_t v = fetch8();
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        return 2;
-      }
-      case 0x24: {
-        uint8_t v = read8(addr_zp());
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        return 3;
-      }
-      case 0x2C: {
-        uint8_t v = read8(addr_abs());
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        return 4;
-      }
-      case 0x34: {
-        uint8_t v = read8(addr_zpx());
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        return 4;
-      }
-      case 0x3C: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = read8_pageCrossed(a, pc);
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-
-      // TSB/TRB
-      case 0x04:
-        tsb(addr_zp());
-        return 5;
-      case 0x0C:
-        tsb(addr_abs());
-        return 6;
-      case 0x14:
-        trb(addr_zp());
-        return 5;
-      case 0x1C:
-        trb(addr_abs());
-        return 6;
-
-      // Unused opcodes on WDC 65C02: documented as NOP variants.
-      // See: 6502.org 65C02 opcodes, section "Unused opcodes (undocumented NOPs)".
-      // 1-byte, 1-cycle NOPs (no operand)
-      case 0x03:
-      case 0x0B:
-      case 0x13:
-      case 0x1B:
-      case 0x23:
-      case 0x2B:
-      case 0x33:
-      case 0x3B:
-      case 0x43:
-      case 0x4B:
-      case 0x53:
-      case 0x5B:
-      case 0x63:
-      case 0x6B:
-      case 0x73:
-      case 0x7B:
-      case 0x83:
-      case 0x8B:
-      case 0x93:
-      case 0x9B:
-      case 0xA3:
-      case 0xAB:
-      case 0xB3:
-      case 0xBB:
-      case 0xC3:
-      case 0xD3:
-      case 0xE3:
-      case 0xEB:
-      case 0xF3:
-      case 0xFB:
-        return 1;
-
-      // 2-byte, 2-cycle NOP immediate
-      case 0x02:
-      case 0x22:
-      case 0x42:
-      case 0x62:
-      case 0x82:
-      case 0xC2:
-      case 0xE2:
-        (void)fetch8();
-        return 2;
-
-      // 2-byte NOP with zp read
-      case 0x44: {
-        uint8_t zp = fetch8();
-        (void)read8(zp);
-        return 3;
-      }
-
-      // 2-byte NOP with zp,X read
-      case 0x54:
-      case 0xD4:
-      case 0xF4: {
-        uint8_t zp = fetch8();
-        (void)read8(static_cast<uint8_t>(zp + m_r.x));
-        return 4;
-      }
-
-      // 3-byte NOP with absolute read
-      case 0xDC:
-      case 0xFC: {
-        uint16_t a = fetch16();
-        (void)read8(a);
-        return 4;
-      }
-
-      // 3-byte NOP with unusual read behavior (treat as absolute read for now)
-      case 0x5C: {
-        uint16_t a = fetch16();
-        (void)read8(a);
-        return 8;
-      }
 
       default:
         return 2;

@@ -3815,6 +3815,669 @@ int main() {
     }
   }
 
+  // Test 35: load_store_addressing_cycle_matrix_preserved
+  {
+    std::cout << "Test 35: load_store_addressing_cycle_matrix_preserved\n";
+
+    bool testFailed = false;
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2101, 0x34);
+
+      const uint16_t start = 0x1160;
+      writeProgram(mem, start,
+                   {
+                       0xA2,
+                       0x01,
+                       0xBD,
+                       0x00,
+                       0x21,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 4 || cpu.regs().a != 0x34 || (cpu.regs().p & 0x02) != 0 ||
+          (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+        std::cerr << "FAIL: LDA abs,X no-cross cycle/PC/NZ contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2200, 0x80);
+
+      const uint16_t start = 0x1180;
+      writeProgram(mem, start,
+                   {
+                       0xA2,
+                       0x01,
+                       0xBD,
+                       0xFF,
+                       0x21,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().a != 0x80 || (cpu.regs().p & 0x80) == 0 ||
+          (cpu.regs().p & 0x02) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+        std::cerr << "FAIL: LDA abs,X page-cross cycle/PC/NZ contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u16_le(mem.banks(), 0x0010, 0x2300);
+      prodos8emu::write_u8(mem.banks(), 0x2301, 0x00);
+
+      const uint16_t start = 0x11A0;
+      writeProgram(mem, start,
+                   {
+                       0xA0,
+                       0x01,
+                       0xB1,
+                       0x10,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().a != 0x00 || (cpu.regs().p & 0x02) == 0 ||
+          (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 4)) {
+        std::cerr << "FAIL: LDA (zp),Y no-cross cycle/PC/NZ contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u16_le(mem.banks(), 0x0012, 0x23FF);
+      prodos8emu::write_u8(mem.banks(), 0x2400, 0x7F);
+
+      const uint16_t start = 0x11C0;
+      writeProgram(mem, start,
+                   {
+                       0xA0,
+                       0x01,
+                       0xB1,
+                       0x12,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 6 || cpu.regs().a != 0x7F || (cpu.regs().p & 0x02) != 0 ||
+          (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 4)) {
+        std::cerr << "FAIL: LDA (zp),Y page-cross cycle/PC/NZ contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2500, 0x5A);
+
+      const uint16_t start = 0x11E0;
+      writeProgram(mem, start,
+                   {
+                       0xA0,
+                       0x01,
+                       0xBE,
+                       0xFF,
+                       0x24,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().x != 0x5A || (cpu.regs().p & 0x02) != 0 ||
+          (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+        std::cerr << "FAIL: LDX abs,Y page-cross cycle/PC/NZ contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2600, 0x00);
+
+      const uint16_t start = 0x1200;
+      writeProgram(mem, start,
+                   {
+                       0xA2,
+                       0x01,
+                       0xBC,
+                       0xFF,
+                       0x25,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().y != 0x00 || (cpu.regs().p & 0x02) == 0 ||
+          (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+        std::cerr << "FAIL: LDY abs,X page-cross cycle/PC/NZ contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x1220;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x5A,
+                       0xA2,
+                       0x01,
+                       0x9D,
+                       0xFF,
+                       0x28,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || prodos8emu::read_u8(mem.constBanks(), 0x2900) != 0x5A ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 7)) {
+        std::cerr << "FAIL: STA abs,X write/cycle/PC contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u16_le(mem.banks(), 0x0020, 0x2AFF);
+
+      const uint16_t start = 0x1240;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0xA5,
+                       0xA0,
+                       0x01,
+                       0x91,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 6 || prodos8emu::read_u8(mem.constBanks(), 0x2B00) != 0xA5 ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+        std::cerr << "FAIL: STA (zp),Y write/cycle/PC contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u16_le(mem.banks(), 0x0024, 0x2C10);
+
+      const uint16_t start = 0x1260;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x3C,
+                       0x92,
+                       0x24,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || prodos8emu::read_u8(mem.constBanks(), 0x2C10) != 0x3C ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 4)) {
+        std::cerr << "FAIL: STA (zp) write/cycle/PC contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x1280;
+      writeProgram(mem, start,
+                   {
+                       0xA2,
+                       0x7E,
+                       0xA0,
+                       0x03,
+                       0x96,
+                       0x30,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 4 || prodos8emu::read_u8(mem.constBanks(), 0x0033) != 0x7E ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+        std::cerr << "FAIL: STX zp,Y write/cycle/PC contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x12A0;
+      writeProgram(mem, start,
+                   {
+                       0xA0,
+                       0x42,
+                       0xA2,
+                       0x04,
+                       0x94,
+                       0x31,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 4 || prodos8emu::read_u8(mem.constBanks(), 0x0035) != 0x42 ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+        std::cerr << "FAIL: STY zp,X write/cycle/PC contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2E00, 0x99);
+
+      const uint16_t start = 0x12C0;
+      writeProgram(mem, start,
+                   {
+                       0xA2,
+                       0x01,
+                       0x9E,
+                       0xFF,
+                       0x2D,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || prodos8emu::read_u8(mem.constBanks(), 0x2E00) != 0x00 ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+        std::cerr << "FAIL: STZ abs,X write/cycle/PC contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: load_store_addressing_cycle_matrix_preserved\n";
+    }
+  }
+
+  // Test 36: bit_family_page_cross_contracts
+  {
+    std::cout << "Test 36: bit_family_page_cross_contracts\n";
+
+    bool testFailed = false;
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x31FF, 0x40);
+      prodos8emu::write_u8(mem.banks(), 0x3200, 0x80);
+
+      const uint16_t start = 0x1300;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0xFF,
+                       0xA2,
+                       0x01,
+                       0x3C,
+                       0xFE,
+                       0x31,
+                       0x3C,
+                       0xFF,
+                       0x31,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+
+      uint32_t noCrossCycles = cpu.step();
+      bool     noCrossZ      = (cpu.regs().p & 0x02) != 0;
+      bool     noCrossN      = (cpu.regs().p & 0x80) != 0;
+      bool     noCrossV      = (cpu.regs().p & 0x40) != 0;
+
+      uint32_t crossCycles = cpu.step();
+      bool     crossZ      = (cpu.regs().p & 0x02) != 0;
+      bool     crossN      = (cpu.regs().p & 0x80) != 0;
+      bool     crossV      = (cpu.regs().p & 0x40) != 0;
+
+      if (noCrossCycles != 4 || noCrossZ || noCrossN || !noCrossV || crossCycles != 5 ||
+          crossZ || !crossN || crossV || cpu.regs().pc != static_cast<uint16_t>(start + 10)) {
+        std::cerr << "FAIL: BIT abs,X page-cross cycle/flag/PC contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x1320;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0xF0,
+                       0x89,
+                       0x0F,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      cpu.regs().p = static_cast<uint8_t>((cpu.regs().p | 0xC0) & static_cast<uint8_t>(~0x02));
+      uint32_t cycles = cpu.step();
+      if (cycles != 2 || (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x80) == 0 ||
+          (cpu.regs().p & 0x40) == 0 || cpu.regs().pc != static_cast<uint16_t>(start + 4)) {
+        std::cerr << "FAIL: BIT #imm Z-only update contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x3310, 0xF0);
+      prodos8emu::write_u8(mem.banks(), 0x3311, 0xFF);
+
+      const uint16_t start = 0x1340;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x0F,
+                       0x0C,
+                       0x10,
+                       0x33,
+                       0x1C,
+                       0x11,
+                       0x33,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t tsbCycles = cpu.step();
+      bool     tsbZ      = (cpu.regs().p & 0x02) != 0;
+      uint8_t  tsbMem    = prodos8emu::read_u8(mem.constBanks(), 0x3310);
+
+      uint32_t trbCycles = cpu.step();
+      bool     trbZ      = (cpu.regs().p & 0x02) != 0;
+      uint8_t  trbMem    = prodos8emu::read_u8(mem.constBanks(), 0x3311);
+
+      if (tsbCycles != 6 || !tsbZ || tsbMem != 0xFF || trbCycles != 6 || trbZ || trbMem != 0xF0 ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 8)) {
+        std::cerr << "FAIL: TSB/TRB absolute cycle/writeback contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: bit_family_page_cross_contracts\n";
+    }
+  }
+
+  // Test 37: nop_bus_read_shape_contracts
+  {
+    std::cout << "Test 37: nop_bus_read_shape_contracts\n";
+
+    bool testFailed = false;
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+      mem.setLCBank1(true);
+
+      const uint16_t start = 0x1360;
+      writeProgram(mem, start,
+                   {
+                       0x03,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 1 || mem.isLCWritePrequalified() || !mem.isLCWriteEnabled() ||
+          !mem.isLCReadEnabled() || !mem.isLCBank1() ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 1)) {
+        std::cerr << "FAIL: 1-byte NOP bus-shape contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+      mem.setLCBank1(true);
+
+      const uint16_t start = 0x1380;
+      writeProgram(mem, start,
+                   {
+                       0x82,
+                       0x99,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 2 || mem.isLCWritePrequalified() || !mem.isLCWriteEnabled() ||
+          !mem.isLCReadEnabled() || !mem.isLCBank1() ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+        std::cerr << "FAIL: Immediate NOP bus-shape contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+      mem.setLCBank1(true);
+
+      const uint16_t start = 0x13A0;
+      writeProgram(mem, start,
+                   {
+                       0xDC,
+                       0x81,
+                       0xC0,
+                       0xDC,
+                       0x81,
+                       0xC0,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t firstCycles = cpu.step();
+      bool     firstPreq   = mem.isLCWritePrequalified();
+      bool     firstWrite  = mem.isLCWriteEnabled();
+      bool     firstRead   = mem.isLCReadEnabled();
+      bool     firstBank1  = mem.isLCBank1();
+
+      uint32_t secondCycles = cpu.step();
+      bool     secondPreq   = mem.isLCWritePrequalified();
+      bool     secondWrite  = mem.isLCWriteEnabled();
+      bool     secondRead   = mem.isLCReadEnabled();
+      bool     secondBank1  = mem.isLCBank1();
+
+      if (firstCycles != 4 || !firstPreq || firstWrite || firstRead || firstBank1 ||
+          secondCycles != 4 || secondPreq || !secondWrite || secondRead || secondBank1 ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+        std::cerr << "FAIL: Absolute NOP bus-read side-effect contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+      mem.setLCBank1(false);
+
+      const uint16_t start = 0x13C0;
+      writeProgram(mem, start,
+                   {
+                       0x5C,
+                       0x8B,
+                       0xC0,
+                       0x5C,
+                       0x8B,
+                       0xC0,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t firstCycles = cpu.step();
+      bool     firstPreq   = mem.isLCWritePrequalified();
+      bool     firstWrite  = mem.isLCWriteEnabled();
+      bool     firstRead   = mem.isLCReadEnabled();
+      bool     firstBank1  = mem.isLCBank1();
+
+      uint32_t secondCycles = cpu.step();
+      bool     secondPreq   = mem.isLCWritePrequalified();
+      bool     secondWrite  = mem.isLCWriteEnabled();
+      bool     secondRead   = mem.isLCReadEnabled();
+      bool     secondBank1  = mem.isLCBank1();
+
+      if (firstCycles != 8 || !firstPreq || firstWrite || !firstRead || !firstBank1 ||
+          secondCycles != 8 || secondPreq || !secondWrite || !secondRead || !secondBank1 ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+        std::cerr << "FAIL: Absolute-long NOP bus-read side-effect contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: nop_bus_read_shape_contracts\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {
