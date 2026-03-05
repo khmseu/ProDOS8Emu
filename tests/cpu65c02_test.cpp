@@ -463,6 +463,353 @@ int main() {
     }
   }
 
+  // Test 6: mli_detached_jsr_abs_behaves_as_normal_jsr
+  {
+    std::cout << "Test 6: mli_detached_jsr_abs_behaves_as_normal_jsr\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = 0x0200;
+
+    // Program at $0200:
+    //   JSR $BF00
+    //   NOP
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xEA,
+                 });
+
+    // Subroutine target at $BF00: RTS
+    writeProgram(mem, 0xBF00,
+                 {
+                     0x60,
+                 });
+
+    // Set reset vector to $0200
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    cpu.step();
+
+    uint8_t  spAfterJsr = cpu.regs().sp;
+    uint16_t pcAfterJsr = cpu.regs().pc;
+    uint8_t  retLo      = prodos8emu::read_u8(mem.constBanks(), 0x01FE);
+    uint8_t  retHi      = prodos8emu::read_u8(mem.constBanks(), 0x01FF);
+
+    cpu.step();
+    uint16_t pcAfterRts = cpu.regs().pc;
+
+    if (pcAfterJsr != 0xBF00) {
+      std::cerr << "FAIL: Expected detached JSR $BF00 to jump to $BF00, got 0x" << std::hex
+                << pcAfterJsr << std::dec << "\n";
+      failures++;
+    } else if (spAfterJsr != 0xFD) {
+      std::cerr << "FAIL: Expected SP=0xFD after normal JSR push, got 0x" << std::hex
+                << (int)spAfterJsr << std::dec << "\n";
+      failures++;
+    } else if (retLo != 0x02 || retHi != 0x02) {
+      std::cerr << "FAIL: Expected return address bytes on stack to be $02 $02, got $" << std::hex
+                << (int)retLo << " $" << (int)retHi << std::dec << "\n";
+      failures++;
+    } else if (pcAfterRts != static_cast<uint16_t>(start + 3)) {
+      std::cerr << "FAIL: Expected RTS to return to JSR+3, got 0x" << std::hex << pcAfterRts
+                << std::dec << "\n";
+      failures++;
+    } else if (!mliLog.str().empty()) {
+      std::cerr << "FAIL: Expected no MLI log when MLI is detached\n";
+      failures++;
+    } else {
+      std::cout << "PASS: mli_detached_jsr_abs_behaves_as_normal_jsr\n";
+    }
+  }
+
+  // Test 7: mli_quit_and_non_quit_stop_contract
+  {
+    std::cout << "Test 7: mli_quit_and_non_quit_stop_contract\n";
+
+    bool testFailed = false;
+
+    {
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      // ALLOC_INTERRUPT ($40), success path should not stop CPU
+      const uint16_t param = 0x0320;
+      prodos8emu::write_u8(mem.banks(), param + 0, 2);
+      prodos8emu::write_u8(mem.banks(), param + 1, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 2, 0x2100);
+
+      const uint16_t start = 0x0240;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0x40,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+
+      cpu.step();
+      if (cpu.isStopped()) {
+        std::cerr << "FAIL: Expected non-QUIT MLI call to keep CPU running\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      // QUIT ($65), success path should stop CPU
+      const uint16_t param = 0x0330;
+      prodos8emu::write_u8(mem.banks(), param + 0, 4);
+      prodos8emu::write_u8(mem.banks(), param + 1, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 2, 0);
+      prodos8emu::write_u8(mem.banks(), param + 4, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 5, 0);
+
+      const uint16_t start = 0x0250;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0x65,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+
+      cpu.step();
+      if (!cpu.isStopped()) {
+        std::cerr << "FAIL: Expected QUIT MLI call to stop CPU\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: mli_quit_and_non_quit_stop_contract\n";
+    }
+  }
+
+  // Test 8: mli_log_contains_expected_field_order_for_open
+  {
+    std::cout << "Test 8: mli_log_contains_expected_field_order_for_open\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    fs::path volume = tempDir / "VOL3";
+    fs::create_directories(volume);
+    fs::path filePath = volume / "OPENME";
+    std::ofstream(filePath) << "open data";
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t    pathnameAddr = 0x0450;
+    const std::string pathname     = "/VOL3/OPENME";
+    prodos8emu::write_u8(mem.banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+    for (size_t i = 0; i < pathname.length(); i++) {
+      prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                           static_cast<uint8_t>(pathname[i]));
+    }
+
+    // OPEN ($C8): param_count=3, pathname ptr, io_buffer ptr, ref_num out
+    const uint16_t param = 0x0340;
+    prodos8emu::write_u8(mem.banks(), param + 0, 3);
+    prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+    prodos8emu::write_u16_le(mem.banks(), param + 3, 0x2200);
+    prodos8emu::write_u8(mem.banks(), param + 5, 0);
+
+    const uint16_t start = 0x0260;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC8,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    cpu.step();
+
+    const std::string logText = mliLog.str();
+
+    size_t callPos   = logText.find(" MLI call=$C8 (OPEN)");
+    size_t paramPos  = logText.find(" param=$0340");
+    size_t pathPos   = logText.find(" path='/VOL3/OPENME'");
+    size_t refPos    = logText.find(" ref=");
+    size_t resultPos = logText.find(" result=$00");
+    size_t okPos     = logText.find(" OK");
+
+    if (callPos == std::string::npos || paramPos == std::string::npos ||
+        pathPos == std::string::npos || refPos == std::string::npos ||
+        resultPos == std::string::npos || okPos == std::string::npos) {
+      std::cerr << "FAIL: Expected OPEN MLI log fields were missing, got:\n" << logText << "\n";
+      failures++;
+    } else if (!(callPos < paramPos && paramPos < pathPos && pathPos < refPos &&
+                 refPos < resultPos && resultPos < okPos)) {
+      std::cerr
+          << "FAIL: Expected OPEN MLI log field order call->param->path->ref->result->OK, got:\n"
+          << logText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: mli_log_contains_expected_field_order_for_open\n";
+    }
+  }
+
+  // Test 9: mli_flags_contract_after_trap_return
+  {
+    std::cout << "Test 9: mli_flags_contract_after_trap_return\n";
+
+    bool testFailed = false;
+
+    {
+      // Success case: C clear, Z set, N clear, D clear, A=0
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t param = 0x0350;
+      prodos8emu::write_u8(mem.banks(), param + 0, 2);
+      prodos8emu::write_u8(mem.banks(), param + 1, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 2, 0x2300);
+
+      const uint16_t start = 0x0270;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0x40,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+      cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x08);
+
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool d = (cpu.regs().p & 0x08) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cpu.regs().a != 0 || c || !z || d || n) {
+        std::cerr << "FAIL: Expected success flags A=0,C=0,Z=1,D=0,N=0 after MLI trap\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // Error case: C set, Z clear, N follows A bit 7, D clear, A=error
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      fs::path volume = tempDir / "VOL4";
+      fs::create_directories(volume);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t    pathnameAddr = 0x0460;
+      const std::string pathname     = "/VOL4/MISSING";
+      prodos8emu::write_u8(mem.banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+      for (size_t i = 0; i < pathname.length(); i++) {
+        prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                             static_cast<uint8_t>(pathname[i]));
+      }
+
+      const uint16_t param = 0x0360;
+      prodos8emu::write_u8(mem.banks(), param + 0, 3);
+      prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+      prodos8emu::write_u16_le(mem.banks(), param + 3, 0x2400);
+
+      const uint16_t start = 0x0280;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0xC8,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+      cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x08);
+
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool d = (cpu.regs().p & 0x08) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cpu.regs().a != 0x46 || !c || z || d || n) {
+        std::cerr
+            << "FAIL: Expected error flags A=ERR_FILE_NOT_FOUND,C=1,Z=0,D=0,N=0 after MLI trap\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: mli_flags_contract_after_trap_return\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {
