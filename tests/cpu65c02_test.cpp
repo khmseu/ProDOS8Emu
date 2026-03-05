@@ -2220,9 +2220,9 @@ __attribute__((noinline)) static void run_load_store_helper_dispatch_equivalence
     const LoadStoreRoute expected = classifyHelperDispatch(op);
     if (legacy != expected) {
       std::cerr << "FAIL: load/store helper dispatch classification mismatch for opcode=0x"
-                << std::hex << static_cast<int>(op) << std::dec << " (legacy="
-                << static_cast<int>(legacy) << ", helper=" << static_cast<int>(expected)
-                << ")\n";
+                << std::hex << static_cast<int>(op) << std::dec
+                << " (legacy=" << static_cast<int>(legacy)
+                << ", helper=" << static_cast<int>(expected) << ")\n";
       failures++;
       testFailed = true;
     }
@@ -2285,8 +2285,8 @@ __attribute__((noinline)) static void run_load_store_helper_dispatch_equivalence
                 << " (cycles=" << cycles << ", a=0x" << std::hex
                 << static_cast<uint32_t>(cpu.regs().a) << ", p=0x"
                 << static_cast<uint32_t>(cpu.regs().p) << ", masked=0x"
-                << static_cast<uint32_t>(cpu.regs().p & static_cast<uint8_t>(~0x82))
-                << ", pc=0x" << static_cast<uint32_t>(cpu.regs().pc) << std::dec << ")\n";
+                << static_cast<uint32_t>(cpu.regs().p & static_cast<uint8_t>(~0x82)) << ", pc=0x"
+                << static_cast<uint32_t>(cpu.regs().pc) << std::dec << ")\n";
       failures++;
       testFailed = true;
     }

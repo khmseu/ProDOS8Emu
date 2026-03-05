@@ -3,11 +3,13 @@
 Refactored `execute_load_store_opcode` into helper-focused load/store dispatch paths grouped by addressing behavior while preserving existing routing and semantics. Added a full-range dispatch-equivalence characterization test plus representative runtime contracts to lock cycle counts, load-only NZ updates, and store target/non-mutation behavior.
 
 **Files created/changed:**
+
 - `include/prodos8emu/cpu65c02.hpp`
 - `src/cpu65c02.cpp`
 - `tests/cpu65c02_test.cpp`
 
 **Functions created/changed:**
+
 - `CPU65C02::execute_load_store_opcode(uint8_t op, uint32_t& cycles)`
 - `CPU65C02::execute_load_store_load_immediate_opcode(uint8_t op, uint32_t& cycles)`
 - `CPU65C02::execute_load_store_load_read_opcode(uint8_t op, uint32_t& cycles)`
@@ -18,6 +20,7 @@ Refactored `execute_load_store_opcode` into helper-focused load/store dispatch p
 - `run_load_store_helper_dispatch_equivalence_test(int& failures)`
 
 **Tests created/changed:**
+
 - `load_store_helper_dispatch_equivalence`
 - Target run: `prodos8emu_cpu65c02_tests` ✅
 - Target run: `prodos8emu_emulator_startup_tests` ✅
