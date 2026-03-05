@@ -1667,6 +1667,472 @@ int main() {
     }
   }
 
+  // Test 22: adc_sbc_binary_decimal_flag_contracts
+  {
+    std::cout << "Test 22: adc_sbc_binary_decimal_flag_contracts\n";
+
+    bool testFailed = false;
+
+    {
+      // ADC binary: 0x50 + 0x50 => 0xA0, C=0, V=1, N=1, Z=0
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0A00;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x50,
+                       0x18,
+                       0x69,
+                       0x50,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      cpu.step();
+      cpu.step();
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool v = (cpu.regs().p & 0x40) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+      bool d = (cpu.regs().p & 0x08) != 0;
+
+      if (cpu.regs().a != 0xA0 || c || z || !v || !n || d) {
+        std::cerr << "FAIL: ADC binary contract expected A=$A0,C=0,Z=0,V=1,N=1,D=0; got A=$"
+                  << std::hex << static_cast<int>(cpu.regs().a) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // SBC binary: 0x50 - 0x10 => 0x40, C=1, V=0, N=0, Z=0
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0A20;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x50,
+                       0x38,
+                       0xE9,
+                       0x10,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      cpu.step();
+      cpu.step();
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool v = (cpu.regs().p & 0x40) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+      bool d = (cpu.regs().p & 0x08) != 0;
+
+      if (cpu.regs().a != 0x40 || !c || z || v || n || d) {
+        std::cerr << "FAIL: SBC binary contract expected A=$40,C=1,Z=0,V=0,N=0,D=0; got A=$"
+                  << std::hex << static_cast<int>(cpu.regs().a) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // ADC decimal: 0x45 + 0x55 => 0x00 (BCD), C=1, Z=1, N=0, D=1
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0A40;
+      writeProgram(mem, start,
+                   {
+                       0xF8,
+                       0xA9,
+                       0x45,
+                       0x18,
+                       0x69,
+                       0x55,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      cpu.step();
+      cpu.step();
+      cpu.step();
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool v = (cpu.regs().p & 0x40) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+      bool d = (cpu.regs().p & 0x08) != 0;
+
+      if (cpu.regs().a != 0x00 || !c || !z || !v || n || !d) {
+        std::cerr << "FAIL: ADC decimal contract expected A=$00,C=1,Z=1,V=1,N=0,D=1; got A=$"
+                  << std::hex << static_cast<int>(cpu.regs().a) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // SBC decimal with borrow: 0x00 - 0x01 => 0x99 (BCD), C=0, Z=0, N=1, D=1
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0A60;
+      writeProgram(mem, start,
+                   {
+                       0xF8,
+                       0xA9,
+                       0x00,
+                       0x38,
+                       0xE9,
+                       0x01,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      cpu.step();
+      cpu.step();
+      cpu.step();
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool v = (cpu.regs().p & 0x40) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+      bool d = (cpu.regs().p & 0x08) != 0;
+
+      if (cpu.regs().a != 0x99 || c || z || v || !n || !d) {
+        std::cerr << "FAIL: SBC decimal contract expected A=$99,C=0,Z=0,V=0,N=1,D=1; got A=$"
+                  << std::hex << static_cast<int>(cpu.regs().a) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: adc_sbc_binary_decimal_flag_contracts\n";
+    }
+  }
+
+  // Test 23: logic_ora_and_eor_nz_contracts
+  {
+    std::cout << "Test 23: logic_ora_and_eor_nz_contracts\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = 0x0AC0;
+    writeProgram(mem, start,
+                 {
+                     0xA9,
+                     0x40,
+                     0x09,
+                     0x80,
+                     0x29,
+                     0x0F,
+                     0x49,
+                     0x0F,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.reset();
+
+    cpu.step();
+
+    // Prime C and V; ORA/AND/EOR should update only N/Z.
+    cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x41);
+
+    cpu.step();
+    bool oraC = (cpu.regs().p & 0x01) != 0;
+    bool oraZ = (cpu.regs().p & 0x02) != 0;
+    bool oraV = (cpu.regs().p & 0x40) != 0;
+    bool oraN = (cpu.regs().p & 0x80) != 0;
+
+    cpu.step();
+    bool andC = (cpu.regs().p & 0x01) != 0;
+    bool andZ = (cpu.regs().p & 0x02) != 0;
+    bool andV = (cpu.regs().p & 0x40) != 0;
+    bool andN = (cpu.regs().p & 0x80) != 0;
+
+    cpu.step();
+    bool eorC = (cpu.regs().p & 0x01) != 0;
+    bool eorZ = (cpu.regs().p & 0x02) != 0;
+    bool eorV = (cpu.regs().p & 0x40) != 0;
+    bool eorN = (cpu.regs().p & 0x80) != 0;
+
+    if (cpu.regs().a != 0x0F) {
+      std::cerr << "FAIL: Expected final A=$0F after ORA/AND/EOR sequence, got $" << std::hex
+                << static_cast<int>(cpu.regs().a) << std::dec << "\n";
+      failures++;
+    } else if (!oraC || oraZ || !oraV || !oraN) {
+      std::cerr << "FAIL: ORA expected C=1,Z=0,V=1,N=1 after A=$C0\n";
+      failures++;
+    } else if (!andC || !andZ || !andV || andN) {
+      std::cerr << "FAIL: AND expected C=1,Z=1,V=1,N=0 after A=$00\n";
+      failures++;
+    } else if (!eorC || eorZ || !eorV || eorN) {
+      std::cerr << "FAIL: EOR expected C=1,Z=0,V=1,N=0 after A=$0F\n";
+      failures++;
+    } else {
+      std::cout << "PASS: logic_ora_and_eor_nz_contracts\n";
+    }
+  }
+
+  // Test 24: cmp_does_not_mutate_registers_and_sets_czn
+  {
+    std::cout << "Test 24: cmp_does_not_mutate_registers_and_sets_czn\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = 0x0B00;
+    writeProgram(mem, start,
+                 {
+                     0xA9,
+                     0x40,
+                     0xA2,
+                     0x10,
+                     0xA0,
+                     0x80,
+                     0xC9,
+                     0x40,
+                     0xC9,
+                     0x50,
+                     0xE0,
+                     0x0F,
+                     0xC0,
+                     0x80,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.reset();
+
+    cpu.step();
+    cpu.step();
+    cpu.step();
+
+    cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x40);
+
+    cpu.step();
+    uint8_t aAfterCmpEq = cpu.regs().a;
+    uint8_t xAfterCmpEq = cpu.regs().x;
+    uint8_t yAfterCmpEq = cpu.regs().y;
+    bool    cmpEqC      = (cpu.regs().p & 0x01) != 0;
+    bool    cmpEqZ      = (cpu.regs().p & 0x02) != 0;
+    bool    cmpEqN      = (cpu.regs().p & 0x80) != 0;
+    bool    cmpEqV      = (cpu.regs().p & 0x40) != 0;
+
+    cpu.step();
+    uint8_t aAfterCmpLt = cpu.regs().a;
+    uint8_t xAfterCmpLt = cpu.regs().x;
+    uint8_t yAfterCmpLt = cpu.regs().y;
+    bool    cmpLtC      = (cpu.regs().p & 0x01) != 0;
+    bool    cmpLtZ      = (cpu.regs().p & 0x02) != 0;
+    bool    cmpLtN      = (cpu.regs().p & 0x80) != 0;
+    bool    cmpLtV      = (cpu.regs().p & 0x40) != 0;
+
+    cpu.step();
+    uint8_t aAfterCpx = cpu.regs().a;
+    uint8_t xAfterCpx = cpu.regs().x;
+    uint8_t yAfterCpx = cpu.regs().y;
+    bool    cpxC      = (cpu.regs().p & 0x01) != 0;
+    bool    cpxZ      = (cpu.regs().p & 0x02) != 0;
+    bool    cpxN      = (cpu.regs().p & 0x80) != 0;
+    bool    cpxV      = (cpu.regs().p & 0x40) != 0;
+
+    cpu.step();
+    uint8_t aAfterCpy = cpu.regs().a;
+    uint8_t xAfterCpy = cpu.regs().x;
+    uint8_t yAfterCpy = cpu.regs().y;
+    bool    cpyC      = (cpu.regs().p & 0x01) != 0;
+    bool    cpyZ      = (cpu.regs().p & 0x02) != 0;
+    bool    cpyN      = (cpu.regs().p & 0x80) != 0;
+    bool    cpyV      = (cpu.regs().p & 0x40) != 0;
+
+    if (aAfterCmpEq != 0x40 || xAfterCmpEq != 0x10 || yAfterCmpEq != 0x80 || !cmpEqC || !cmpEqZ ||
+        cmpEqN || !cmpEqV) {
+      std::cerr << "FAIL: CMP equal expected A/X/Y unchanged and C=1,Z=1,N=0,V unchanged\n";
+      failures++;
+    } else if (aAfterCmpLt != 0x40 || xAfterCmpLt != 0x10 || yAfterCmpLt != 0x80 || cmpLtC ||
+               cmpLtZ || !cmpLtN || !cmpLtV) {
+      std::cerr << "FAIL: CMP less-than expected A/X/Y unchanged and C=0,Z=0,N=1,V unchanged\n";
+      failures++;
+    } else if (aAfterCpx != 0x40 || xAfterCpx != 0x10 || yAfterCpx != 0x80 || !cpxC || cpxZ ||
+               cpxN || !cpxV) {
+      std::cerr << "FAIL: CPX expected A/X/Y unchanged and C=1,Z=0,N=0,V unchanged\n";
+      failures++;
+    } else if (aAfterCpy != 0x40 || xAfterCpy != 0x10 || yAfterCpy != 0x80 || !cpyC || !cpyZ ||
+               cpyN || !cpyV) {
+      std::cerr << "FAIL: CPY expected A/X/Y unchanged and C=1,Z=1,N=0,V unchanged\n";
+      failures++;
+    } else {
+      std::cout << "PASS: cmp_does_not_mutate_registers_and_sets_czn\n";
+    }
+  }
+
+  // Test 25: rmw_inc_dec_shift_rotate_writeback_and_flags
+  {
+    std::cout << "Test 25: rmw_inc_dec_shift_rotate_writeback_and_flags\n";
+
+    bool testFailed = false;
+
+    {
+      // INC/DEC memory writeback + N/Z, while preserving C.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x0010, 0xFF);
+      prodos8emu::write_u8(mem.banks(), 0x0011, 0x00);
+
+      const uint16_t start = 0x0B80;
+      writeProgram(mem, start,
+                   {
+                       0x38,
+                       0xE6,
+                       0x10,
+                       0xC6,
+                       0x11,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      cpu.step();
+      cpu.step();
+
+      uint8_t incMem = prodos8emu::read_u8(mem.constBanks(), 0x0010);
+      bool    incC   = (cpu.regs().p & 0x01) != 0;
+      bool    incZ   = (cpu.regs().p & 0x02) != 0;
+      bool    incN   = (cpu.regs().p & 0x80) != 0;
+
+      cpu.step();
+
+      uint8_t decMem = prodos8emu::read_u8(mem.constBanks(), 0x0011);
+      bool    decC   = (cpu.regs().p & 0x01) != 0;
+      bool    decZ   = (cpu.regs().p & 0x02) != 0;
+      bool    decN   = (cpu.regs().p & 0x80) != 0;
+
+      if (incMem != 0x00 || !incC || !incZ || incN) {
+        std::cerr << "FAIL: INC expected M[$10]=$00,C=1,Z=1,N=0\n";
+        failures++;
+        testFailed = true;
+      } else if (decMem != 0xFF || !decC || decZ || !decN) {
+        std::cerr << "FAIL: DEC expected M[$11]=$FF,C=1,Z=0,N=1\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // Shift/rotate memory writeback + C/N/Z contracts.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x0012, 0x80);
+      prodos8emu::write_u8(mem.banks(), 0x0013, 0x01);
+      prodos8emu::write_u8(mem.banks(), 0x0014, 0x80);
+      prodos8emu::write_u8(mem.banks(), 0x0015, 0x01);
+
+      const uint16_t start = 0x0BA0;
+      writeProgram(mem, start,
+                   {
+                       0x06,
+                       0x12,
+                       0x46,
+                       0x13,
+                       0x38,
+                       0x26,
+                       0x14,
+                       0x38,
+                       0x66,
+                       0x15,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      cpu.step();
+      uint8_t aslMem = prodos8emu::read_u8(mem.constBanks(), 0x0012);
+      bool    aslC   = (cpu.regs().p & 0x01) != 0;
+      bool    aslZ   = (cpu.regs().p & 0x02) != 0;
+      bool    aslN   = (cpu.regs().p & 0x80) != 0;
+
+      cpu.step();
+      uint8_t lsrMem = prodos8emu::read_u8(mem.constBanks(), 0x0013);
+      bool    lsrC   = (cpu.regs().p & 0x01) != 0;
+      bool    lsrZ   = (cpu.regs().p & 0x02) != 0;
+      bool    lsrN   = (cpu.regs().p & 0x80) != 0;
+
+      cpu.step();
+      cpu.step();
+      uint8_t rolMem = prodos8emu::read_u8(mem.constBanks(), 0x0014);
+      bool    rolC   = (cpu.regs().p & 0x01) != 0;
+      bool    rolZ   = (cpu.regs().p & 0x02) != 0;
+      bool    rolN   = (cpu.regs().p & 0x80) != 0;
+
+      cpu.step();
+      cpu.step();
+      uint8_t rorMem = prodos8emu::read_u8(mem.constBanks(), 0x0015);
+      bool    rorC   = (cpu.regs().p & 0x01) != 0;
+      bool    rorZ   = (cpu.regs().p & 0x02) != 0;
+      bool    rorN   = (cpu.regs().p & 0x80) != 0;
+
+      if (aslMem != 0x00 || !aslC || !aslZ || aslN) {
+        std::cerr << "FAIL: ASL expected M[$12]=$00,C=1,Z=1,N=0\n";
+        failures++;
+        testFailed = true;
+      } else if (lsrMem != 0x00 || !lsrC || !lsrZ || lsrN) {
+        std::cerr << "FAIL: LSR expected M[$13]=$00,C=1,Z=1,N=0\n";
+        failures++;
+        testFailed = true;
+      } else if (rolMem != 0x01 || !rolC || rolZ || rolN) {
+        std::cerr << "FAIL: ROL expected M[$14]=$01,C=1,Z=0,N=0\n";
+        failures++;
+        testFailed = true;
+      } else if (rorMem != 0x80 || !rorC || rorZ || !rorN) {
+        std::cerr << "FAIL: ROR expected M[$15]=$80,C=1,Z=0,N=1\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.regs().a != 0x00 || cpu.regs().x != 0x00 || cpu.regs().y != 0x00) {
+        std::cerr << "FAIL: Expected memory RMW sequence to keep A/X/Y unchanged\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: rmw_inc_dec_shift_rotate_writeback_and_flags\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {
