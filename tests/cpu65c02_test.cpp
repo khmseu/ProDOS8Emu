@@ -202,6 +202,343 @@ __attribute__((noinline)) static void run_cout_escape_mapping_contracts_preserve
   }
 }
 
+__attribute__((noinline)) static void run_unknown_opcode_default_fallback_contracts_test(
+    int& failures) {
+  std::cout << "Test 45: unknown_opcode_default_fallback_contracts\n";
+
+  bool testFailed = false;
+
+  struct DefaultLikeCase {
+    const char* name;
+    uint8_t     opcode;
+    uint32_t    expectedCycles;
+  };
+
+  static const DefaultLikeCase cases[] = {
+      {"canonical_nop", 0xEA, 2},
+      {"reserved_slot_nop_a", 0x03, 1},
+      {"reserved_slot_nop_b", 0xFB, 1},
+  };
+
+  for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])) && !testFailed; ++i) {
+    const DefaultLikeCase& c = cases[i];
+
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = static_cast<uint16_t>(0x1800 + (i * 0x10));
+    writeProgram(*mem, start,
+                 {
+                     c.opcode,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x12;
+    cpu.regs().x  = 0x34;
+    cpu.regs().y  = 0x56;
+    cpu.regs().sp = 0xE1;
+    cpu.regs().p  = 0xA5;
+
+    const uint32_t cycles = cpu.step();
+    if (cycles != c.expectedCycles || cpu.regs().pc != static_cast<uint16_t>(start + 1) ||
+        cpu.regs().a != 0x12 || cpu.regs().x != 0x34 || cpu.regs().y != 0x56 ||
+        cpu.regs().sp != 0xE1 || cpu.regs().p != 0xA5) {
+      std::cerr << "FAIL: default-like fallback contract mismatch for " << c.name << "\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: unknown_opcode_default_fallback_contracts\n";
+  }
+}
+
+__attribute__((noinline)) static void run_nop_variant_opcode_matrix_preserved_test(int& failures) {
+  std::cout << "Test 46: nop_variant_opcode_matrix_preserved\n";
+
+  bool testFailed = false;
+
+  static const uint8_t oneByteNops[] = {
+      0x03, 0x0B, 0x13, 0x1B, 0x23, 0x2B, 0x33, 0x3B, 0x43, 0x4B,
+      0x53, 0x5B, 0x63, 0x6B, 0x73, 0x7B, 0x83, 0x8B, 0x93, 0x9B,
+      0xA3, 0xAB, 0xB3, 0xBB, 0xC3, 0xD3, 0xE3, 0xEB, 0xF3, 0xFB,
+  };
+
+  static const uint8_t immediateNops[] = {
+      0x02,
+      0x22,
+      0x42,
+      0x62,
+      0x82,
+      0xC2,
+      0xE2,
+  };
+
+  struct NopCase {
+    const char* name;
+    uint8_t     opcode;
+    uint8_t     operandLo;
+    uint8_t     operandHi;
+    uint8_t     initialX;
+    uint32_t    expectedCycles;
+    uint16_t    expectedPcAdvance;
+    uint16_t    observedAddress;
+    uint8_t     observedValue;
+  };
+
+  auto runCase = [&](const NopCase& c, uint16_t start) {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    if (c.observedAddress != 0) {
+      prodos8emu::write_u8(mem->banks(), c.observedAddress, c.observedValue);
+    }
+
+    prodos8emu::write_u8(mem->banks(), start, c.opcode);
+    prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 1), c.operandLo);
+    prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 2), c.operandHi);
+    prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 3), 0xEA);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x21;
+    cpu.regs().x  = c.initialX;
+    cpu.regs().y  = 0x43;
+    cpu.regs().sp = 0xE2;
+    cpu.regs().p  = 0x65;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != c.expectedCycles ||
+        cpu.regs().pc != static_cast<uint16_t>(start + c.expectedPcAdvance) ||
+        cpu.regs().a != 0x21 || cpu.regs().x != c.initialX || cpu.regs().y != 0x43 ||
+        cpu.regs().sp != 0xE2 || cpu.regs().p != 0x65) {
+      std::cerr << "FAIL: NOP matrix cycle/PC/non-mutation mismatch for " << c.name << "\n";
+      failures++;
+      testFailed = true;
+      return;
+    }
+
+    if (c.observedAddress != 0 && prodos8emu::read_u8(mem->constBanks(), c.observedAddress) !=
+                                    c.observedValue) {
+      std::cerr << "FAIL: NOP matrix memory-stability mismatch for " << c.name << "\n";
+      failures++;
+      testFailed = true;
+    }
+  };
+
+  uint16_t start = 0x1880;
+  for (size_t i = 0; i < (sizeof(oneByteNops) / sizeof(oneByteNops[0])) && !testFailed; ++i) {
+    runCase({"one_byte", oneByteNops[i], 0x99, 0x77, 0x09, 1, 1, 0, 0}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+
+  for (size_t i = 0; i < (sizeof(immediateNops) / sizeof(immediateNops[0])) && !testFailed; ++i) {
+    runCase({"immediate", immediateNops[i], 0x99, 0x77, 0x09, 2, 2, 0, 0}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+
+  if (!testFailed) {
+    runCase({"zp_read", 0x44, 0x44, 0x77, 0x09, 3, 2, 0x0044, 0xAB}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+
+  if (!testFailed) {
+    runCase({"zpx_read_54", 0x54, 0x45, 0x77, 0x01, 4, 2, 0x0046, 0xBC}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+  if (!testFailed) {
+    runCase({"zpx_read_D4", 0xD4, 0x45, 0x77, 0x01, 4, 2, 0x0046, 0xBC}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+  if (!testFailed) {
+    runCase({"zpx_read_F4", 0xF4, 0x45, 0x77, 0x01, 4, 2, 0x0046, 0xBC}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+
+  if (!testFailed) {
+    runCase({"abs_read_DC", 0xDC, 0x45, 0x23, 0x09, 4, 3, 0x2345, 0xCD}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+  if (!testFailed) {
+    runCase({"abs_read_FC", 0xFC, 0x67, 0x45, 0x09, 4, 3, 0x4567, 0xD7}, start);
+    start = static_cast<uint16_t>(start + 0x10);
+  }
+
+  if (!testFailed) {
+    runCase({"abs_long_read_5C", 0x5C, 0x56, 0x34, 0x09, 8, 3, 0x3456, 0xDE}, start);
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: nop_variant_opcode_matrix_preserved\n";
+  }
+}
+
+__attribute__((noinline)) static void run_fallback_router_precedence_contracts_test(int& failures) {
+  std::cout << "Test 47: fallback_router_precedence_contracts\n";
+
+  bool testFailed = false;
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1E00;
+    prodos8emu::write_u8(mem->banks(), 0x0010, 0xFF);
+    writeProgram(*mem, start,
+                 {
+                     0x07,
+                     0x10,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x11;
+    cpu.regs().x = 0x22;
+    cpu.regs().y = 0x33;
+    cpu.regs().p = 0xE5;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
+        prodos8emu::read_u8(mem->constBanks(), 0x0010) != 0xFE || cpu.regs().a != 0x11 ||
+        cpu.regs().x != 0x22 || cpu.regs().y != 0x33 || cpu.regs().p != 0xE5) {
+      std::cerr << "FAIL: router precedence mismatch for RMB special decode path\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1E20;
+    prodos8emu::write_u8(mem->banks(), 0x0011, 0x00);
+    writeProgram(*mem, start,
+                 {
+                     0x0F,
+                     0x11,
+                     0x02,
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x61;
+
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5) || cpu.regs().p != 0x61)) {
+      std::cerr << "FAIL: router precedence mismatch for BBR special decode path\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1E40;
+    writeProgram(*mem, start,
+                 {
+                     0x03,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x77;
+    cpu.regs().x = 0x88;
+    cpu.regs().y = 0x99;
+    cpu.regs().p = 0x27;
+
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 1 || cpu.regs().pc != static_cast<uint16_t>(start + 1) || cpu.regs().a != 0x77 ||
+         cpu.regs().x != 0x88 || cpu.regs().y != 0x99 || cpu.regs().p != 0x27)) {
+      std::cerr << "FAIL: router precedence mismatch for NOP variant handler\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1E60;
+    writeProgram(*mem, start,
+                 {
+                     0xE8,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x7F;
+    cpu.regs().p = 0x20;
+
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 1) || cpu.regs().x != 0x80 ||
+         (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0)) {
+      std::cerr << "FAIL: router precedence mismatch for misc-tail fallback route\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1E80;
+    writeProgram(*mem, start,
+                 {
+                     0xA9,
+                     0xF0,
+                     0x09,
+                     0x0F,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    (void)cpu.step();
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 4) || cpu.regs().a != 0xFF ||
+         (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0)) {
+      std::cerr << "FAIL: router precedence mismatch for ALU fallback route\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: fallback_router_precedence_contracts\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -5155,6 +5492,9 @@ int main() {
 
   run_branch_opcode_matrix_preserved_test(failures);
   run_cout_escape_mapping_contracts_preserved_test(failures);
+  run_unknown_opcode_default_fallback_contracts_test(failures);
+  run_nop_variant_opcode_matrix_preserved_test(failures);
+  run_fallback_router_precedence_contracts_test(failures);
 
   fs::remove_all(tempDir);
 
