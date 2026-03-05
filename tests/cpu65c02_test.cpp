@@ -834,6 +834,1008 @@ __attribute__((noinline)) static void run_nop_variant_table_dispatch_equivalence
   }
 }
 
+__attribute__((noinline)) static void run_control_flow_jump_matrix_preserved_test(int& failures) {
+  std::cout << "Test 50: control_flow_jump_matrix_preserved\n";
+
+  bool testFailed = false;
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  {
+    auto mem = makeMem();
+
+    const uint16_t start  = 0x2020;
+    const uint16_t target = 0x2456;
+    writeProgram(*mem, start,
+                 {
+                     0x4C,
+                     static_cast<uint8_t>(target & 0xFF),
+                     static_cast<uint8_t>((target >> 8) & 0xFF),
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x11;
+    cpu.regs().x  = 0x22;
+    cpu.regs().y  = 0x33;
+    cpu.regs().sp = 0xD0;
+    cpu.regs().p  = 0xA5;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 3 || cpu.regs().pc != target || cpu.regs().a != 0x11 || cpu.regs().x != 0x22 ||
+        cpu.regs().y != 0x33 || cpu.regs().sp != 0xD0 || cpu.regs().p != 0xA5) {
+      std::cerr << "FAIL: JMP abs cycle/PC/register stability mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start  = 0x2040;
+    const uint16_t ptr    = 0x0300;
+    const uint16_t target = 0x2468;
+    prodos8emu::write_u16_le(mem->banks(), ptr, target);
+    writeProgram(*mem, start,
+                 {
+                     0x6C,
+                     static_cast<uint8_t>(ptr & 0xFF),
+                     static_cast<uint8_t>((ptr >> 8) & 0xFF),
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x44;
+    cpu.regs().x  = 0x55;
+    cpu.regs().y  = 0x66;
+    cpu.regs().sp = 0xC1;
+    cpu.regs().p  = 0x67;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || cpu.regs().pc != target || cpu.regs().a != 0x44 || cpu.regs().x != 0x55 ||
+        cpu.regs().y != 0x66 || cpu.regs().sp != 0xC1 || cpu.regs().p != 0x67) {
+      std::cerr << "FAIL: JMP (abs) cycle/PC/register stability mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start     = 0x2060;
+    const uint16_t tableBase = 0x0320;
+    const uint16_t target    = 0x247A;
+    prodos8emu::write_u16_le(mem->banks(), static_cast<uint16_t>(tableBase + 2), target);
+    writeProgram(*mem, start,
+                 {
+                     0x7C,
+                     static_cast<uint8_t>(tableBase & 0xFF),
+                     static_cast<uint8_t>((tableBase >> 8) & 0xFF),
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x77;
+    cpu.regs().x  = 0x02;
+    cpu.regs().y  = 0x88;
+    cpu.regs().sp = 0xB2;
+    cpu.regs().p  = 0x41;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 6 || cpu.regs().pc != target || cpu.regs().a != 0x77 || cpu.regs().x != 0x02 ||
+        cpu.regs().y != 0x88 || cpu.regs().sp != 0xB2 || cpu.regs().p != 0x41) {
+      std::cerr << "FAIL: JMP (abs,X) cycle/PC/register stability mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x2080;
+    const uint16_t sub   = 0x20A0;
+    writeProgram(*mem, start,
+                 {
+                     0x20,
+                     static_cast<uint8_t>(sub & 0xFF),
+                     static_cast<uint8_t>((sub >> 8) & 0xFF),
+                     0xEA,
+                 });
+    writeProgram(*mem, sub,
+                 {
+                     0x60,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x9A;
+    cpu.regs().x  = 0xBC;
+    cpu.regs().y  = 0xDE;
+    cpu.regs().sp = 0xFF;
+    cpu.regs().p  = 0xA4;
+
+    uint32_t jsrCycles = cpu.step();
+    if (jsrCycles != 6 || cpu.regs().pc != sub || cpu.regs().sp != 0xFD || cpu.regs().a != 0x9A ||
+        cpu.regs().x != 0xBC || cpu.regs().y != 0xDE || cpu.regs().p != 0xA4) {
+      std::cerr << "FAIL: JSR abs cycle/PC/stack/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else {
+      uint32_t rtsCycles = cpu.step();
+      if (rtsCycles != 6 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+          cpu.regs().sp != 0xFF || cpu.regs().a != 0x9A || cpu.regs().x != 0xBC ||
+          cpu.regs().y != 0xDE || cpu.regs().p != 0xA4) {
+        std::cerr << "FAIL: RTS cycle/PC/stack/register contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: control_flow_jump_matrix_preserved\n";
+  }
+}
+
+__attribute__((noinline)) static void run_load_store_opcode_completeness_matrix_preserved_test(
+    int& failures) {
+  std::cout << "Test 51: load_store_opcode_completeness_matrix_preserved\n";
+
+  bool testFailed = false;
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u16_le(mem->banks(), 0x0040, 0x2A10);
+    prodos8emu::write_u8(mem->banks(), 0x2A10, 0x80);
+
+    const uint16_t start = 0x2100;
+    writeProgram(*mem, start,
+                 {
+                     0xB2,
+                     0x40,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x21;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || cpu.regs().a != 0x80 || (cpu.regs().p & 0x80) == 0 ||
+        (cpu.regs().p & 0x02) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: LDA (zp) cycle/PC/NZ contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u16_le(mem->banks(), 0x0024, 0x2A20);
+    prodos8emu::write_u8(mem->banks(), 0x2A20, 0x00);
+
+    const uint16_t start = 0x2120;
+    writeProgram(*mem, start,
+                 {
+                     0xA1,
+                     0x20,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x04;
+    cpu.regs().p = 0xA1;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 6 || cpu.regs().a != 0x00 || (cpu.regs().p & 0x02) == 0 ||
+        (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: LDA (zp,X) cycle/PC/NZ contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x0065, 0x00);
+
+    const uint16_t start = 0x2140;
+    writeProgram(*mem, start,
+                 {
+                     0xB4,
+                     0x60,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x05;
+    cpu.regs().p = 0x80;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 4 || cpu.regs().y != 0x00 || (cpu.regs().p & 0x02) == 0 ||
+        (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: LDY zp,X cycle/PC/NZ contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u16_le(mem->banks(), 0x0034, 0x2A40);
+
+    const uint16_t start = 0x2160;
+    writeProgram(*mem, start,
+                 {
+                     0x81,
+                     0x30,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0xA5;
+    cpu.regs().x  = 0x04;
+    cpu.regs().y  = 0x33;
+    cpu.regs().sp = 0xE1;
+    cpu.regs().p  = 0x65;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 6 || prodos8emu::read_u8(mem->constBanks(), 0x2A40) != 0xA5 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0xA5 ||
+        cpu.regs().x != 0x04 || cpu.regs().y != 0x33 || cpu.regs().sp != 0xE1 ||
+        cpu.regs().p != 0x65) {
+      std::cerr << "FAIL: STA (zp,X) write/cycle/PC/register stability mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x2180;
+    writeProgram(*mem, start,
+                 {
+                     0x99,
+                     0x50,
+                     0x2A,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x5C;
+    cpu.regs().x  = 0x11;
+    cpu.regs().y  = 0x02;
+    cpu.regs().sp = 0xD2;
+    cpu.regs().p  = 0xA5;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x2A52) != 0x5C ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x5C ||
+        cpu.regs().x != 0x11 || cpu.regs().y != 0x02 || cpu.regs().sp != 0xD2 ||
+        cpu.regs().p != 0xA5) {
+      std::cerr << "FAIL: STA abs,Y write/cycle/PC/register stability mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x0070, 0xFF);
+
+    const uint16_t start = 0x21A0;
+    writeProgram(*mem, start,
+                 {
+                     0x64,
+                     0x70,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x9B;
+    cpu.regs().x  = 0x12;
+    cpu.regs().y  = 0x34;
+    cpu.regs().sp = 0xE2;
+    cpu.regs().p  = 0x27;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 3 || prodos8emu::read_u8(mem->constBanks(), 0x0070) != 0x00 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x9B ||
+        cpu.regs().x != 0x12 || cpu.regs().y != 0x34 || cpu.regs().sp != 0xE2 ||
+        cpu.regs().p != 0x27) {
+      std::cerr << "FAIL: STZ zp write/cycle/PC/register stability mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: load_store_opcode_completeness_matrix_preserved\n";
+  }
+}
+
+__attribute__((noinline)) static void run_store_indexed_page_cross_cycle_contracts_test(
+    int& failures) {
+  std::cout << "Test 52: store_indexed_page_cross_cycle_contracts\n";
+
+  bool testFailed = false;
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2220;
+    writeProgram(*mem, start,
+                 {
+                     0x9D,
+                     0x00,
+                     0x30,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x11;
+    cpu.regs().x = 0x01;
+    cpu.regs().y = 0x55;
+    cpu.regs().p = 0xA4;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x3001) != 0x11 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x11 ||
+        cpu.regs().x != 0x01 || cpu.regs().y != 0x55 || cpu.regs().p != 0xA4) {
+      std::cerr << "FAIL: STA abs,X no-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2240;
+    writeProgram(*mem, start,
+                 {
+                     0x9D,
+                     0xFF,
+                     0x30,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x22;
+    cpu.regs().x = 0x01;
+    cpu.regs().y = 0x66;
+    cpu.regs().p = 0xA4;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x3100) != 0x22 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x22 ||
+        cpu.regs().x != 0x01 || cpu.regs().y != 0x66 || cpu.regs().p != 0xA4) {
+      std::cerr << "FAIL: STA abs,X page-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2260;
+    writeProgram(*mem, start,
+                 {
+                     0x99,
+                     0x10,
+                     0x32,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x33;
+    cpu.regs().x = 0x77;
+    cpu.regs().y = 0x02;
+    cpu.regs().p = 0x25;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x3212) != 0x33 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x33 ||
+        cpu.regs().x != 0x77 || cpu.regs().y != 0x02 || cpu.regs().p != 0x25) {
+      std::cerr << "FAIL: STA abs,Y no-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2280;
+    writeProgram(*mem, start,
+                 {
+                     0x99,
+                     0xFF,
+                     0x32,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x44;
+    cpu.regs().x = 0x88;
+    cpu.regs().y = 0x01;
+    cpu.regs().p = 0x25;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x3300) != 0x44 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x44 ||
+        cpu.regs().x != 0x88 || cpu.regs().y != 0x01 || cpu.regs().p != 0x25) {
+      std::cerr << "FAIL: STA abs,Y page-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u16_le(mem->banks(), 0x0080, 0x3410);
+
+    const uint16_t start = 0x22A0;
+    writeProgram(*mem, start,
+                 {
+                     0x91,
+                     0x80,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x55;
+    cpu.regs().x = 0x99;
+    cpu.regs().y = 0x02;
+    cpu.regs().p = 0x63;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 6 || prodos8emu::read_u8(mem->constBanks(), 0x3412) != 0x55 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x55 ||
+        cpu.regs().x != 0x99 || cpu.regs().y != 0x02 || cpu.regs().p != 0x63) {
+      std::cerr << "FAIL: STA (zp),Y no-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u16_le(mem->banks(), 0x0082, 0x34FF);
+
+    const uint16_t start = 0x22C0;
+    writeProgram(*mem, start,
+                 {
+                     0x91,
+                     0x82,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x66;
+    cpu.regs().x = 0xAA;
+    cpu.regs().y = 0x01;
+    cpu.regs().p = 0x63;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 6 || prodos8emu::read_u8(mem->constBanks(), 0x3500) != 0x66 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x66 ||
+        cpu.regs().x != 0xAA || cpu.regs().y != 0x01 || cpu.regs().p != 0x63) {
+      std::cerr << "FAIL: STA (zp),Y page-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x3601, 0x7A);
+
+    const uint16_t start = 0x22E0;
+    writeProgram(*mem, start,
+                 {
+                     0x9E,
+                     0x00,
+                     0x36,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x9C;
+    cpu.regs().x = 0x01;
+    cpu.regs().y = 0x0B;
+    cpu.regs().p = 0x45;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x3601) != 0x00 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x9C ||
+        cpu.regs().x != 0x01 || cpu.regs().y != 0x0B || cpu.regs().p != 0x45) {
+      std::cerr << "FAIL: STZ abs,X no-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x3700, 0x6B);
+
+    const uint16_t start = 0x2300;
+    writeProgram(*mem, start,
+                 {
+                     0x9E,
+                     0xFF,
+                     0x36,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x8D;
+    cpu.regs().x = 0x01;
+    cpu.regs().y = 0x1C;
+    cpu.regs().p = 0x45;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x3700) != 0x00 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x8D ||
+        cpu.regs().x != 0x01 || cpu.regs().y != 0x1C || cpu.regs().p != 0x45) {
+      std::cerr << "FAIL: STZ abs,X page-cross cycle/write/register contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: store_indexed_page_cross_cycle_contracts\n";
+  }
+}
+
+__attribute__((noinline)) static void run_fallback_router_family_membership_contracts_test(
+    int& failures) {
+  std::cout << "Test 53: fallback_router_family_membership_contracts\n";
+
+  bool testFailed = false;
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2320;
+    writeProgram(*mem, start,
+                 {
+                     0x18,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x11;
+    cpu.regs().x = 0x22;
+    cpu.regs().y = 0x33;
+    cpu.regs().p = 0x21;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 1) ||
+        (cpu.regs().p & 0x01) != 0 || cpu.regs().a != 0x11 || cpu.regs().x != 0x22 ||
+        cpu.regs().y != 0x33) {
+      std::cerr << "FAIL: fallback flag-transfer family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2340;
+    writeProgram(*mem, start,
+                 {
+                     0x6A,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x01;
+    cpu.regs().p = 0x21;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().a != 0x80 || (cpu.regs().p & 0x01) == 0 ||
+        (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 1)) {
+      std::cerr << "FAIL: fallback accumulator family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u16_le(mem->banks(), 0x0010, 0x3800);
+    prodos8emu::write_u8(mem->banks(), 0x3800, 0x00);
+
+    const uint16_t start = 0x2360;
+    writeProgram(*mem, start,
+                 {
+                     0xB2,
+                     0x10,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0xA1;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || cpu.regs().a != 0x00 || (cpu.regs().p & 0x02) == 0 ||
+        (cpu.regs().p & 0x80) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: fallback load/store family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x0020, 0xF0);
+
+    const uint16_t start = 0x2380;
+    writeProgram(*mem, start,
+                 {
+                     0x04,
+                     0x20,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x0F;
+    cpu.regs().p = 0x61;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x0020) != 0xFF ||
+        (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x01) == 0 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: fallback bit-family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x0022, 0xAB);
+
+    const uint16_t start = 0x23A0;
+    writeProgram(*mem, start,
+                 {
+                     0x44,
+                     0x22,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x44;
+    cpu.regs().x  = 0x55;
+    cpu.regs().y  = 0x66;
+    cpu.regs().sp = 0xD4;
+    cpu.regs().p  = 0x27;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x44 ||
+        cpu.regs().x != 0x55 || cpu.regs().y != 0x66 || cpu.regs().sp != 0xD4 ||
+        cpu.regs().p != 0x27 || prodos8emu::read_u8(mem->constBanks(), 0x0022) != 0xAB) {
+      std::cerr << "FAIL: fallback nop-variant family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x23C0;
+    writeProgram(*mem, start,
+                 {
+                     0xE8,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x7F;
+    cpu.regs().p = 0x20;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().x != 0x80 || (cpu.regs().p & 0x80) == 0 ||
+        (cpu.regs().p & 0x02) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 1)) {
+      std::cerr << "FAIL: fallback misc-tail family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x23E0;
+    writeProgram(*mem, start,
+                 {
+                     0x09,
+                     0x0F,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0xF0;
+    cpu.regs().p = 0x20;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().a != 0xFF || (cpu.regs().p & 0x80) == 0 ||
+        (cpu.regs().p & 0x02) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: fallback ALU family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2400;
+    writeProgram(*mem, start,
+                 {
+                     0xE0,
+                     0x40,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x40;
+    cpu.regs().p = 0x60;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x02) == 0 ||
+        (cpu.regs().p & 0x80) != 0 || (cpu.regs().p & 0x40) == 0 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: fallback compare-XY family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x0024, 0x7F);
+
+    const uint16_t start = 0x2420;
+    writeProgram(*mem, start,
+                 {
+                     0xE6,
+                     0x24,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x20;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x0024) != 0x80 ||
+        (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: fallback RMW family membership mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: fallback_router_family_membership_contracts\n";
+  }
+}
+
+__attribute__((noinline)) static void run_execute_decode_precedence_nonregression_test(
+    int& failures) {
+  std::cout << "Test 54: execute_decode_precedence_nonregression\n";
+
+  bool testFailed = false;
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x0030, 0xFF);
+
+    const uint16_t start = 0x2440;
+    writeProgram(*mem, start,
+                 {
+                     0x07,
+                     0x30,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x12;
+    cpu.regs().x  = 0x23;
+    cpu.regs().y  = 0x34;
+    cpu.regs().sp = 0xE5;
+    cpu.regs().p  = 0x67;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x0030) != 0xFE ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x12 ||
+        cpu.regs().x != 0x23 || cpu.regs().y != 0x34 || cpu.regs().sp != 0xE5 ||
+        cpu.regs().p != 0x67) {
+      std::cerr << "FAIL: execute precedence mismatch for RMB special decode\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x0031, 0x01);
+
+    const uint16_t start = 0x2460;
+    writeProgram(*mem, start,
+                 {
+                     0x8F,
+                     0x31,
+                     0x02,
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0xA1;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5) || cpu.regs().p != 0xA1) {
+      std::cerr << "FAIL: execute precedence mismatch for BBS special decode\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem        = makeMem();
+    const uint16_t start      = 0x2480;
+    const uint16_t irqHandler = 0x24A0;
+    writeProgram(*mem, start,
+                 {
+                     0x00,
+                     0xEA,
+                 });
+    writeProgram(*mem, irqHandler,
+                 {
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFE, irqHandler);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x29;
+
+    uint32_t cycles        = cpu.step();
+    uint8_t  stackedStatus = prodos8emu::read_u8(mem->constBanks(), 0x01FD);
+    if (cycles != 7 || cpu.regs().pc != irqHandler || cpu.regs().sp != 0xFC ||
+        stackedStatus != static_cast<uint8_t>(0x29 | 0x10 | 0x20) || (cpu.regs().p & 0x04) == 0 ||
+        (cpu.regs().p & 0x08) != 0) {
+      std::cerr << "FAIL: execute precedence mismatch for control-flow BRK routing\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem    = makeMem();
+    const uint16_t start  = 0x24C0;
+    const uint16_t target = 0x24E0;
+    writeProgram(*mem, start,
+                 {
+                     0x4C,
+                     static_cast<uint8_t>(target & 0xFF),
+                     static_cast<uint8_t>((target >> 8) & 0xFF),
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x9A;
+    cpu.regs().x = 0xBC;
+    cpu.regs().y = 0xDE;
+    cpu.regs().p = 0x45;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 3 || cpu.regs().pc != target || cpu.regs().a != 0x9A || cpu.regs().x != 0xBC ||
+        cpu.regs().y != 0xDE || cpu.regs().p != 0x45) {
+      std::cerr << "FAIL: execute precedence mismatch for control-flow JMP routing\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2500;
+    writeProgram(*mem, start,
+                 {
+                     0xA9,
+                     0xF0,
+                     0x09,
+                     0x0F,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    (void)cpu.step();
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().a != 0xFF || (cpu.regs().p & 0x80) == 0 ||
+        (cpu.regs().p & 0x02) != 0 || cpu.regs().pc != static_cast<uint16_t>(start + 4)) {
+      std::cerr << "FAIL: execute precedence mismatch for fallback ALU routing\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: execute_decode_precedence_nonregression\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -5795,6 +6797,11 @@ int main() {
   run_fallback_router_precedence_contracts_test(failures);
   run_execute_fallback_router_dispatch_preserved_test(failures);
   run_nop_variant_table_dispatch_equivalence_test(failures);
+  run_control_flow_jump_matrix_preserved_test(failures);
+  run_load_store_opcode_completeness_matrix_preserved_test(failures);
+  run_store_indexed_page_cross_cycle_contracts_test(failures);
+  run_fallback_router_family_membership_contracts_test(failures);
+  run_execute_decode_precedence_nonregression_test(failures);
 
   fs::remove_all(tempDir);
 
