@@ -1169,6 +1169,163 @@ namespace prodos8emu {
     }
   }
 
+  bool CPU65C02::execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      // Flag operations
+      case 0x18:
+        setFlag(FLAG_C, false);
+        cycles = 2;
+        return true;
+      case 0x38:
+        setFlag(FLAG_C, true);
+        cycles = 2;
+        return true;
+      case 0x58:
+        setFlag(FLAG_I, false);
+        cycles = 2;
+        return true;
+      case 0x78:
+        setFlag(FLAG_I, true);
+        cycles = 2;
+        return true;
+      case 0xD8:
+        setFlag(FLAG_D, false);
+        cycles = 2;
+        return true;
+      case 0xF8:
+        setFlag(FLAG_D, true);
+        cycles = 2;
+        return true;
+      case 0xB8:
+        setFlag(FLAG_V, false);
+        cycles = 2;
+        return true;
+
+      // Transfers
+      case 0xAA:
+        m_r.x = m_r.a;
+        setNZ(m_r.x);
+        cycles = 2;
+        return true;
+      case 0x8A:
+        m_r.a = m_r.x;
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+      case 0xA8:
+        m_r.y = m_r.a;
+        setNZ(m_r.y);
+        cycles = 2;
+        return true;
+      case 0x98:
+        m_r.a = m_r.y;
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+      case 0xBA:
+        m_r.x = m_r.sp;
+        setNZ(m_r.x);
+        cycles = 2;
+        return true;
+      case 0x9A:
+        m_r.sp = m_r.x;
+        cycles = 2;
+        return true;
+
+      // Stack
+      case 0x48:
+        push8(m_r.a);
+        cycles = 3;
+        return true;
+      case 0x68:
+        m_r.a = pull8();
+        setNZ(m_r.a);
+        cycles = 4;
+        return true;
+      case 0x08:
+        push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
+        cycles = 3;
+        return true;
+      case 0x28:
+        m_r.p  = static_cast<uint8_t>(pull8() | FLAG_U);
+        cycles = 4;
+        return true;
+      case 0xDA:  // PHX
+        push8(m_r.x);
+        cycles = 3;
+        return true;
+      case 0xFA:  // PLX
+        m_r.x = pull8();
+        setNZ(m_r.x);
+        cycles = 4;
+        return true;
+      case 0x5A:  // PHY
+        push8(m_r.y);
+        cycles = 3;
+        return true;
+      case 0x7A:  // PLY
+        m_r.y = pull8();
+        setNZ(m_r.y);
+        cycles = 4;
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_accumulator_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      // INC/DEC accumulator (65C02)
+      case 0x1A:
+        m_r.a = static_cast<uint8_t>(m_r.a + 1);
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+      case 0x3A:
+        m_r.a = static_cast<uint8_t>(m_r.a - 1);
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+
+      // Shifts/rotates accumulator
+      case 0x0A:  // ASL A
+        setFlag(FLAG_C, (m_r.a & 0x80) != 0);
+        m_r.a = static_cast<uint8_t>(m_r.a << 1);
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+
+      case 0x4A:  // LSR A
+        setFlag(FLAG_C, (m_r.a & 0x01) != 0);
+        m_r.a = static_cast<uint8_t>(m_r.a >> 1);
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+
+      case 0x2A: {  // ROL A
+        bool c = getFlag(FLAG_C);
+        setFlag(FLAG_C, (m_r.a & 0x80) != 0);
+        m_r.a = static_cast<uint8_t>((m_r.a << 1) | (c ? 1 : 0));
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+      }
+
+      case 0x6A: {  // ROR A
+        bool c = getFlag(FLAG_C);
+        setFlag(FLAG_C, (m_r.a & 0x01) != 0);
+        m_r.a = static_cast<uint8_t>((m_r.a >> 1) | (c ? 0x80 : 0));
+        setNZ(m_r.a);
+        cycles = 2;
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  }
+
   bool CPU65C02::read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles) {
     switch (mode) {
       case 0x09:
@@ -1391,57 +1548,17 @@ namespace prodos8emu {
       return controlCycles;
     }
 
+    uint32_t lowRiskCycles = 0;
+    if (execute_flag_transfer_stack_opcode(op, lowRiskCycles)) {
+      return lowRiskCycles;
+    }
+    if (execute_accumulator_opcode(op, lowRiskCycles)) {
+      return lowRiskCycles;
+    }
+
     // Default for reserved/unknown opcodes: treat as 1-byte NOP.
     // Many 65C02 implementations treat undefined opcodes as NOP.
     switch (op) {
-      // Flag operations
-      case 0x18:
-        setFlag(FLAG_C, false);
-        return 2;
-      case 0x38:
-        setFlag(FLAG_C, true);
-        return 2;
-      case 0x58:
-        setFlag(FLAG_I, false);
-        return 2;
-      case 0x78:
-        setFlag(FLAG_I, true);
-        return 2;
-      case 0xD8:
-        setFlag(FLAG_D, false);
-        return 2;
-      case 0xF8:
-        setFlag(FLAG_D, true);
-        return 2;
-      case 0xB8:
-        setFlag(FLAG_V, false);
-        return 2;
-
-      // Transfers
-      case 0xAA:
-        m_r.x = m_r.a;
-        setNZ(m_r.x);
-        return 2;
-      case 0x8A:
-        m_r.a = m_r.x;
-        setNZ(m_r.a);
-        return 2;
-      case 0xA8:
-        m_r.y = m_r.a;
-        setNZ(m_r.y);
-        return 2;
-      case 0x98:
-        m_r.a = m_r.y;
-        setNZ(m_r.a);
-        return 2;
-      case 0xBA:
-        m_r.x = m_r.sp;
-        setNZ(m_r.x);
-        return 2;
-      case 0x9A:
-        m_r.sp = m_r.x;
-        return 2;
-
       // INC/DEC registers
       case 0xE8:
         m_r.x = static_cast<uint8_t>(m_r.x + 1);
@@ -1459,45 +1576,6 @@ namespace prodos8emu {
         m_r.y = static_cast<uint8_t>(m_r.y - 1);
         setNZ(m_r.y);
         return 2;
-
-      // INC/DEC accumulator (65C02)
-      case 0x1A:
-        m_r.a = static_cast<uint8_t>(m_r.a + 1);
-        setNZ(m_r.a);
-        return 2;
-      case 0x3A:
-        m_r.a = static_cast<uint8_t>(m_r.a - 1);
-        setNZ(m_r.a);
-        return 2;
-
-      // Stack
-      case 0x48:
-        push8(m_r.a);
-        return 3;
-      case 0x68:
-        m_r.a = pull8();
-        setNZ(m_r.a);
-        return 4;
-      case 0x08:
-        push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
-        return 3;
-      case 0x28:
-        m_r.p = static_cast<uint8_t>(pull8() | FLAG_U);
-        return 4;
-      case 0xDA:  // PHX
-        push8(m_r.x);
-        return 3;
-      case 0xFA:  // PLX
-        m_r.x = pull8();
-        setNZ(m_r.x);
-        return 4;
-      case 0x5A:  // PHY
-        push8(m_r.y);
-        return 3;
-      case 0x7A:  // PLY
-        m_r.y = pull8();
-        setNZ(m_r.y);
-        return 4;
 
       // Loads
       case 0xA9:  // LDA #imm
@@ -1764,37 +1842,6 @@ namespace prodos8emu {
       case 0x6E:
       case 0x7E:
         return execute_rmw_family_opcode(op);
-
-      // Shifts/rotates accumulator
-      case 0x0A: {  // ASL A
-        setFlag(FLAG_C, (m_r.a & 0x80) != 0);
-        m_r.a = static_cast<uint8_t>(m_r.a << 1);
-        setNZ(m_r.a);
-        return 2;
-      }
-
-      case 0x4A: {  // LSR A
-        setFlag(FLAG_C, (m_r.a & 0x01) != 0);
-        m_r.a = static_cast<uint8_t>(m_r.a >> 1);
-        setNZ(m_r.a);
-        return 2;
-      }
-
-      case 0x2A: {  // ROL A
-        bool c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (m_r.a & 0x80) != 0);
-        m_r.a = static_cast<uint8_t>((m_r.a << 1) | (c ? 1 : 0));
-        setNZ(m_r.a);
-        return 2;
-      }
-
-      case 0x6A: {  // ROR A
-        bool c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (m_r.a & 0x01) != 0);
-        m_r.a = static_cast<uint8_t>((m_r.a >> 1) | (c ? 0x80 : 0));
-        setNZ(m_r.a);
-        return 2;
-      }
 
       // BIT
       case 0x89: {  // BIT #imm (65C02)

@@ -2918,7 +2918,7 @@ int main() {
       uint32_t cldCycles = cpu.step();
       bool     cldD      = (cpu.regs().p & 0x08) != 0;
 
-      cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x40);
+      cpu.regs().p       = static_cast<uint8_t>(cpu.regs().p | 0x40);
       uint32_t clvCycles = cpu.step();
       bool     clvV      = (cpu.regs().p & 0x40) != 0;
 
@@ -2993,10 +2993,10 @@ int main() {
 
       if (taxCycles != 2 || taxX != 0x80 || taxZ || !taxN || txaCycles != 2 || txaA != 0x80 ||
           txaZ || !txaN || tayCycles != 2 || tayY != 0x00 || !tayZ || tayN || tyaCycles != 2 ||
-          tyaA != 0x00 || !tyaZ || tyaN ||
-          txsCycles != 2 || cpu.regs().sp != 0xFF || !txsZ || txsN || tsxCycles != 2 ||
-          tsxX != 0xFF || tsxZ || !tsxN) {
-        std::cerr << "FAIL: Transfer opcode fallback contract mismatch for register and NZ behavior\n";
+          tyaA != 0x00 || !tyaZ || tyaN || txsCycles != 2 || cpu.regs().sp != 0xFF || !txsZ ||
+          txsN || tsxCycles != 2 || tsxX != 0xFF || tsxZ || !tsxN) {
+        std::cerr
+            << "FAIL: Transfer opcode fallback contract mismatch for register and NZ behavior\n";
         failures++;
         testFailed = true;
       }
@@ -3010,26 +3010,8 @@ int main() {
       const uint16_t start = 0x0F20;
       writeProgram(mem, start,
                    {
-                       0x08,
-                       0x28,
-                       0xA9,
-                       0x42,
-                       0x48,
-                       0xA9,
-                       0x00,
-                       0x68,
-                       0xA2,
-                       0x80,
-                       0xDA,
-                       0xA2,
-                       0x00,
-                       0xFA,
-                       0xA0,
-                       0x01,
-                       0x5A,
-                       0xA0,
-                       0x00,
-                       0x7A,
+                       0x08, 0x28, 0xA9, 0x42, 0x48, 0xA9, 0x00, 0x68, 0xA2, 0x80,
+                       0xDA, 0xA2, 0x00, 0xFA, 0xA0, 0x01, 0x5A, 0xA0, 0x00, 0x7A,
                    });
       prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
 
@@ -3042,7 +3024,7 @@ int main() {
       uint8_t  stackedStatus   = prodos8emu::read_u8(mem.constBanks(), 0x01FF);
       uint8_t  expectedStacked = static_cast<uint8_t>(0x41 | 0x10 | 0x20);
 
-      cpu.regs().p      = 0x00;
+      cpu.regs().p       = 0x00;
       uint32_t plpCycles = cpu.step();
 
       (void)cpu.step();
@@ -3078,7 +3060,8 @@ int main() {
           plxCycles != 4 || cpu.regs().x != 0x80 || plxZ || !plxN || phyCycles != 3 ||
           phyByte != 0x01 || plyCycles != 4 || cpu.regs().y != 0x01 || plyZ || plyN ||
           cpu.regs().sp != 0xFF) {
-        std::cerr << "FAIL: Stack opcode fallback contract mismatch for push/pull cycles or state\n";
+        std::cerr
+            << "FAIL: Stack opcode fallback contract mismatch for push/pull cycles or state\n";
         failures++;
         testFailed = true;
       }
@@ -3296,9 +3279,9 @@ int main() {
       cpu.regs().p  = 0xA5;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 1 || cpu.regs().pc != static_cast<uint16_t>(start + 1) || cpu.regs().a != 0x12 ||
-          cpu.regs().x != 0x34 || cpu.regs().y != 0x56 || cpu.regs().sp != 0xEE ||
-          cpu.regs().p != 0xA5) {
+      if (cycles != 1 || cpu.regs().pc != static_cast<uint16_t>(start + 1) ||
+          cpu.regs().a != 0x12 || cpu.regs().x != 0x34 || cpu.regs().y != 0x56 ||
+          cpu.regs().sp != 0xEE || cpu.regs().p != 0xA5) {
         std::cerr << "FAIL: 1-byte undocumented NOP contract mismatch\n";
         failures++;
         testFailed = true;
@@ -3328,9 +3311,9 @@ int main() {
       cpu.regs().p  = 0x65;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x22 ||
-          cpu.regs().x != 0x33 || cpu.regs().y != 0x44 || cpu.regs().sp != 0xDD ||
-          cpu.regs().p != 0x65) {
+      if (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
+          cpu.regs().a != 0x22 || cpu.regs().x != 0x33 || cpu.regs().y != 0x44 ||
+          cpu.regs().sp != 0xDD || cpu.regs().p != 0x65) {
         std::cerr << "FAIL: Immediate undocumented NOP contract mismatch\n";
         failures++;
         testFailed = true;
@@ -3362,9 +3345,9 @@ int main() {
       cpu.regs().p  = 0x27;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x55 ||
-          cpu.regs().x != 0x66 || cpu.regs().y != 0x77 || cpu.regs().sp != 0xCC ||
-          cpu.regs().p != 0x27) {
+      if (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
+          cpu.regs().a != 0x55 || cpu.regs().x != 0x66 || cpu.regs().y != 0x77 ||
+          cpu.regs().sp != 0xCC || cpu.regs().p != 0x27) {
         std::cerr << "FAIL: Zero-page undocumented NOP contract mismatch\n";
         failures++;
         testFailed = true;
@@ -3396,9 +3379,9 @@ int main() {
       cpu.regs().p  = 0x47;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 4 || cpu.regs().pc != static_cast<uint16_t>(start + 2) || cpu.regs().a != 0x11 ||
-          cpu.regs().x != 0x01 || cpu.regs().y != 0x22 || cpu.regs().sp != 0xBB ||
-          cpu.regs().p != 0x47) {
+      if (cycles != 4 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
+          cpu.regs().a != 0x11 || cpu.regs().x != 0x01 || cpu.regs().y != 0x22 ||
+          cpu.regs().sp != 0xBB || cpu.regs().p != 0x47) {
         std::cerr << "FAIL: Zero-page,X undocumented NOP contract mismatch\n";
         failures++;
         testFailed = true;
@@ -3431,9 +3414,9 @@ int main() {
       cpu.regs().p  = 0x23;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 4 || cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0x99 ||
-          cpu.regs().x != 0x88 || cpu.regs().y != 0x77 || cpu.regs().sp != 0xAA ||
-          cpu.regs().p != 0x23) {
+      if (cycles != 4 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+          cpu.regs().a != 0x99 || cpu.regs().x != 0x88 || cpu.regs().y != 0x77 ||
+          cpu.regs().sp != 0xAA || cpu.regs().p != 0x23) {
         std::cerr << "FAIL: Absolute undocumented NOP contract mismatch\n";
         failures++;
         testFailed = true;
@@ -3466,9 +3449,9 @@ int main() {
       cpu.regs().p  = 0x21;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 8 || cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().a != 0xAA ||
-          cpu.regs().x != 0xBB || cpu.regs().y != 0xCC || cpu.regs().sp != 0x99 ||
-          cpu.regs().p != 0x21) {
+      if (cycles != 8 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+          cpu.regs().a != 0xAA || cpu.regs().x != 0xBB || cpu.regs().y != 0xCC ||
+          cpu.regs().sp != 0x99 || cpu.regs().p != 0x21) {
         std::cerr << "FAIL: Absolute long undocumented NOP contract mismatch\n";
         failures++;
         testFailed = true;
@@ -3477,6 +3460,358 @@ int main() {
 
     if (!testFailed) {
       std::cout << "PASS: undocumented_nop_cycles_and_pc_advance_contracts\n";
+    }
+  }
+
+  // Test 34: low_risk_group_dispatch_cycles_preserved
+  {
+    std::cout << "Test 34: low_risk_group_dispatch_cycles_preserved\n";
+
+    bool testFailed = false;
+
+    struct OpcodeCase {
+      uint8_t  opcode;
+      uint32_t expectedCycles;
+    };
+
+    const OpcodeCase opcodeCases[] = {
+        {0x18, 2}, {0x38, 2}, {0x58, 2}, {0x78, 2}, {0xD8, 2}, {0xF8, 2}, {0xB8, 2},
+        {0xAA, 2}, {0x8A, 2}, {0xA8, 2}, {0x98, 2}, {0xBA, 2}, {0x9A, 2}, {0x48, 3},
+        {0x68, 4}, {0x08, 3}, {0x28, 4}, {0xDA, 3}, {0xFA, 4}, {0x5A, 3}, {0x7A, 4},
+        {0x1A, 2}, {0x3A, 2}, {0x0A, 2}, {0x4A, 2}, {0x2A, 2}, {0x6A, 2},
+    };
+
+    for (const OpcodeCase& opcodeCase : opcodeCases) {
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x1140;
+      writeProgram(mem, start,
+                   {
+                       opcodeCase.opcode,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      cpu.regs().a  = 0x42;
+      cpu.regs().x  = 0x24;
+      cpu.regs().y  = 0x81;
+      cpu.regs().sp = 0xFF;
+      cpu.regs().p  = 0x20;
+
+      switch (opcodeCase.opcode) {
+        case 0x18:
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x01);
+          break;
+        case 0x38:
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p & static_cast<uint8_t>(~0x01));
+          break;
+        case 0x58:
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x04);
+          break;
+        case 0x78:
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p & static_cast<uint8_t>(~0x04));
+          break;
+        case 0xD8:
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x08);
+          break;
+        case 0xF8:
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p & static_cast<uint8_t>(~0x08));
+          break;
+        case 0xB8:
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x40);
+          break;
+
+        case 0xAA:
+          cpu.regs().a = 0x80;
+          break;
+        case 0x8A:
+          cpu.regs().x = 0x00;
+          break;
+        case 0xA8:
+          cpu.regs().a = 0x7F;
+          break;
+        case 0x98:
+          cpu.regs().y = 0x80;
+          break;
+        case 0xBA:
+          cpu.regs().sp = 0x00;
+          break;
+        case 0x9A:
+          cpu.regs().x = 0x44;
+          cpu.regs().p = 0xA2;
+          break;
+
+        case 0x48:
+          cpu.regs().a = 0x3C;
+          break;
+        case 0x68:
+          cpu.regs().sp = 0xFE;
+          prodos8emu::write_u8(mem.banks(), 0x01FF, 0x00);
+          break;
+        case 0x08:
+          cpu.regs().p = 0x41;
+          break;
+        case 0x28:
+          cpu.regs().sp = 0xFE;
+          prodos8emu::write_u8(mem.banks(), 0x01FF, 0x41);
+          break;
+        case 0xDA:
+          cpu.regs().x = 0xA5;
+          break;
+        case 0xFA:
+          cpu.regs().sp = 0xFE;
+          prodos8emu::write_u8(mem.banks(), 0x01FF, 0x80);
+          break;
+        case 0x5A:
+          cpu.regs().y = 0x5E;
+          break;
+        case 0x7A:
+          cpu.regs().sp = 0xFE;
+          prodos8emu::write_u8(mem.banks(), 0x01FF, 0x00);
+          break;
+
+        case 0x1A:
+          cpu.regs().a = 0x7F;
+          break;
+        case 0x3A:
+          cpu.regs().a = 0x01;
+          break;
+        case 0x0A:
+          cpu.regs().a = 0x80;
+          break;
+        case 0x4A:
+          cpu.regs().a = 0x01;
+          break;
+        case 0x2A:
+          cpu.regs().a = 0x80;
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x01);
+          break;
+        case 0x6A:
+          cpu.regs().a = 0x01;
+          cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x01);
+          break;
+      }
+
+      uint32_t cycles = cpu.step();
+      if (cycles != opcodeCase.expectedCycles ||
+          cpu.regs().pc != static_cast<uint16_t>(start + 1)) {
+        std::cerr << "FAIL: low-risk dispatch cycle/PC mismatch for opcode 0x" << std::hex
+                  << static_cast<int>(opcodeCase.opcode) << std::dec << " (cycles=" << cycles
+                  << ", expected=" << opcodeCase.expectedCycles << ", pc=0x" << std::hex
+                  << cpu.regs().pc << std::dec << ")\n";
+        failures++;
+        testFailed = true;
+        continue;
+      }
+
+      switch (opcodeCase.opcode) {
+        case 0x18:
+          if ((cpu.regs().p & 0x01) != 0) {
+            std::cerr << "FAIL: CLC did not clear carry\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x38:
+          if ((cpu.regs().p & 0x01) == 0) {
+            std::cerr << "FAIL: SEC did not set carry\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x58:
+          if ((cpu.regs().p & 0x04) != 0) {
+            std::cerr << "FAIL: CLI did not clear interrupt disable\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x78:
+          if ((cpu.regs().p & 0x04) == 0) {
+            std::cerr << "FAIL: SEI did not set interrupt disable\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0xD8:
+          if ((cpu.regs().p & 0x08) != 0) {
+            std::cerr << "FAIL: CLD did not clear decimal mode\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0xF8:
+          if ((cpu.regs().p & 0x08) == 0) {
+            std::cerr << "FAIL: SED did not set decimal mode\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0xB8:
+          if ((cpu.regs().p & 0x40) != 0) {
+            std::cerr << "FAIL: CLV did not clear overflow\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+
+        case 0xAA:
+          if (cpu.regs().x != 0x80 || (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0) {
+            std::cerr << "FAIL: TAX state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x8A:
+          if (cpu.regs().a != 0x00 || (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x80) != 0) {
+            std::cerr << "FAIL: TXA state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0xA8:
+          if (cpu.regs().y != 0x7F || (cpu.regs().p & 0x02) != 0 || (cpu.regs().p & 0x80) != 0) {
+            std::cerr << "FAIL: TAY state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x98:
+          if (cpu.regs().a != 0x80 || (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0) {
+            std::cerr << "FAIL: TYA state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0xBA:
+          if (cpu.regs().x != 0x00 || (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x80) != 0) {
+            std::cerr << "FAIL: TSX state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x9A:
+          if (cpu.regs().sp != 0x44 || cpu.regs().p != 0xA2) {
+            std::cerr << "FAIL: TXS state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+
+        case 0x48:
+          if (cpu.regs().sp != 0xFE || prodos8emu::read_u8(mem.constBanks(), 0x01FF) != 0x3C) {
+            std::cerr << "FAIL: PHA state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x68:
+          if (cpu.regs().a != 0x00 || cpu.regs().sp != 0xFF || (cpu.regs().p & 0x02) == 0 ||
+              (cpu.regs().p & 0x80) != 0) {
+            std::cerr << "FAIL: PLA state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x08:
+          if (cpu.regs().sp != 0xFE || prodos8emu::read_u8(mem.constBanks(), 0x01FF) != 0x71) {
+            std::cerr << "FAIL: PHP state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x28:
+          if (cpu.regs().sp != 0xFF || cpu.regs().p != 0x61) {
+            std::cerr << "FAIL: PLP state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0xDA:
+          if (cpu.regs().sp != 0xFE || prodos8emu::read_u8(mem.constBanks(), 0x01FF) != 0xA5) {
+            std::cerr << "FAIL: PHX state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0xFA:
+          if (cpu.regs().x != 0x80 || cpu.regs().sp != 0xFF || (cpu.regs().p & 0x80) == 0 ||
+              (cpu.regs().p & 0x02) != 0) {
+            std::cerr << "FAIL: PLX state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x5A:
+          if (cpu.regs().sp != 0xFE || prodos8emu::read_u8(mem.constBanks(), 0x01FF) != 0x5E) {
+            std::cerr << "FAIL: PHY state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x7A:
+          if (cpu.regs().y != 0x00 || cpu.regs().sp != 0xFF || (cpu.regs().p & 0x02) == 0 ||
+              (cpu.regs().p & 0x80) != 0) {
+            std::cerr << "FAIL: PLY state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+
+        case 0x1A:
+          if (cpu.regs().a != 0x80 || (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0) {
+            std::cerr << "FAIL: INC A state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x3A:
+          if (cpu.regs().a != 0x00 || (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x80) != 0) {
+            std::cerr << "FAIL: DEC A state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x0A:
+          if (cpu.regs().a != 0x00 || (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x02) == 0) {
+            std::cerr << "FAIL: ASL A state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x4A:
+          if (cpu.regs().a != 0x00 || (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x02) == 0) {
+            std::cerr << "FAIL: LSR A state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x2A:
+          if (cpu.regs().a != 0x01 || (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x02) != 0 ||
+              (cpu.regs().p & 0x80) != 0) {
+            std::cerr << "FAIL: ROL A state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+        case 0x6A:
+          if (cpu.regs().a != 0x80 || (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x80) == 0 ||
+              (cpu.regs().p & 0x02) != 0) {
+            std::cerr << "FAIL: ROR A state mismatch\n";
+            failures++;
+            testFailed = true;
+          }
+          break;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: low_risk_group_dispatch_cycles_preserved\n";
     }
   }
 
