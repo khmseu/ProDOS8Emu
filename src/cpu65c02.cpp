@@ -1330,9 +1330,8 @@ namespace prodos8emu {
     return execute_control_flow_branch_opcode(op, cycles);
   }
 
-  bool CPU65C02::execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles) {
+  bool CPU65C02::execute_flag_opcode(uint8_t op, uint32_t& cycles) {
     switch (op) {
-      // Flag operations
       case 0x18:
         setFlag(FLAG_C, false);
         cycles = 2;
@@ -1362,7 +1361,13 @@ namespace prodos8emu {
         cycles = 2;
         return true;
 
-      // Transfers
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_transfer_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0xAA:
         m_r.x = m_r.a;
         setNZ(m_r.x);
@@ -1393,7 +1398,13 @@ namespace prodos8emu {
         cycles = 2;
         return true;
 
-      // Stack
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_stack_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0x48:
         push8(m_r.a);
         cycles = 3;
@@ -1411,20 +1422,20 @@ namespace prodos8emu {
         m_r.p  = static_cast<uint8_t>(pull8() | FLAG_U);
         cycles = 4;
         return true;
-      case 0xDA:  // PHX
+      case 0xDA:
         push8(m_r.x);
         cycles = 3;
         return true;
-      case 0xFA:  // PLX
+      case 0xFA:
         m_r.x = pull8();
         setNZ(m_r.x);
         cycles = 4;
         return true;
-      case 0x5A:  // PHY
+      case 0x5A:
         push8(m_r.y);
         cycles = 3;
         return true;
-      case 0x7A:  // PLY
+      case 0x7A:
         m_r.y = pull8();
         setNZ(m_r.y);
         cycles = 4;
@@ -1435,9 +1446,20 @@ namespace prodos8emu {
     }
   }
 
-  bool CPU65C02::execute_accumulator_opcode(uint8_t op, uint32_t& cycles) {
+  bool CPU65C02::execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles) {
+    if (execute_flag_opcode(op, cycles)) {
+      return true;
+    }
+
+    if (execute_transfer_opcode(op, cycles)) {
+      return true;
+    }
+
+    return execute_stack_opcode(op, cycles);
+  }
+
+  bool CPU65C02::execute_accumulator_inc_dec_opcode(uint8_t op, uint32_t& cycles) {
     switch (op) {
-      // INC/DEC accumulator (65C02)
       case 0x1A:
         m_r.a = static_cast<uint8_t>(m_r.a + 1);
         setNZ(m_r.a);
@@ -1449,22 +1471,28 @@ namespace prodos8emu {
         cycles = 2;
         return true;
 
-      // Shifts/rotates accumulator
-      case 0x0A:  // ASL A
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_accumulator_shift_rotate_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      case 0x0A:
         setFlag(FLAG_C, (m_r.a & 0x80) != 0);
         m_r.a = static_cast<uint8_t>(m_r.a << 1);
         setNZ(m_r.a);
         cycles = 2;
         return true;
 
-      case 0x4A:  // LSR A
+      case 0x4A:
         setFlag(FLAG_C, (m_r.a & 0x01) != 0);
         m_r.a = static_cast<uint8_t>(m_r.a >> 1);
         setNZ(m_r.a);
         cycles = 2;
         return true;
 
-      case 0x2A: {  // ROL A
+      case 0x2A: {
         bool c = getFlag(FLAG_C);
         setFlag(FLAG_C, (m_r.a & 0x80) != 0);
         m_r.a = static_cast<uint8_t>((m_r.a << 1) | (c ? 1 : 0));
@@ -1473,7 +1501,7 @@ namespace prodos8emu {
         return true;
       }
 
-      case 0x6A: {  // ROR A
+      case 0x6A: {
         bool c = getFlag(FLAG_C);
         setFlag(FLAG_C, (m_r.a & 0x01) != 0);
         m_r.a = static_cast<uint8_t>((m_r.a >> 1) | (c ? 0x80 : 0));
@@ -1485,6 +1513,14 @@ namespace prodos8emu {
       default:
         return false;
     }
+  }
+
+  bool CPU65C02::execute_accumulator_misc_opcode(uint8_t op, uint32_t& cycles) {
+    if (execute_accumulator_inc_dec_opcode(op, cycles)) {
+      return true;
+    }
+
+    return execute_accumulator_shift_rotate_opcode(op, cycles);
   }
 
   bool CPU65C02::execute_load_store_load_immediate_opcode(uint8_t op, uint32_t& cycles) {
@@ -2113,7 +2149,7 @@ namespace prodos8emu {
     if (execute_flag_transfer_stack_opcode(op, lowRiskCycles)) {
       return lowRiskCycles;
     }
-    if (execute_accumulator_opcode(op, lowRiskCycles)) {
+    if (execute_accumulator_misc_opcode(op, lowRiskCycles)) {
       return lowRiskCycles;
     }
     if (execute_load_store_opcode(op, lowRiskCycles)) {

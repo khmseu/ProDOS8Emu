@@ -3074,6 +3074,355 @@ __attribute__((noinline)) static void run_rmb_smb_bbr_bbs_full_bit_matrix_contra
   }
 }
 
+__attribute__((noinline)) static void run_flag_transfer_stack_helper_dispatch_equivalence_test(
+    int& failures) {
+  std::cout << "Test 61: flag_transfer_stack_helper_dispatch_equivalence\n";
+
+  bool testFailed = false;
+
+  enum class FlagTransferStackRoute : uint8_t {
+    None,
+    Flag,
+    Transfer,
+    Stack,
+  };
+
+  const auto classifyLegacy = [](uint8_t op) -> FlagTransferStackRoute {
+    switch (op) {
+      case 0x18:
+      case 0x38:
+      case 0x58:
+      case 0x78:
+      case 0xD8:
+      case 0xF8:
+      case 0xB8:
+        return FlagTransferStackRoute::Flag;
+
+      case 0xAA:
+      case 0x8A:
+      case 0xA8:
+      case 0x98:
+      case 0xBA:
+      case 0x9A:
+        return FlagTransferStackRoute::Transfer;
+
+      case 0x48:
+      case 0x68:
+      case 0x08:
+      case 0x28:
+      case 0xDA:
+      case 0xFA:
+      case 0x5A:
+      case 0x7A:
+        return FlagTransferStackRoute::Stack;
+
+      default:
+        return FlagTransferStackRoute::None;
+    }
+  };
+
+  const auto classifyHelperDispatch = [](uint8_t op) -> FlagTransferStackRoute {
+    switch (op) {
+      case 0x18:
+      case 0x38:
+      case 0x58:
+      case 0x78:
+      case 0xD8:
+      case 0xF8:
+      case 0xB8:
+        return FlagTransferStackRoute::Flag;
+      default:
+        break;
+    }
+
+    switch (op) {
+      case 0xAA:
+      case 0x8A:
+      case 0xA8:
+      case 0x98:
+      case 0xBA:
+      case 0x9A:
+        return FlagTransferStackRoute::Transfer;
+      default:
+        break;
+    }
+
+    switch (op) {
+      case 0x48:
+      case 0x68:
+      case 0x08:
+      case 0x28:
+      case 0xDA:
+      case 0xFA:
+      case 0x5A:
+      case 0x7A:
+        return FlagTransferStackRoute::Stack;
+      default:
+        return FlagTransferStackRoute::None;
+    }
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t                op       = static_cast<uint8_t>(opValue);
+    const FlagTransferStackRoute legacy   = classifyLegacy(op);
+    const FlagTransferStackRoute expected = classifyHelperDispatch(op);
+    if (legacy != expected) {
+      std::cerr << "FAIL: flag/transfer/stack helper dispatch mismatch for opcode=0x" << std::hex
+                << static_cast<int>(op) << std::dec << " (legacy=" << static_cast<int>(legacy)
+                << ", helper=" << static_cast<int>(expected) << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  struct FlagCase {
+    const char* name;
+    uint8_t     opcode;
+    uint8_t     initialP;
+    uint8_t     expectedP;
+  };
+
+  static const FlagCase flagCases[] = {
+      {"CLC", 0x18, 0xE1, 0xE0}, {"SEC", 0x38, 0x20, 0x21}, {"CLI", 0x58, 0x24, 0x20},
+      {"SEI", 0x78, 0x20, 0x24}, {"CLD", 0xD8, 0x28, 0x20}, {"SED", 0xF8, 0x20, 0x28},
+      {"CLV", 0xB8, 0x60, 0x20},
+  };
+
+  for (size_t i = 0; i < (sizeof(flagCases) / sizeof(flagCases[0])) && !testFailed; ++i) {
+    const FlagCase& c = flagCases[i];
+
+    auto           mem   = makeMem();
+    const uint16_t start = static_cast<uint16_t>(0x3600 + (i * 0x10));
+    writeProgram(*mem, start,
+                 {
+                     c.opcode,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = c.initialP;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 1) ||
+        cpu.regs().p != c.expectedP) {
+      std::cerr << "FAIL: flag helper equivalence mismatch for " << c.name << "\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x3680;
+    writeProgram(*mem, start,
+                 {
+                     0x9A,
+                     0xBA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x  = 0x44;
+    cpu.regs().sp = 0x99;
+    cpu.regs().p  = 0x63;
+
+    uint32_t txsCycles = cpu.step();
+    uint32_t tsxCycles = cpu.step();
+    if (txsCycles != 2 || tsxCycles != 2 || cpu.regs().sp != 0x44 || cpu.regs().x != 0x44 ||
+        cpu.regs().p != 0x61 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: transfer helper equivalence mismatch for TXS/TSX behavior\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x36C0;
+    writeProgram(*mem, start,
+                 {
+                     0x48,
+                     0xDA,
+                     0x5A,
+                     0x08,
+                     0x28,
+                     0x7A,
+                     0xFA,
+                     0x68,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x11;
+    cpu.regs().x  = 0x22;
+    cpu.regs().y  = 0x33;
+    cpu.regs().sp = 0xFF;
+    cpu.regs().p  = 0x40;
+
+    uint32_t phaCycles = cpu.step();
+    uint32_t phxCycles = cpu.step();
+    uint32_t phyCycles = cpu.step();
+    uint32_t phpCycles = cpu.step();
+
+    const uint8_t phaByte = prodos8emu::read_u8(mem->constBanks(), 0x01FF);
+    const uint8_t phxByte = prodos8emu::read_u8(mem->constBanks(), 0x01FE);
+    const uint8_t phyByte = prodos8emu::read_u8(mem->constBanks(), 0x01FD);
+    const uint8_t phpByte = prodos8emu::read_u8(mem->constBanks(), 0x01FC);
+
+    cpu.regs().p = 0x00;
+
+    uint32_t plpCycles = cpu.step();
+    uint32_t plyCycles = cpu.step();
+    uint32_t plxCycles = cpu.step();
+    uint32_t plaCycles = cpu.step();
+
+    if (phaCycles != 3 || phxCycles != 3 || phyCycles != 3 || phpCycles != 3 || plpCycles != 4 ||
+        plyCycles != 4 || plxCycles != 4 || plaCycles != 4 || phaByte != 0x11 || phxByte != 0x22 ||
+        phyByte != 0x33 || phpByte != 0x70 || cpu.regs().a != 0x11 || cpu.regs().x != 0x22 ||
+        cpu.regs().y != 0x33 || cpu.regs().p != 0x70 || cpu.regs().sp != 0xFF ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 8)) {
+      std::cerr
+          << "FAIL: stack helper equivalence mismatch for push/pull ordering and status bits\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: flag_transfer_stack_helper_dispatch_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_accumulator_misc_helper_dispatch_equivalence_test(
+    int& failures) {
+  std::cout << "Test 62: accumulator_misc_helper_dispatch_equivalence\n";
+
+  bool testFailed = false;
+
+  enum class AccumulatorMiscRoute : uint8_t {
+    None,
+    IncDec,
+    ShiftRotate,
+  };
+
+  const auto classifyLegacy = [](uint8_t op) -> AccumulatorMiscRoute {
+    switch (op) {
+      case 0x1A:
+      case 0x3A:
+        return AccumulatorMiscRoute::IncDec;
+
+      case 0x0A:
+      case 0x4A:
+      case 0x2A:
+      case 0x6A:
+        return AccumulatorMiscRoute::ShiftRotate;
+
+      default:
+        return AccumulatorMiscRoute::None;
+    }
+  };
+
+  const auto classifyHelperDispatch = [](uint8_t op) -> AccumulatorMiscRoute {
+    switch (op) {
+      case 0x1A:
+      case 0x3A:
+        return AccumulatorMiscRoute::IncDec;
+      default:
+        break;
+    }
+
+    switch (op) {
+      case 0x0A:
+      case 0x4A:
+      case 0x2A:
+      case 0x6A:
+        return AccumulatorMiscRoute::ShiftRotate;
+      default:
+        return AccumulatorMiscRoute::None;
+    }
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t              op       = static_cast<uint8_t>(opValue);
+    const AccumulatorMiscRoute legacy   = classifyLegacy(op);
+    const AccumulatorMiscRoute expected = classifyHelperDispatch(op);
+    if (legacy != expected) {
+      std::cerr << "FAIL: accumulator helper dispatch mismatch for opcode=0x" << std::hex
+                << static_cast<int>(op) << std::dec << " (legacy=" << static_cast<int>(legacy)
+                << ", helper=" << static_cast<int>(expected) << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  struct AccCase {
+    const char* name;
+    uint8_t     opcode;
+    uint8_t     initialA;
+    uint8_t     initialP;
+    uint8_t     expectedA;
+    uint8_t     expectedP;
+  };
+
+  static const AccCase cases[] = {
+      {"INC_A", 0x1A, 0xFF, 0x41, 0x00, 0x63}, {"DEC_A", 0x3A, 0x00, 0x21, 0xFF, 0xA1},
+      {"ASL_A", 0x0A, 0x81, 0x20, 0x02, 0x21}, {"LSR_A", 0x4A, 0x01, 0xA0, 0x00, 0x23},
+      {"ROL_A", 0x2A, 0x80, 0x21, 0x01, 0x21}, {"ROR_A", 0x6A, 0x01, 0x21, 0x80, 0xA1},
+  };
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])) && !testFailed; ++i) {
+    const AccCase& c = cases[i];
+
+    auto           mem   = makeMem();
+    const uint16_t start = static_cast<uint16_t>(0x3740 + (i * 0x10));
+    prodos8emu::write_u8(mem->banks(), 0x0040, 0x5A);
+    writeProgram(*mem, start,
+                 {
+                     c.opcode,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = c.initialA;
+    cpu.regs().x  = 0x44;
+    cpu.regs().y  = 0x55;
+    cpu.regs().sp = 0xE1;
+    cpu.regs().p  = c.initialP;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().a != c.expectedA || cpu.regs().p != c.expectedP ||
+        cpu.regs().x != 0x44 || cpu.regs().y != 0x55 || cpu.regs().sp != 0xE1 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 1) ||
+        prodos8emu::read_u8(mem->constBanks(), 0x0040) != 0x5A) {
+      std::cerr << "FAIL: accumulator helper equivalence mismatch for " << c.name << "\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: accumulator_misc_helper_dispatch_equivalence\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -8045,6 +8394,8 @@ int main() {
   run_control_flow_refactor_equivalence_contracts_test(failures);
   run_alu_rmw_decode_route_matrix_contracts_test(failures);
   run_rmb_smb_bbr_bbs_full_bit_matrix_contracts_test(failures);
+  run_flag_transfer_stack_helper_dispatch_equivalence_test(failures);
+  run_accumulator_misc_helper_dispatch_equivalence_test(failures);
 
   fs::remove_all(tempDir);
 
