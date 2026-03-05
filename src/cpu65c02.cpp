@@ -466,7 +466,7 @@ namespace prodos8emu {
           // Block N: bytes 4-510 = up to 13 file entries (no header)
           // Byte 511: unused
           std::string posInfo;
-          if (blockOffset >= 0 && blockOffset <= 3) {
+          if (blockOffset <= 3) {
             posInfo = " [ptrs]";
           } else if (blockNum == 0 && blockOffset >= 4 && blockOffset <= 42) {
             posInfo = " [hdr]";
@@ -488,47 +488,66 @@ namespace prodos8emu {
           int         validEntries = 0;
 
           // Try parsing entries (each entry is 39 bytes / 0x27)
-          // Scan for entries starting at any offset (not just offset 4)
-          for (uint16_t offset = 0; offset + 0x27 <= transCount; offset++) {
-            // Check if this looks like the start of an entry
-            // Entry byte 0 = storage_type (high nibble) + name_length (low nibble)
-            uint8_t byte0       = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + offset));
-            uint8_t storageType = (byte0 >> 4) & 0x0F;
-            uint8_t nameLen     = byte0 & 0x0F;
+          // Entries in a ProDOS directory block start at offset 4 and then every 39 bytes.
+          // Use blockOffset (position of this buffer within the 512-byte block) to align.
+          uint32_t blockStartAbs = static_cast<uint32_t>(blockOffset);
+          uint32_t bufferEndAbs  = blockStartAbs + static_cast<uint32_t>(transCount);
+          uint32_t firstEntryAbs = 0;
 
-            // Skip inactive (byte0==0)
-            if (nameLen == 0 && storageType == 0) {
-              continue;
+          if (bufferEndAbs > 4) {
+            if (blockStartAbs <= 4) {
+              // Buffer begins before or at the first possible entry; first entry at abs offset 4.
+              firstEntryAbs = 4;
+            } else {
+              // Align the first possible entry at or after blockStartAbs to the 39-byte grid.
+              uint32_t relToFirst = blockStartAbs - 4;  // relative to first entry
+              uint32_t rem        = relToFirst % 39;
+              uint32_t delta      = (rem == 0) ? 0u : (39u - rem);  // bytes to next alignment
+              firstEntryAbs       = blockStartAbs + delta;
             }
+          }
 
-            // Extract the name and verify it looks valid
-            std::string entryName;
-            bool        allValid = true;
-            entryName.reserve(nameLen);
+          // Convert absolute entry start back to buffer-relative offset, if it lies in this buffer
+          if (firstEntryAbs >= blockStartAbs && firstEntryAbs + 0x27 <= bufferEndAbs) {
+            for (uint16_t offset = static_cast<uint16_t>(firstEntryAbs - blockStartAbs);
+                 offset + 0x27 <= transCount; offset = static_cast<uint16_t>(offset + 39)) {
+              // Check if this looks like the start of an entry
+              // Entry byte 0 = storage_type (high nibble) + name_length (low nibble)
+              uint8_t byte0   = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + offset));
+              uint8_t nameLen = byte0 & 0x0F;
+              // uint8_t storageType = (byte0 >> 4) & 0x0F;
 
-            for (uint8_t i = 0; i < nameLen; i++) {
-              if (offset + 1 + i >= transCount) {
-                allValid = false;
-                break;
+              // Skip inactive entries where both storage_type and name_length are zero
+              if (byte0 == 0) {
+                continue;
               }
-              uint8_t ch = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + offset + 1 + i));
-              ch         = ch & 0x7F;  // Clear high bit
 
-              entryName.push_back(static_cast<char>(ch));
-            }
+              // Extract the name and verify it looks valid
+              std::string entryName;
+              bool        allValid = true;
+              entryName.reserve(nameLen);
 
-            if (allValid) {
-              validEntries++;
-              if (first) {
-                entries = " entries='";
-                first   = false;
-              } else {
-                entries += ", ";
+              for (uint8_t i = 0; i < nameLen; i++) {
+                if (offset + 1 + i >= transCount) {
+                  allValid = false;
+                  break;
+                }
+                uint8_t ch = read_u8(banks, static_cast<uint16_t>(dataBufferPtr + offset + 1 + i));
+                ch         = ch & 0x7F;  // Clear high bit
+
+                entryName.push_back(static_cast<char>(ch));
               }
-              entries += entryName;
-              // Skip ahead by 38 bytes for next potential entry (offset will increment by 1 in
-              // loop)
-              offset += 38;
+
+              if (allValid) {
+                validEntries++;
+                if (first) {
+                  entries = " entries='";
+                  first   = false;
+                } else {
+                  entries += ", ";
+                }
+                entries += entryName;
+              }
             }
           }
 

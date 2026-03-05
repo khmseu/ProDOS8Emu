@@ -42,4 +42,5 @@ _codeql_detected_source_root
 EDASM.SRC/
 inputs/
 third_party_docs/
+typescript
 work/
