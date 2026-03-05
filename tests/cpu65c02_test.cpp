@@ -50,21 +50,21 @@ __attribute__((noinline)) static void run_branch_opcode_matrix_preserved_test(in
     for (int scenario = 0; scenario < 2 && !testFailed; ++scenario) {
       const bool expectedTaken = (scenario == 0);
 
-      prodos8emu::Apple2Memory mem;
-      mem.setLCReadEnabled(true);
-      mem.setLCWriteEnabled(true);
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
 
       const uint16_t start = static_cast<uint16_t>(0x1700 + (i * 0x10) + (scenario * 0x04));
-      writeProgram(mem, start,
+      writeProgram(*mem, start,
                    {
                        c.opcode,
                        0x02,
                        0xEA,
                        0xEA,
                    });
-      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
 
-      prodos8emu::CPU65C02 cpu(mem);
+      prodos8emu::CPU65C02 cpu(*mem);
       cpu.reset();
 
       uint8_t startP = 0x20;
@@ -89,21 +89,21 @@ __attribute__((noinline)) static void run_branch_opcode_matrix_preserved_test(in
   }
 
   if (!testFailed) {
-    prodos8emu::Apple2Memory mem;
-    mem.setLCReadEnabled(true);
-    mem.setLCWriteEnabled(true);
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
 
     const uint16_t start = 0x1790;
-    writeProgram(mem, start,
+    writeProgram(*mem, start,
                  {
                      0x80,
                      0x02,
                      0xEA,
                      0xEA,
                  });
-    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
 
-    prodos8emu::CPU65C02 cpu(mem);
+    prodos8emu::CPU65C02 cpu(*mem);
     cpu.reset();
     cpu.regs().p = 0xE3;
 
@@ -150,12 +150,12 @@ __attribute__((noinline)) static void run_cout_escape_mapping_contracts_preserve
   for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])) && !testFailed; ++i) {
     const CoutCase& c = cases[i];
 
-    prodos8emu::Apple2Memory mem;
-    mem.setLCReadEnabled(true);
-    mem.setLCWriteEnabled(true);
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
 
     const uint16_t start = static_cast<uint16_t>(0x17C0 + (i * 0x10));
-    writeProgram(mem, start,
+    writeProgram(*mem, start,
                  {
                      0xA9,
                      c.aValue,
@@ -164,10 +164,10 @@ __attribute__((noinline)) static void run_cout_escape_mapping_contracts_preserve
                      0x00,
                      0xEA,
                  });
-    prodos8emu::write_u16_le(mem.banks(), 0x0036, static_cast<uint16_t>(start + 5));
-    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+    prodos8emu::write_u16_le(mem->banks(), 0x0036, static_cast<uint16_t>(start + 5));
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
 
-    prodos8emu::CPU65C02 cpu(mem);
+    prodos8emu::CPU65C02 cpu(*mem);
     std::stringstream    coutLog;
     cpu.setDebugLogs(nullptr, &coutLog);
     cpu.reset();
@@ -536,6 +536,166 @@ __attribute__((noinline)) static void run_fallback_router_precedence_contracts_t
 
   if (!testFailed) {
     std::cout << "PASS: fallback_router_precedence_contracts\n";
+  }
+}
+
+__attribute__((noinline)) static void run_execute_fallback_router_dispatch_preserved_test(
+    int& failures) {
+  std::cout << "Test 48: execute_fallback_router_dispatch_preserved\n";
+
+  bool testFailed = false;
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1EA0;
+    writeProgram(*mem, start,
+                 {
+                     0xA2,
+                     0x7F,
+                     0xE8,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    (void)cpu.step();
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().x != 0x80 ||
+        (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0) {
+      std::cerr << "FAIL: execute fallback router mismatch for misc-tail route\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1EC0;
+    writeProgram(*mem, start,
+                 {
+                     0xA9,
+                     0xF0,
+                     0x09,
+                     0x0F,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    (void)cpu.step();
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 4) || cpu.regs().a != 0xFF ||
+         (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0)) {
+      std::cerr << "FAIL: execute fallback router mismatch for ALU family route\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    prodos8emu::write_u8(mem->banks(), 0x0012, 0x30);
+    const uint16_t start = 0x1EE0;
+    writeProgram(*mem, start,
+                 {
+                     0xA2,
+                     0x30,
+                     0xE4,
+                     0x12,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    (void)cpu.step();
+    cpu.regs().p = static_cast<uint8_t>((cpu.regs().p & static_cast<uint8_t>(~0xC3)) | 0x40);
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 4) ||
+         (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x80) != 0 ||
+         (cpu.regs().p & 0x40) == 0)) {
+      std::cerr << "FAIL: execute fallback router mismatch for compare-XY route\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    prodos8emu::write_u8(mem->banks(), 0x0014, 0x7F);
+    const uint16_t start = 0x1F00;
+    writeProgram(*mem, start,
+                 {
+                     0xE6,
+                     0x14,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x20;
+
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
+         prodos8emu::read_u8(mem->constBanks(), 0x0014) != 0x80 || (cpu.regs().p & 0x80) == 0 ||
+         (cpu.regs().p & 0x02) != 0)) {
+      std::cerr << "FAIL: execute fallback router mismatch for RMW family route\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1F20;
+    writeProgram(*mem, start,
+                 {
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x12;
+    cpu.regs().x = 0x34;
+    cpu.regs().y = 0x56;
+    cpu.regs().p = 0xA5;
+
+    uint32_t cycles = cpu.step();
+    if (!testFailed &&
+        (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 1) || cpu.regs().a != 0x12 ||
+         cpu.regs().x != 0x34 || cpu.regs().y != 0x56 || cpu.regs().p != 0xA5)) {
+      std::cerr << "FAIL: execute fallback router mismatch for default route\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: execute_fallback_router_dispatch_preserved\n";
   }
 }
 
@@ -5495,6 +5655,7 @@ int main() {
   run_unknown_opcode_default_fallback_contracts_test(failures);
   run_nop_variant_opcode_matrix_preserved_test(failures);
   run_fallback_router_precedence_contracts_test(failures);
+  run_execute_fallback_router_dispatch_preserved_test(failures);
 
   fs::remove_all(tempDir);
 

@@ -1974,27 +1974,7 @@ namespace prodos8emu {
     return 5;
   }
 
-  uint32_t CPU65C02::execute(uint8_t op) {
-    // Rockwell/WDC 65C02 bit manipulation/branch opcodes.
-    // RMBn: 07,17,27,37,47,57,67,77 (clear bit n in zp)
-    // SMBn: 87,97,A7,B7,C7,D7,E7,F7 (set bit n in zp).
-    uint32_t specialCycles = execute_rmb_smb_opcode(op);
-    if (specialCycles != 0) {
-      return specialCycles;
-    }
-
-    // BBRn: 0F,1F,2F,3F,4F,5F,6F,7F (branch if bit n clear)
-    // BBSn: 8F,9F,AF,BF,CF,DF,EF,FF (branch if bit n set).
-    specialCycles = execute_bbr_bbs_opcode(op);
-    if (specialCycles != 0) {
-      return specialCycles;
-    }
-
-    uint32_t controlCycles = 0;
-    if (execute_control_flow_opcode(op, controlCycles)) {
-      return controlCycles;
-    }
-
+  uint32_t CPU65C02::execute_fallback_router_opcode(uint8_t op) {
     uint32_t lowRiskCycles = 0;
     if (execute_flag_transfer_stack_opcode(op, lowRiskCycles)) {
       return lowRiskCycles;
@@ -2125,6 +2105,30 @@ namespace prodos8emu {
     }
 
     return 2;
+  }
+
+  uint32_t CPU65C02::execute(uint8_t op) {
+    // Rockwell/WDC 65C02 bit manipulation/branch opcodes.
+    // RMBn: 07,17,27,37,47,57,67,77 (clear bit n in zp)
+    // SMBn: 87,97,A7,B7,C7,D7,E7,F7 (set bit n in zp).
+    uint32_t specialCycles = execute_rmb_smb_opcode(op);
+    if (specialCycles != 0) {
+      return specialCycles;
+    }
+
+    // BBRn: 0F,1F,2F,3F,4F,5F,6F,7F (branch if bit n clear)
+    // BBSn: 8F,9F,AF,BF,CF,DF,EF,FF (branch if bit n set).
+    specialCycles = execute_bbr_bbs_opcode(op);
+    if (specialCycles != 0) {
+      return specialCycles;
+    }
+
+    uint32_t controlCycles = 0;
+    if (execute_control_flow_opcode(op, controlCycles)) {
+      return controlCycles;
+    }
+
+    return execute_fallback_router_opcode(op);
   }
 
   void CPU65C02::log_step_trace_marker(uint16_t pc) {
