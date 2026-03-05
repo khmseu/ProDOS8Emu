@@ -1909,6 +1909,178 @@ __attribute__((noinline)) static void run_fallback_router_family_membership_cont
   }
 }
 
+__attribute__((noinline)) static void run_fallback_classifier_equivalence_matrix_test(
+    int& failures) {
+  std::cout << "Test 57: fallback_classifier_equivalence_matrix\n";
+
+  bool testFailed = false;
+
+  enum class FallbackRoute : uint8_t {
+    None,
+    MiscTail,
+    AluFamily,
+    CompareXY,
+    RmwFamily,
+  };
+
+  const auto classifyLegacy = [](uint8_t op) -> FallbackRoute {
+    switch (op) {
+      case 0xE8:
+      case 0xCA:
+      case 0xC8:
+      case 0x88:
+        return FallbackRoute::MiscTail;
+
+      case 0x09:
+      case 0x05:
+      case 0x15:
+      case 0x0D:
+      case 0x1D:
+      case 0x19:
+      case 0x01:
+      case 0x11:
+      case 0x12:
+      case 0x29:
+      case 0x25:
+      case 0x35:
+      case 0x2D:
+      case 0x3D:
+      case 0x39:
+      case 0x21:
+      case 0x31:
+      case 0x32:
+      case 0x49:
+      case 0x45:
+      case 0x55:
+      case 0x4D:
+      case 0x5D:
+      case 0x59:
+      case 0x41:
+      case 0x51:
+      case 0x52:
+      case 0x69:
+      case 0x65:
+      case 0x75:
+      case 0x6D:
+      case 0x7D:
+      case 0x79:
+      case 0x61:
+      case 0x71:
+      case 0x72:
+      case 0xE9:
+      case 0xE5:
+      case 0xF5:
+      case 0xED:
+      case 0xFD:
+      case 0xF9:
+      case 0xE1:
+      case 0xF1:
+      case 0xF2:
+      case 0xC9:
+      case 0xC5:
+      case 0xD5:
+      case 0xCD:
+      case 0xDD:
+      case 0xD9:
+      case 0xC1:
+      case 0xD1:
+      case 0xD2:
+        return FallbackRoute::AluFamily;
+
+      case 0xE0:
+      case 0xE4:
+      case 0xEC:
+      case 0xC0:
+      case 0xC4:
+      case 0xCC:
+        return FallbackRoute::CompareXY;
+
+      case 0xE6:
+      case 0xF6:
+      case 0xEE:
+      case 0xFE:
+      case 0xC6:
+      case 0xD6:
+      case 0xCE:
+      case 0xDE:
+      case 0x06:
+      case 0x16:
+      case 0x0E:
+      case 0x1E:
+      case 0x46:
+      case 0x56:
+      case 0x4E:
+      case 0x5E:
+      case 0x26:
+      case 0x36:
+      case 0x2E:
+      case 0x3E:
+      case 0x66:
+      case 0x76:
+      case 0x6E:
+      case 0x7E:
+        return FallbackRoute::RmwFamily;
+
+      default:
+        return FallbackRoute::None;
+    }
+  };
+
+  const auto classifyPattern = [](uint8_t op) -> FallbackRoute {
+    switch (op) {
+      case 0xE8:
+      case 0xCA:
+      case 0xC8:
+      case 0x88:
+        return FallbackRoute::MiscTail;
+      default:
+        break;
+    }
+
+    const uint8_t mode  = static_cast<uint8_t>(op & 0x1F);
+    const uint8_t group = static_cast<uint8_t>(op & 0xE0);
+
+    const bool groupIsAluRmw = group == 0x00 || group == 0x20 || group == 0x40 || group == 0x60 ||
+                               group == 0xC0 || group == 0xE0;
+
+    const bool modeIsAlu = mode == 0x01 || mode == 0x05 || mode == 0x09 || mode == 0x0D ||
+                           mode == 0x11 || mode == 0x12 || mode == 0x15 || mode == 0x19 ||
+                           mode == 0x1D;
+    if (groupIsAluRmw && modeIsAlu) {
+      return FallbackRoute::AluFamily;
+    }
+
+    const bool modeIsCompare = mode == 0x00 || mode == 0x04 || mode == 0x0C;
+    if ((group == 0xC0 || group == 0xE0) && modeIsCompare) {
+      return FallbackRoute::CompareXY;
+    }
+
+    const bool modeIsRmw = mode == 0x06 || mode == 0x16 || mode == 0x0E || mode == 0x1E;
+    if (groupIsAluRmw && modeIsRmw) {
+      return FallbackRoute::RmwFamily;
+    }
+
+    return FallbackRoute::None;
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t       op       = static_cast<uint8_t>(opValue);
+    const FallbackRoute legacy   = classifyLegacy(op);
+    const FallbackRoute expected = classifyPattern(op);
+    if (legacy != expected) {
+      std::cerr << "FAIL: fallback classifier equivalence mismatch for opcode=0x" << std::hex
+                << static_cast<int>(op) << std::dec << " (legacy=" << static_cast<int>(legacy)
+                << ", pattern=" << static_cast<int>(expected) << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: fallback_classifier_equivalence_matrix\n";
+  }
+}
+
 __attribute__((noinline)) static void run_execute_decode_precedence_nonregression_test(
     int& failures) {
   std::cout << "Test 54: execute_decode_precedence_nonregression\n";
@@ -7034,6 +7206,7 @@ int main() {
   run_load_store_opcode_completeness_matrix_preserved_test(failures);
   run_store_indexed_page_cross_cycle_contracts_test(failures);
   run_fallback_router_family_membership_contracts_test(failures);
+  run_fallback_classifier_equivalence_matrix_test(failures);
   run_execute_decode_precedence_nonregression_test(failures);
   run_control_flow_refactor_equivalence_contracts_test(failures);
 
