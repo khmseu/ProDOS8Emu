@@ -2572,6 +2572,508 @@ __attribute__((noinline)) static void run_execute_decode_precedence_nonregressio
   }
 }
 
+__attribute__((noinline)) static void run_alu_rmw_decode_route_matrix_contracts_test(
+    int& failures) {
+  std::cout << "Test 59: alu_rmw_decode_route_matrix_contracts\n";
+
+  bool testFailed = false;
+
+  struct AluModeCase {
+    uint8_t  mode;
+    uint32_t expectedCycles;
+    uint8_t  instructionBytes;
+  };
+
+  static const AluModeCase aluModes[] = {
+      {0x01, 6, 2}, {0x05, 3, 2}, {0x09, 2, 2}, {0x0D, 4, 3}, {0x11, 5, 2},
+      {0x12, 5, 2}, {0x15, 4, 2}, {0x19, 4, 3}, {0x1D, 4, 3},
+  };
+
+  struct AluGroupCase {
+    const char* name;
+    uint8_t     group;
+    uint8_t     initialA;
+    uint8_t     operand;
+    uint8_t     initialP;
+    uint8_t     expectedA;
+  };
+
+  static const AluGroupCase aluGroups[] = {
+      {"ORA", 0x00, 0xF0, 0x0F, 0x20, 0xFF}, {"AND", 0x20, 0xF0, 0x0F, 0x20, 0x00},
+      {"EOR", 0x40, 0xF0, 0x0F, 0x20, 0xFF}, {"ADC", 0x60, 0xF0, 0x0F, 0x20, 0xFF},
+      {"CMP", 0xC0, 0xF0, 0x0F, 0x20, 0xF0}, {"SBC", 0xE0, 0xF0, 0x0F, 0x21, 0xE1},
+  };
+
+  for (size_t groupIndex = 0;
+       groupIndex < (sizeof(aluGroups) / sizeof(aluGroups[0])) && !testFailed; ++groupIndex) {
+    const AluGroupCase& group = aluGroups[groupIndex];
+
+    for (size_t modeIndex = 0; modeIndex < (sizeof(aluModes) / sizeof(aluModes[0])) && !testFailed;
+         ++modeIndex) {
+      const AluModeCase& mode = aluModes[modeIndex];
+
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start =
+          static_cast<uint16_t>(0x2800 + (groupIndex * 0x100) + (modeIndex * 0x08));
+      const uint8_t opcode = static_cast<uint8_t>(group.group | mode.mode);
+      const uint8_t xReg   = 0x04;
+      const uint8_t yReg   = 0x03;
+
+      uint8_t  operandLo        = 0x00;
+      uint8_t  operandHi        = 0x00;
+      bool     hasMemoryOperand = false;
+      uint16_t operandAddr      = 0x0000;
+
+      switch (mode.mode) {
+        case 0x01: {
+          operandLo         = 0x20;
+          operandAddr       = static_cast<uint16_t>(0x3200 + modeIndex + (groupIndex * 0x20));
+          const uint8_t ptr = static_cast<uint8_t>(operandLo + xReg);
+          prodos8emu::write_u16_le(mem->banks(), ptr, operandAddr);
+          hasMemoryOperand = true;
+          break;
+        }
+        case 0x05:
+          operandLo        = static_cast<uint8_t>(0x40 + modeIndex + (groupIndex * 2));
+          operandAddr      = operandLo;
+          hasMemoryOperand = true;
+          break;
+        case 0x09:
+          operandLo = group.operand;
+          break;
+        case 0x0D:
+          operandAddr      = static_cast<uint16_t>(0x3300 + (groupIndex * 0x20) + modeIndex);
+          operandLo        = static_cast<uint8_t>(operandAddr & 0xFF);
+          operandHi        = static_cast<uint8_t>((operandAddr >> 8) & 0xFF);
+          hasMemoryOperand = true;
+          break;
+        case 0x11: {
+          operandLo = 0x30;
+          const uint16_t baseAddr =
+              static_cast<uint16_t>(0x3400 + (groupIndex * 0x20) + (modeIndex * 2));
+          operandAddr = static_cast<uint16_t>(baseAddr + yReg);
+          prodos8emu::write_u16_le(mem->banks(), operandLo, baseAddr);
+          hasMemoryOperand = true;
+          break;
+        }
+        case 0x12:
+          operandLo   = 0x50;
+          operandAddr = static_cast<uint16_t>(0x3500 + (groupIndex * 0x20) + modeIndex);
+          prodos8emu::write_u16_le(mem->banks(), operandLo, operandAddr);
+          hasMemoryOperand = true;
+          break;
+        case 0x15:
+          operandLo        = static_cast<uint8_t>(0x60 + modeIndex + (groupIndex * 2));
+          operandAddr      = static_cast<uint8_t>(operandLo + xReg);
+          hasMemoryOperand = true;
+          break;
+        case 0x19: {
+          const uint16_t baseAddr =
+              static_cast<uint16_t>(0x3600 + (groupIndex * 0x20) + (modeIndex * 2));
+          operandAddr      = static_cast<uint16_t>(baseAddr + yReg);
+          operandLo        = static_cast<uint8_t>(baseAddr & 0xFF);
+          operandHi        = static_cast<uint8_t>((baseAddr >> 8) & 0xFF);
+          hasMemoryOperand = true;
+          break;
+        }
+        case 0x1D: {
+          const uint16_t baseAddr =
+              static_cast<uint16_t>(0x3700 + (groupIndex * 0x20) + (modeIndex * 2));
+          operandAddr      = static_cast<uint16_t>(baseAddr + xReg);
+          operandLo        = static_cast<uint8_t>(baseAddr & 0xFF);
+          operandHi        = static_cast<uint8_t>((baseAddr >> 8) & 0xFF);
+          hasMemoryOperand = true;
+          break;
+        }
+        default:
+          break;
+      }
+
+      if (hasMemoryOperand) {
+        prodos8emu::write_u8(mem->banks(), operandAddr, group.operand);
+      }
+
+      prodos8emu::write_u8(mem->banks(), start, opcode);
+      prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 1), operandLo);
+      if (mode.instructionBytes == 3) {
+        prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 2), operandHi);
+      }
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().a  = group.initialA;
+      cpu.regs().x  = xReg;
+      cpu.regs().y  = yReg;
+      cpu.regs().sp = 0xD7;
+      cpu.regs().p  = group.initialP;
+
+      uint32_t cycles = cpu.step();
+
+      if (cycles != mode.expectedCycles ||
+          cpu.regs().pc != static_cast<uint16_t>(start + mode.instructionBytes) ||
+          cpu.regs().a != group.expectedA || cpu.regs().x != xReg || cpu.regs().y != yReg ||
+          cpu.regs().sp != 0xD7) {
+        std::cerr << "FAIL: ALU decode matrix contract mismatch for " << group.name << " opcode=0x"
+                  << std::hex << static_cast<int>(opcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      } else if (hasMemoryOperand &&
+                 prodos8emu::read_u8(mem->constBanks(), operandAddr) != group.operand) {
+        std::cerr << "FAIL: ALU decode matrix memory-stability mismatch for " << group.name
+                  << " opcode=0x" << std::hex << static_cast<int>(opcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+  }
+
+  struct RmwModeCase {
+    uint8_t  mode;
+    uint32_t expectedCycles;
+    uint8_t  instructionBytes;
+  };
+
+  static const RmwModeCase rmwModes[] = {
+      {0x06, 5, 2},
+      {0x16, 6, 2},
+      {0x0E, 6, 3},
+      {0x1E, 7, 3},
+  };
+
+  struct RmwGroupCase {
+    const char* name;
+    uint8_t     group;
+    uint8_t     initialValue;
+    uint8_t     initialP;
+    uint8_t     expectedValue;
+    bool        expectedC;
+    bool        expectedZ;
+    bool        expectedN;
+  };
+
+  static const RmwGroupCase rmwGroups[] = {
+      {"ASL", 0x00, 0x81, 0x20, 0x02, true, false, false},
+      {"ROL", 0x20, 0x80, 0x21, 0x01, true, false, false},
+      {"LSR", 0x40, 0x01, 0x20, 0x00, true, true, false},
+      {"ROR", 0x60, 0x00, 0x21, 0x80, false, false, true},
+      {"DEC", 0xC0, 0x00, 0x21, 0xFF, true, false, true},
+      {"INC", 0xE0, 0xFF, 0x21, 0x00, true, true, false},
+  };
+
+  for (size_t groupIndex = 0;
+       groupIndex < (sizeof(rmwGroups) / sizeof(rmwGroups[0])) && !testFailed; ++groupIndex) {
+    const RmwGroupCase& group = rmwGroups[groupIndex];
+
+    for (size_t modeIndex = 0; modeIndex < (sizeof(rmwModes) / sizeof(rmwModes[0])) && !testFailed;
+         ++modeIndex) {
+      const RmwModeCase& mode = rmwModes[modeIndex];
+
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start =
+          static_cast<uint16_t>(0x2E00 + (groupIndex * 0x100) + (modeIndex * 0x08));
+      const uint8_t opcode = static_cast<uint8_t>(group.group | mode.mode);
+      const uint8_t xReg   = 0x02;
+      const uint8_t yReg   = 0x66;
+
+      uint8_t  operandLo  = 0x00;
+      uint8_t  operandHi  = 0x00;
+      uint16_t targetAddr = 0x0000;
+
+      switch (mode.mode) {
+        case 0x06:
+          operandLo  = static_cast<uint8_t>(0x60 + modeIndex + (groupIndex * 2));
+          targetAddr = operandLo;
+          break;
+        case 0x16:
+          operandLo  = static_cast<uint8_t>(0x70 + modeIndex + (groupIndex * 2));
+          targetAddr = static_cast<uint8_t>(operandLo + xReg);
+          break;
+        case 0x0E:
+          targetAddr = static_cast<uint16_t>(0x3800 + (groupIndex * 0x20) + modeIndex);
+          operandLo  = static_cast<uint8_t>(targetAddr & 0xFF);
+          operandHi  = static_cast<uint8_t>((targetAddr >> 8) & 0xFF);
+          break;
+        case 0x1E: {
+          const uint16_t baseAddr =
+              static_cast<uint16_t>(0x3900 + (groupIndex * 0x20) + (modeIndex * 2));
+          targetAddr = static_cast<uint16_t>(baseAddr + xReg);
+          operandLo  = static_cast<uint8_t>(baseAddr & 0xFF);
+          operandHi  = static_cast<uint8_t>((baseAddr >> 8) & 0xFF);
+          break;
+        }
+        default:
+          break;
+      }
+
+      prodos8emu::write_u8(mem->banks(), targetAddr, group.initialValue);
+
+      prodos8emu::write_u8(mem->banks(), start, opcode);
+      prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 1), operandLo);
+      if (mode.instructionBytes == 3) {
+        prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 2), operandHi);
+      }
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().a  = 0x55;
+      cpu.regs().x  = xReg;
+      cpu.regs().y  = yReg;
+      cpu.regs().sp = 0xD2;
+      cpu.regs().p  = group.initialP;
+
+      uint32_t cycles = cpu.step();
+      uint8_t  memVal = prodos8emu::read_u8(mem->constBanks(), targetAddr);
+      bool     c      = (cpu.regs().p & 0x01) != 0;
+      bool     z      = (cpu.regs().p & 0x02) != 0;
+      bool     n      = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != mode.expectedCycles ||
+          cpu.regs().pc != static_cast<uint16_t>(start + mode.instructionBytes) ||
+          memVal != group.expectedValue || c != group.expectedC || z != group.expectedZ ||
+          n != group.expectedN || cpu.regs().a != 0x55 || cpu.regs().x != xReg ||
+          cpu.regs().y != yReg || cpu.regs().sp != 0xD2) {
+        std::cerr << "FAIL: RMW decode matrix contract mismatch for " << group.name << " opcode=0x"
+                  << std::hex << static_cast<int>(opcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: alu_rmw_decode_route_matrix_contracts\n";
+  }
+}
+
+__attribute__((noinline)) static void run_rmb_smb_bbr_bbs_full_bit_matrix_contracts_test(
+    int& failures) {
+  std::cout << "Test 60: rmb_smb_bbr_bbs_full_bit_matrix_contracts\n";
+
+  bool testFailed = false;
+
+  for (uint8_t bit = 0; bit < 8 && !testFailed; ++bit) {
+    const uint8_t mask      = static_cast<uint8_t>(1u << bit);
+    const uint8_t rmbOpcode = static_cast<uint8_t>(0x07 + (bit << 4));
+    const uint8_t smbOpcode = static_cast<uint8_t>(0x87 + (bit << 4));
+    const uint8_t bbrOpcode = static_cast<uint8_t>(0x0F + (bit << 4));
+    const uint8_t bbsOpcode = static_cast<uint8_t>(0x8F + (bit << 4));
+    const uint8_t zpAddr    = static_cast<uint8_t>(0x20 + bit);
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start = static_cast<uint16_t>(0x3400 + (bit * 0x40));
+      prodos8emu::write_u8(mem->banks(), zpAddr, 0xFF);
+      writeProgram(*mem, start,
+                   {
+                       rmbOpcode,
+                       zpAddr,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0xA5;
+
+      uint32_t cycles = cpu.step();
+      uint8_t  zpVal  = prodos8emu::read_u8(mem->constBanks(), zpAddr);
+      uint8_t  expect = static_cast<uint8_t>(0xFF & static_cast<uint8_t>(~mask));
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 2) || zpVal != expect ||
+          cpu.regs().p != 0xA5) {
+        std::cerr << "FAIL: RMB bit-matrix contract mismatch for bit=" << static_cast<int>(bit)
+                  << " opcode=0x" << std::hex << static_cast<int>(rmbOpcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start = static_cast<uint16_t>(0x3420 + (bit * 0x40));
+      prodos8emu::write_u8(mem->banks(), zpAddr, 0x00);
+      writeProgram(*mem, start,
+                   {
+                       smbOpcode,
+                       zpAddr,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0x67;
+
+      uint32_t cycles = cpu.step();
+      uint8_t  zpVal  = prodos8emu::read_u8(mem->constBanks(), zpAddr);
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 2) || zpVal != mask ||
+          cpu.regs().p != 0x67) {
+        std::cerr << "FAIL: SMB bit-matrix contract mismatch for bit=" << static_cast<int>(bit)
+                  << " opcode=0x" << std::hex << static_cast<int>(smbOpcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start  = static_cast<uint16_t>(0x3440 + (bit * 0x40));
+      const uint8_t  before = static_cast<uint8_t>(0xFF & static_cast<uint8_t>(~mask));
+      prodos8emu::write_u8(mem->banks(), zpAddr, before);
+      writeProgram(*mem, start,
+                   {
+                       bbrOpcode,
+                       zpAddr,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0x63;
+
+      uint32_t cycles = cpu.step();
+      uint8_t  after  = prodos8emu::read_u8(mem->constBanks(), zpAddr);
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5) ||
+          cpu.regs().p != 0x63 || after != before) {
+        std::cerr << "FAIL: BBR taken bit-matrix contract mismatch for bit="
+                  << static_cast<int>(bit) << " opcode=0x" << std::hex
+                  << static_cast<int>(bbrOpcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start  = static_cast<uint16_t>(0x3460 + (bit * 0x40));
+      const uint8_t  before = mask;
+      prodos8emu::write_u8(mem->banks(), zpAddr, before);
+      writeProgram(*mem, start,
+                   {
+                       bbrOpcode,
+                       zpAddr,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0x63;
+
+      uint32_t cycles = cpu.step();
+      uint8_t  after  = prodos8emu::read_u8(mem->constBanks(), zpAddr);
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+          cpu.regs().p != 0x63 || after != before) {
+        std::cerr << "FAIL: BBR not-taken bit-matrix contract mismatch for bit="
+                  << static_cast<int>(bit) << " opcode=0x" << std::hex
+                  << static_cast<int>(bbrOpcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start  = static_cast<uint16_t>(0x3480 + (bit * 0x40));
+      const uint8_t  before = mask;
+      prodos8emu::write_u8(mem->banks(), zpAddr, before);
+      writeProgram(*mem, start,
+                   {
+                       bbsOpcode,
+                       zpAddr,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0x9B;
+
+      uint32_t cycles = cpu.step();
+      uint8_t  after  = prodos8emu::read_u8(mem->constBanks(), zpAddr);
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5) ||
+          cpu.regs().p != 0x9B || after != before) {
+        std::cerr << "FAIL: BBS taken bit-matrix contract mismatch for bit="
+                  << static_cast<int>(bit) << " opcode=0x" << std::hex
+                  << static_cast<int>(bbsOpcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start  = static_cast<uint16_t>(0x34A0 + (bit * 0x40));
+      const uint8_t  before = static_cast<uint8_t>(0xFF & static_cast<uint8_t>(~mask));
+      prodos8emu::write_u8(mem->banks(), zpAddr, before);
+      writeProgram(*mem, start,
+                   {
+                       bbsOpcode,
+                       zpAddr,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0x9B;
+
+      uint32_t cycles = cpu.step();
+      uint8_t  after  = prodos8emu::read_u8(mem->constBanks(), zpAddr);
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+          cpu.regs().p != 0x9B || after != before) {
+        std::cerr << "FAIL: BBS not-taken bit-matrix contract mismatch for bit="
+                  << static_cast<int>(bit) << " opcode=0x" << std::hex
+                  << static_cast<int>(bbsOpcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: rmb_smb_bbr_bbs_full_bit_matrix_contracts\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -7541,6 +8043,8 @@ int main() {
   run_load_store_helper_dispatch_equivalence_test(failures);
   run_execute_decode_precedence_nonregression_test(failures);
   run_control_flow_refactor_equivalence_contracts_test(failures);
+  run_alu_rmw_decode_route_matrix_contracts_test(failures);
+  run_rmb_smb_bbr_bbs_full_bit_matrix_contracts_test(failures);
 
   fs::remove_all(tempDir);
 
