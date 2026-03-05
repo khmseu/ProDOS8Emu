@@ -2592,6 +2592,286 @@ int main() {
     }
   }
 
+  // Test 28: execute_special_decode_order_preserved
+  {
+    std::cout << "Test 28: execute_special_decode_order_preserved\n";
+
+    bool testFailed = false;
+
+    {
+      // RMB0 zp ($07) must be handled by special decode path before default switch fallback.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0E00;
+      prodos8emu::write_u8(mem.banks(), 0x0010, 0xFF);
+      writeProgram(mem, start,
+                   {
+                       0x07,
+                       0x10,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t cycles = cpu.step();
+      uint8_t  zpVal  = prodos8emu::read_u8(mem.constBanks(), 0x0010);
+
+      if (cycles != 5 || zpVal != 0xFE || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+        std::cerr << "FAIL: RMB0 decode precedence expected cycles=5,zp=$FE,pc=start+2\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // BBR0 zp,rel ($0F) must branch via special decode path.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0E20;
+      prodos8emu::write_u8(mem.banks(), 0x0011, 0x00);  // bit 0 clear => branch taken
+      writeProgram(mem, start,
+                   {
+                       0x0F,
+                       0x11,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t cycles = cpu.step();
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+        std::cerr << "FAIL: BBR0 decode precedence expected cycles=5,branch to start+5\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // BBS0 zp,rel ($8F) must branch via special decode path.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0E40;
+      prodos8emu::write_u8(mem.banks(), 0x0012, 0x01);  // bit 0 set => branch taken
+      writeProgram(mem, start,
+                   {
+                       0x8F,
+                       0x12,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t cycles = cpu.step();
+
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+        std::cerr << "FAIL: BBS0 decode precedence expected cycles=5,branch to start+5\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: execute_special_decode_order_preserved\n";
+    }
+  }
+
+  // Test 29: mli_on_line_volume_list_logging_stable
+  {
+    std::cout << "Test 29: mli_on_line_volume_list_logging_stable\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    fs::path volume = tempDir / "ONVOL";
+    fs::create_directories(volume);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t onLineParam  = 0x0430;
+    const uint16_t onLineBuffer = 0x0640;
+    prodos8emu::write_u8(mem.banks(), onLineParam + 0, 2);
+    prodos8emu::write_u8(mem.banks(), onLineParam + 1, 0);
+    prodos8emu::write_u16_le(mem.banks(), onLineParam + 2, onLineBuffer);
+
+    const uint16_t start = 0x0E80;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC5,
+                     static_cast<uint8_t>(onLineParam & 0xFF),
+                     static_cast<uint8_t>((onLineParam >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    cpu.step();
+
+    const std::string logText = mliLog.str();
+
+    size_t callPos    = logText.find(" MLI call=$C5 (ON_LINE)");
+    size_t paramPos   = logText.find(" param=$0430");
+    size_t volumesPos = logText.find(" volumes='");
+    size_t onvolPos   = logText.find("ONVOL[S1D0]");
+    size_t resultPos  = logText.find(" result=$00");
+    size_t okPos      = logText.find(" OK");
+
+    if (callPos == std::string::npos || paramPos == std::string::npos ||
+        volumesPos == std::string::npos || onvolPos == std::string::npos ||
+        resultPos == std::string::npos || okPos == std::string::npos) {
+      std::cerr << "FAIL: Expected ON_LINE volume-list log fields were missing, got:\n"
+                << logText << "\n";
+      failures++;
+    } else if (!(callPos < paramPos && paramPos < volumesPos && volumesPos < onvolPos &&
+                 onvolPos < resultPos && resultPos < okPos)) {
+      std::cerr << "FAIL: Expected ON_LINE log field order call->param->volumes->result->OK, "
+                   "got:\n"
+                << logText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: mli_on_line_volume_list_logging_stable\n";
+    }
+  }
+
+  // Test 30: mli_read_directory_entry_logging_stable
+  {
+    std::cout << "Test 30: mli_read_directory_entry_logging_stable\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    fs::path volume = tempDir / "VOLD";
+    fs::create_directories(volume);
+    std::ofstream(volume / "ALPHA") << "alpha data";
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t    dirPathAddr = 0x0540;
+    const std::string dirPath     = "/VOLD";
+    prodos8emu::write_u8(mem.banks(), dirPathAddr, static_cast<uint8_t>(dirPath.length()));
+    for (size_t i = 0; i < dirPath.length(); i++) {
+      prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(dirPathAddr + 1 + i),
+                           static_cast<uint8_t>(dirPath[i]));
+    }
+
+    const uint16_t openParam = 0x0440;
+    prodos8emu::write_u8(mem.banks(), openParam + 0, 3);
+    prodos8emu::write_u16_le(mem.banks(), openParam + 1, dirPathAddr);
+    prodos8emu::write_u16_le(mem.banks(), openParam + 3, 0x2800);
+    prodos8emu::write_u8(mem.banks(), openParam + 5, 0);
+
+    uint8_t openErr = ctx.openCall(mem.banks(), openParam);
+    uint8_t refNum  = prodos8emu::read_u8(mem.constBanks(), openParam + 5);
+
+    const uint16_t setMarkParam = 0x0450;
+    prodos8emu::write_u8(mem.banks(), setMarkParam + 0, 2);
+    prodos8emu::write_u8(mem.banks(), setMarkParam + 1, refNum);
+    prodos8emu::write_u24_le(mem.banks(), setMarkParam + 2, 43);
+    uint8_t setMarkErr = ctx.setMarkCall(mem.constBanks(), setMarkParam);
+
+    const uint16_t readParam = 0x0460;
+    const uint16_t readBuf   = 0x0660;
+    prodos8emu::write_u8(mem.banks(), readParam + 0, 4);
+    prodos8emu::write_u8(mem.banks(), readParam + 1, refNum);
+    prodos8emu::write_u16_le(mem.banks(), readParam + 2, readBuf);
+    prodos8emu::write_u16_le(mem.banks(), readParam + 4, 39);
+    prodos8emu::write_u16_le(mem.banks(), readParam + 6, 0);
+
+    const uint16_t start = 0x0EA0;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xCA,
+                     static_cast<uint8_t>(readParam & 0xFF),
+                     static_cast<uint8_t>((readParam >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    cpu.step();
+
+    const std::string logText = mliLog.str();
+
+    size_t callPos    = logText.find(" MLI call=$CA (READ)");
+    size_t paramPos   = logText.find(" param=$0460");
+    size_t refPos     = logText.find(" ref=" + std::to_string(refNum));
+    size_t reqPos     = logText.find(" req=39");
+    size_t transPos   = logText.find(" trans=39");
+    size_t firstMark  = logText.find(" mark=$43");
+    size_t eofPos     = logText.find(" eof=$512");
+    size_t secondMark = (firstMark == std::string::npos) ? std::string::npos
+                                                         : logText.find(" mark=$43", firstMark + 1);
+    size_t blkPos     = logText.find(" blk=0+43");
+    size_t entryPos   = logText.find(" [ent1]");
+    size_t entriesPos = logText.find(" entries='ALPHA'");
+    size_t resultPos  = logText.find(" result=$00");
+    size_t okPos      = logText.find(" OK");
+
+    if (openErr != 0) {
+      std::cerr << "FAIL: Expected OPEN precondition for directory read logging to succeed, got 0x"
+                << std::hex << static_cast<int>(openErr) << std::dec << "\n";
+      failures++;
+    } else if (setMarkErr != 0) {
+      std::cerr << "FAIL: Expected SET_MARK precondition for directory read logging to succeed, "
+                   "got 0x"
+                << std::hex << static_cast<int>(setMarkErr) << std::dec << "\n";
+      failures++;
+    } else if (callPos == std::string::npos || paramPos == std::string::npos ||
+               refPos == std::string::npos || reqPos == std::string::npos ||
+               transPos == std::string::npos || firstMark == std::string::npos ||
+               eofPos == std::string::npos || secondMark == std::string::npos ||
+               blkPos == std::string::npos || entryPos == std::string::npos ||
+               entriesPos == std::string::npos || resultPos == std::string::npos ||
+               okPos == std::string::npos) {
+      std::cerr << "FAIL: Expected READ directory-entry log fields were missing, got:\n"
+                << logText << "\n";
+      failures++;
+    } else if (!(callPos < paramPos && paramPos < refPos && refPos < reqPos && reqPos < transPos &&
+                 transPos < firstMark && firstMark < eofPos && eofPos < secondMark &&
+                 secondMark < blkPos && blkPos < entryPos && entryPos < entriesPos &&
+                 entriesPos < resultPos && resultPos < okPos)) {
+      std::cerr << "FAIL: Expected READ directory log field order to remain stable, got:\n"
+                << logText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: mli_read_directory_entry_logging_stable\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {
