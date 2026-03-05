@@ -149,6 +149,8 @@ namespace prodos8emu {
     bool     execute_load_store_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_bit_family_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_nop_variant_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_misc_tail_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_compare_xy_opcode(uint8_t op, uint32_t& cycles);
     uint32_t execute_rmb_smb_opcode(uint8_t op);
     uint32_t execute_bbr_bbs_opcode(uint8_t op);
     bool     read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles);

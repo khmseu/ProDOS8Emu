@@ -1689,6 +1689,64 @@ namespace prodos8emu {
     }
   }
 
+  bool CPU65C02::execute_misc_tail_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      case 0xE8:
+        m_r.x = static_cast<uint8_t>(m_r.x + 1);
+        setNZ(m_r.x);
+        cycles = 2;
+        return true;
+      case 0xCA:
+        m_r.x = static_cast<uint8_t>(m_r.x - 1);
+        setNZ(m_r.x);
+        cycles = 2;
+        return true;
+      case 0xC8:
+        m_r.y = static_cast<uint8_t>(m_r.y + 1);
+        setNZ(m_r.y);
+        cycles = 2;
+        return true;
+      case 0x88:
+        m_r.y = static_cast<uint8_t>(m_r.y - 1);
+        setNZ(m_r.y);
+        cycles = 2;
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_compare_xy_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      case 0xE0:
+        (void)cmp(m_r.x, fetch8());
+        cycles = 2;
+        return true;
+      case 0xE4:
+        (void)cmp(m_r.x, read8(addr_zp()));
+        cycles = 3;
+        return true;
+      case 0xEC:
+        (void)cmp(m_r.x, read8(addr_abs()));
+        cycles = 4;
+        return true;
+      case 0xC0:
+        (void)cmp(m_r.y, fetch8());
+        cycles = 2;
+        return true;
+      case 0xC4:
+        (void)cmp(m_r.y, read8(addr_zp()));
+        cycles = 3;
+        return true;
+      case 0xCC:
+        (void)cmp(m_r.y, read8(addr_abs()));
+        cycles = 4;
+        return true;
+      default:
+        return false;
+    }
+  }
+
   bool CPU65C02::read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles) {
     switch (mode) {
       case 0x09:
@@ -1933,21 +1991,13 @@ namespace prodos8emu {
     switch (op) {
       // INC/DEC registers
       case 0xE8:
-        m_r.x = static_cast<uint8_t>(m_r.x + 1);
-        setNZ(m_r.x);
-        return 2;
       case 0xCA:
-        m_r.x = static_cast<uint8_t>(m_r.x - 1);
-        setNZ(m_r.x);
-        return 2;
       case 0xC8:
-        m_r.y = static_cast<uint8_t>(m_r.y + 1);
-        setNZ(m_r.y);
-        return 2;
       case 0x88:
-        m_r.y = static_cast<uint8_t>(m_r.y - 1);
-        setNZ(m_r.y);
-        return 2;
+        if (execute_misc_tail_opcode(op, lowRiskCycles)) {
+          return lowRiskCycles;
+        }
+        break;
 
       // Logical/ALU families (ORA/AND/EOR/ADC/SBC/CMP A)
       case 0x09:
@@ -2007,23 +2057,15 @@ namespace prodos8emu {
         return execute_alu_family_opcode(op);
 
       case 0xE0:
-        (void)cmp(m_r.x, fetch8());
-        return 2;
       case 0xE4:
-        (void)cmp(m_r.x, read8(addr_zp()));
-        return 3;
       case 0xEC:
-        (void)cmp(m_r.x, read8(addr_abs()));
-        return 4;
       case 0xC0:
-        (void)cmp(m_r.y, fetch8());
-        return 2;
       case 0xC4:
-        (void)cmp(m_r.y, read8(addr_zp()));
-        return 3;
       case 0xCC:
-        (void)cmp(m_r.y, read8(addr_abs()));
-        return 4;
+        if (execute_compare_xy_opcode(op, lowRiskCycles)) {
+          return lowRiskCycles;
+        }
+        break;
 
       // INC/DEC memory and memory shifts/rotates
       case 0xE6:
@@ -2055,6 +2097,8 @@ namespace prodos8emu {
       default:
         return 2;
     }
+
+    return 2;
   }
 
   void CPU65C02::log_step_trace_marker(uint16_t pc) {

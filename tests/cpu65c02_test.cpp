@@ -4785,6 +4785,194 @@ int main() {
     }
   }
 
+  // Test 41: misc_tail_dispatch_cycles_preserved
+  {
+    std::cout << "Test 41: misc_tail_dispatch_cycles_preserved\n";
+
+    bool testFailed = false;
+
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1620;
+    writeProgram(*mem, start,
+                 {
+                     0xE8,
+                     0xCA,
+                     0xC8,
+                     0x88,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    cpu.regs().x = 0x00;
+    cpu.regs().y = 0x00;
+    cpu.regs().p = static_cast<uint8_t>((cpu.regs().p & static_cast<uint8_t>(~0xC3)) | 0x41);
+
+    uint32_t inxCycles = cpu.step();
+    uint8_t  inxX      = cpu.regs().x;
+    bool     inxZ      = (cpu.regs().p & 0x02) != 0;
+    bool     inxN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t dexCycles = cpu.step();
+    uint8_t  dexX      = cpu.regs().x;
+    bool     dexZ      = (cpu.regs().p & 0x02) != 0;
+    bool     dexN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t inyCycles = cpu.step();
+    uint8_t  inyY      = cpu.regs().y;
+    bool     inyZ      = (cpu.regs().p & 0x02) != 0;
+    bool     inyN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t deyCycles = cpu.step();
+    uint8_t  deyY      = cpu.regs().y;
+    bool     deyZ      = (cpu.regs().p & 0x02) != 0;
+    bool     deyN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t nopCycles = cpu.step();
+
+    if (inxCycles != 2 || inxX != 0x01 || inxZ || inxN) {
+      std::cerr << "FAIL: INX dispatch cycle/flag contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (dexCycles != 2 || dexX != 0x00 || !dexZ || dexN) {
+      std::cerr << "FAIL: DEX dispatch cycle/flag contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (inyCycles != 2 || inyY != 0x01 || inyZ || inyN) {
+      std::cerr << "FAIL: INY dispatch cycle/flag contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (deyCycles != 2 || deyY != 0x00 || !deyZ || deyN) {
+      std::cerr << "FAIL: DEY dispatch cycle/flag contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (nopCycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+      std::cerr << "FAIL: Tail dispatch PC/cycle sequencing mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: misc_tail_dispatch_cycles_preserved\n";
+    }
+  }
+
+  // Test 42: compare_xy_dispatch_contracts_preserved
+  {
+    std::cout << "Test 42: compare_xy_dispatch_contracts_preserved\n";
+
+    bool testFailed = false;
+
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    prodos8emu::write_u8(mem->banks(), 0x0012, 0x31);
+    prodos8emu::write_u8(mem->banks(), 0x0013, 0x30);
+    prodos8emu::write_u8(mem->banks(), 0x2002, 0x30);
+    prodos8emu::write_u8(mem->banks(), 0x2003, 0x40);
+
+    const uint16_t start = 0x1660;
+    writeProgram(*mem, start,
+                 {
+                     0xA2,
+                     0x30,
+                     0xA0,
+                     0x31,
+                     0xE0,
+                     0x30,
+                     0xE4,
+                     0x12,
+                     0xEC,
+                     0x02,
+                     0x20,
+                     0xC0,
+                     0x31,
+                     0xC4,
+                     0x13,
+                     0xCC,
+                     0x03,
+                     0x20,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    (void)cpu.step();
+    (void)cpu.step();
+
+    cpu.regs().p = static_cast<uint8_t>((cpu.regs().p & static_cast<uint8_t>(~0xC3)) | 0x40);
+
+    uint32_t cpxImmCycles = cpu.step();
+    bool     cpxImmC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpxImmZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpxImmN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t cpxZpCycles = cpu.step();
+    bool     cpxZpC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpxZpZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpxZpN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t cpxAbsCycles = cpu.step();
+    bool     cpxAbsC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpxAbsZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpxAbsN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t cpyImmCycles = cpu.step();
+    bool     cpyImmC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpyImmZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpyImmN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t cpyZpCycles = cpu.step();
+    bool     cpyZpC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpyZpZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpyZpN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t cpyAbsCycles = cpu.step();
+    bool     cpyAbsC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpyAbsZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpyAbsN      = (cpu.regs().p & 0x80) != 0;
+    bool     cpyAbsV      = (cpu.regs().p & 0x40) != 0;
+
+    if (cpxImmCycles != 2 || !cpxImmC || !cpxImmZ || cpxImmN) {
+      std::cerr << "FAIL: CPX imm dispatch contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (cpxZpCycles != 3 || cpxZpC || cpxZpZ || !cpxZpN) {
+      std::cerr << "FAIL: CPX zp dispatch contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (cpxAbsCycles != 4 || !cpxAbsC || !cpxAbsZ || cpxAbsN) {
+      std::cerr << "FAIL: CPX abs dispatch contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (cpyImmCycles != 2 || !cpyImmC || !cpyImmZ || cpyImmN) {
+      std::cerr << "FAIL: CPY imm dispatch contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (cpyZpCycles != 3 || !cpyZpC || cpyZpZ || cpyZpN) {
+      std::cerr << "FAIL: CPY zp dispatch contract mismatch\n";
+      failures++;
+      testFailed = true;
+    } else if (cpyAbsCycles != 4 || cpyAbsC || cpyAbsZ || !cpyAbsN || !cpyAbsV ||
+               cpu.regs().x != 0x30 || cpu.regs().y != 0x31 ||
+               cpu.regs().pc != static_cast<uint16_t>(start + 18)) {
+      std::cerr << "FAIL: CPY abs dispatch cycle/flag/register/PC mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: compare_xy_dispatch_contracts_preserved\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {
