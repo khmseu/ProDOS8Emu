@@ -256,6 +256,28 @@ namespace prodos8emu {
       return result;
     }
 
+    std::string format_counted_path_for_log(const char* fieldName, const std::string& pathname,
+                                            uint8_t length, uint8_t maxLen = 64) {
+      if (!pathname.empty()) {
+        return " " + std::string(fieldName) + "='" + pathname + "'";
+      }
+      if (length == 0) {
+        return " " + std::string(fieldName) + "=<empty>";
+      }
+      if (length > maxLen) {
+        return " " + std::string(fieldName) + "=<invalid:len=" + std::to_string(length) + ">";
+      }
+      return "";
+    }
+
+    std::string read_and_format_counted_path_for_log(const ConstMemoryBanks& banks,
+                                                     uint16_t pathnamePtr, const char* fieldName,
+                                                     uint8_t maxLen = 64) {
+      uint8_t     length   = 0;
+      std::string pathname = read_pathname(banks, pathnamePtr, maxLen, &length);
+      return format_counted_path_for_log(fieldName, pathname, length, maxLen);
+    }
+
     /**
      * Extract pathname(s) from MLI parameter block for logging.
      * Returns formatted string with pathname info, or empty if call doesn't use pathnames.
@@ -272,17 +294,8 @@ namespace prodos8emu {
         case 0xC4:  // GET_FILE_INFO
         case 0xC8:  // OPEN
         {
-          uint16_t    pathnamePtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
-          uint8_t     length      = 0;
-          std::string pathname    = read_pathname(banks, pathnamePtr, 64, &length);
-
-          if (!pathname.empty()) {
-            result = " path='" + pathname + "'";
-          } else if (length == 0) {
-            result = " path=<empty>";
-          } else if (length > 64) {
-            result = " path=<invalid:len=" + std::to_string(length) + ">";
-          }
+          uint16_t pathnamePtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result               = read_and_format_counted_path_for_log(banks, pathnamePtr, "path");
 
           // OPEN: log output refnum on success
           if (callNumber == 0xC8 && err == 0) {
@@ -308,17 +321,8 @@ namespace prodos8emu {
         // SET_PREFIX: pathname at +1
         case 0xC6:  // SET_PREFIX
         {
-          uint16_t    pathnamePtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
-          uint8_t     length      = 0;
-          std::string pathname    = read_pathname(banks, pathnamePtr, 64, &length);
-
-          if (!pathname.empty()) {
-            result = " prefix='" + pathname + "'";
-          } else if (length == 0) {
-            result = " prefix=<empty>";
-          } else if (length > 64) {
-            result = " prefix=<invalid:len=" + std::to_string(length) + ">";
-          }
+          uint16_t pathnamePtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
+          result               = read_and_format_counted_path_for_log(banks, pathnamePtr, "prefix");
           break;
         }
 
@@ -328,16 +332,7 @@ namespace prodos8emu {
           // Only read buffer if call succeeded
           if (err == 0) {
             uint16_t dataBufferPtr = read_u16_le(banks, static_cast<uint16_t>(paramBlockAddr + 1));
-            uint8_t  length        = 0;
-            std::string pathname   = read_pathname(banks, dataBufferPtr, 64, &length);
-
-            if (!pathname.empty()) {
-              result = " prefix='" + pathname + "'";
-            } else if (length == 0) {
-              result = " prefix=<empty>";
-            } else if (length > 64) {
-              result = " prefix=<invalid:len=" + std::to_string(length) + ">";
-            }
+            result = read_and_format_counted_path_for_log(banks, dataBufferPtr, "prefix");
           }
           break;
         }

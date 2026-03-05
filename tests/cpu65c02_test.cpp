@@ -810,6 +810,184 @@ int main() {
     }
   }
 
+  // Test 10: extract_pathname_len_zero_formats_empty
+  {
+    std::cout << "Test 10: extract_pathname_len_zero_formats_empty\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t pathnameAddr = 0x0470;
+    prodos8emu::write_u8(mem.banks(), pathnameAddr, 0);  // length=0
+
+    const uint16_t param = 0x0370;
+    prodos8emu::write_u8(mem.banks(), param + 0, 0x0A);  // GET_FILE_INFO param_count
+    prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+
+    const uint16_t start = 0x0290;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC4,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    cpu.step();
+
+    const std::string logText = mliLog.str();
+
+    if (logText.find("GET_FILE_INFO") == std::string::npos) {
+      std::cerr << "FAIL: Expected GET_FILE_INFO in MLI log\n";
+      failures++;
+    } else if (logText.find(" path=<empty>") == std::string::npos) {
+      std::cerr << "FAIL: Expected path=<empty> formatting, got:\n" << logText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: extract_pathname_len_zero_formats_empty\n";
+    }
+  }
+
+  // Test 11: extract_pathname_invalid_length_formats_error
+  {
+    std::cout << "Test 11: extract_pathname_invalid_length_formats_error\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t pathnameAddr = 0x0480;
+    prodos8emu::write_u8(mem.banks(), pathnameAddr, 65);  // invalid length > 64
+
+    const uint16_t param = 0x0380;
+    prodos8emu::write_u8(mem.banks(), param + 0, 0x0A);  // GET_FILE_INFO param_count
+    prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+
+    const uint16_t start = 0x02A0;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC4,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    cpu.step();
+
+    const std::string logText = mliLog.str();
+
+    if (logText.find("GET_FILE_INFO") == std::string::npos) {
+      std::cerr << "FAIL: Expected GET_FILE_INFO in MLI log\n";
+      failures++;
+    } else if (logText.find(" path=<invalid:len=65>") == std::string::npos) {
+      std::cerr << "FAIL: Expected path=<invalid:len=65> formatting, got:\n" << logText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: extract_pathname_invalid_length_formats_error\n";
+    }
+  }
+
+  // Test 12: mli_get_prefix_logging_remains_stable
+  {
+    std::cout << "Test 12: mli_get_prefix_logging_remains_stable\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t    setPrefixPathname = 0x0490;
+    const std::string prefixPath        = "/VOLP2/TOOLS";
+    prodos8emu::write_u8(mem.banks(), setPrefixPathname, static_cast<uint8_t>(prefixPath.length()));
+    for (size_t i = 0; i < prefixPath.length(); i++) {
+      prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(setPrefixPathname + 1 + i),
+                           static_cast<uint8_t>(prefixPath[i]));
+    }
+
+    const uint16_t setPrefixParam = 0x0390;
+    prodos8emu::write_u8(mem.banks(), setPrefixParam + 0, 1);
+    prodos8emu::write_u16_le(mem.banks(), setPrefixParam + 1, setPrefixPathname);
+    uint8_t setPrefixErr = ctx.setPrefixCall(mem.constBanks(), setPrefixParam);
+
+    const uint16_t getPrefixBuffer = 0x05A0;
+    const uint16_t getPrefixParam  = 0x03A0;
+    prodos8emu::write_u8(mem.banks(), getPrefixParam + 0, 1);
+    prodos8emu::write_u16_le(mem.banks(), getPrefixParam + 1, getPrefixBuffer);
+
+    const uint16_t start = 0x02B0;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC7,
+                     static_cast<uint8_t>(getPrefixParam & 0xFF),
+                     static_cast<uint8_t>((getPrefixParam >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.reset();
+
+    cpu.step();
+
+    const std::string logText   = mliLog.str();
+    size_t            callPos   = logText.find(" MLI call=$C7 (GET_PREFIX)");
+    size_t            paramPos  = logText.find(" param=$03A0");
+    size_t            prefixPos = logText.find(" prefix='/VOLP2/TOOLS'");
+    size_t            resultPos = logText.find(" result=$00");
+    size_t            okPos     = logText.find(" OK");
+
+    if (setPrefixErr != 0) {
+      std::cerr << "FAIL: Expected SET_PREFIX precondition to succeed, got 0x" << std::hex
+                << static_cast<int>(setPrefixErr) << std::dec << "\n";
+      failures++;
+    } else if (callPos == std::string::npos || paramPos == std::string::npos ||
+               prefixPos == std::string::npos || resultPos == std::string::npos ||
+               okPos == std::string::npos) {
+      std::cerr << "FAIL: Expected GET_PREFIX log fields were missing, got:\n" << logText << "\n";
+      failures++;
+    } else if (!(callPos < paramPos && paramPos < prefixPos && prefixPos < resultPos &&
+                 resultPos < okPos)) {
+      std::cerr
+          << "FAIL: Expected GET_PREFIX log field order call->param->prefix->result->OK, got:\n"
+          << logText << "\n";
+      failures++;
+    } else {
+      std::cout << "PASS: mli_get_prefix_logging_remains_stable\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {
