@@ -691,6 +691,15 @@ namespace prodos8emu {
     m_pcRingIndex                = (m_pcRingIndex + 1) % PC_RING_SIZE;
   }
 
+  uint16_t CPU65C02::control_flow_instruction_pc(uint8_t consumedOperandBytes) const {
+    return static_cast<uint16_t>(m_r.pc - static_cast<uint16_t>(consumedOperandBytes + 1));
+  }
+
+  void CPU65C02::apply_control_flow_pc_change(uint16_t fromPC, uint16_t toPC) {
+    m_r.pc = toPC;
+    recordPCChange(fromPC, toPC);
+  }
+
   uint8_t CPU65C02::read8(uint16_t addr) {
     if (addr >= 0xC080 && addr <= 0xC08F) {
       m_mem.applySoftSwitch(addr, true);
@@ -990,8 +999,7 @@ namespace prodos8emu {
     uint8_t  callNumber = read8(m_r.pc);
     uint16_t paramBlock = read16(static_cast<uint16_t>(m_r.pc + 1));
     uint16_t returnPC   = static_cast<uint16_t>(m_r.pc + 3);
-    m_r.pc              = returnPC;
-    recordPCChange(0xBF00, returnPC);  // from=$BF00 (MLI entry point)
+    apply_control_flow_pc_change(0xBF00, returnPC);  // from=$BF00 (MLI entry point)
 
     uint8_t err = mli_dispatch(*m_mli, m_mem.banks(), callNumber, paramBlock);
 
@@ -1072,10 +1080,9 @@ namespace prodos8emu {
     // Normal JSR behavior.
     // After operand fetch, PC points at the next instruction; JSR pushes (PC-1).
     uint16_t ret   = static_cast<uint16_t>(m_r.pc - 1);
-    uint16_t jsrPC = static_cast<uint16_t>(ret - 2);  // JSR instruction address
+    uint16_t jsrPC = control_flow_instruction_pc(2);
     push16(ret);
-    m_r.pc = target;
-    recordPCChange(jsrPC, target);
+    apply_control_flow_pc_change(jsrPC, target);
     return 6;
   }
 
@@ -1134,31 +1141,28 @@ namespace prodos8emu {
 
   bool CPU65C02::execute_control_flow_jump_return_opcode(uint8_t op, uint32_t& cycles) {
     switch (op) {
-      case 0x4C: {                                            // JMP abs
-        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+      case 0x4C: {  // JMP abs
+        uint16_t jmpPC  = control_flow_instruction_pc(0);
         uint16_t target = fetch16();
-        m_r.pc          = target;
-        recordPCChange(jmpPC, target);
+        apply_control_flow_pc_change(jmpPC, target);
         cycles = 3;
         return true;
       }
-      case 0x6C: {                                            // JMP (abs)
-        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+      case 0x6C: {  // JMP (abs)
+        uint16_t jmpPC  = control_flow_instruction_pc(0);
         uint16_t ptr    = fetch16();
         uint16_t target = read16(ptr);
         if (ptr == COUT_VECTOR_PTR) {
           emit_cout_char(static_cast<uint8_t>(m_r.a & 0x7F));
         }
-        m_r.pc = target;
-        recordPCChange(jmpPC, target);
+        apply_control_flow_pc_change(jmpPC, target);
         cycles = 5;
         return true;
       }
-      case 0x7C: {                                            // JMP (abs,X)
-        uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
+      case 0x7C: {  // JMP (abs,X)
+        uint16_t jmpPC  = control_flow_instruction_pc(0);
         uint16_t target = addr_absind_x();
-        m_r.pc          = target;
-        recordPCChange(jmpPC, target);
+        apply_control_flow_pc_change(jmpPC, target);
         cycles = 6;
         return true;
       }
@@ -1167,20 +1171,18 @@ namespace prodos8emu {
         cycles          = jsr_abs(target);
         return true;
       }
-      case 0x60: {                                                // RTS
-        uint16_t rtsPC      = static_cast<uint16_t>(m_r.pc - 1);  // RTS instruction address
+      case 0x60: {  // RTS
+        uint16_t rtsPC      = control_flow_instruction_pc(0);
         uint16_t returnAddr = static_cast<uint16_t>(pull16() + 1);
-        m_r.pc              = returnAddr;
-        recordPCChange(rtsPC, returnAddr);
+        apply_control_flow_pc_change(rtsPC, returnAddr);
         cycles = 6;
         return true;
       }
-      case 0x40: {                                              // RTI
-        uint16_t rtiPC    = static_cast<uint16_t>(m_r.pc - 1);  // RTI instruction address
+      case 0x40: {  // RTI
+        uint16_t rtiPC    = control_flow_instruction_pc(0);
         m_r.p             = static_cast<uint8_t>(pull8() | FLAG_U);
         uint16_t returnPC = pull16();
-        m_r.pc            = returnPC;
-        recordPCChange(rtiPC, returnPC);
+        apply_control_flow_pc_change(rtiPC, returnPC);
         cycles = 6;
         return true;
       }
@@ -1238,15 +1240,14 @@ namespace prodos8emu {
     switch (op) {
       case 0x00: {  // BRK
         // BRK is treated as a 2-byte instruction; PC is incremented once more.
-        uint16_t brkPC = static_cast<uint16_t>(m_r.pc - 1);  // BRK instruction address
+        uint16_t brkPC = control_flow_instruction_pc(0);
         m_r.pc         = static_cast<uint16_t>(m_r.pc + 1);
         push16(m_r.pc);
         push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
         setFlag(FLAG_I, true);
         setFlag(FLAG_D, false);  // 65C02 clears D on interrupt
         uint16_t irqVector = read16(VEC_IRQ);
-        m_r.pc             = irqVector;
-        recordPCChange(brkPC, irqVector);
+        apply_control_flow_pc_change(brkPC, irqVector);
         cycles = 7;
         return true;
       }

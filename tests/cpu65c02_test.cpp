@@ -989,6 +989,239 @@ __attribute__((noinline)) static void run_control_flow_jump_matrix_preserved_tes
   }
 }
 
+__attribute__((noinline)) static void run_control_flow_refactor_equivalence_contracts_test(
+    int& failures) {
+  std::cout << "Test 56: control_flow_refactor_equivalence_contracts\n";
+
+  bool testFailed = false;
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start      = 0x2390;
+    const uint16_t irqHandler = 0x23C0;
+    writeProgram(*mem, start,
+                 {
+                     0x00,
+                     0xEA,
+                 });
+    writeProgram(*mem, irqHandler,
+                 {
+                     0x40,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFE, irqHandler);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x29;
+
+    uint32_t brkCycles = cpu.step();
+    uint32_t rtiCycles = cpu.step();
+
+    const uint8_t stackedStatus = prodos8emu::read_u8(mem->constBanks(), 0x01FD);
+
+    std::stringstream dbg;
+    cpu.dumpDebugInfo(dbg);
+    std::string dbgText = dbg.str();
+
+    const uint8_t expectedStackedStatus = static_cast<uint8_t>(0x29 | 0x10 | 0x20);
+    const uint8_t expectedRestoredP     = static_cast<uint8_t>(expectedStackedStatus | 0x20);
+
+    if (brkCycles != 7 || rtiCycles != 6 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
+        cpu.regs().sp != 0xFF || cpu.regs().p != expectedRestoredP ||
+        stackedStatus != expectedStackedStatus ||
+        dbgText.find("$2390->$23C0") == std::string::npos ||
+        dbgText.find("$23C0->$2392") == std::string::npos) {
+      std::cerr << "FAIL: BRK/RTI equivalence contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x23A0;
+    const uint16_t sub   = 0x23E0;
+    writeProgram(*mem, start,
+                 {
+                     0x20,
+                     static_cast<uint8_t>(sub & 0xFF),
+                     static_cast<uint8_t>((sub >> 8) & 0xFF),
+                     0xEA,
+                 });
+    writeProgram(*mem, sub,
+                 {
+                     0x60,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x4A;
+    cpu.regs().x  = 0x5B;
+    cpu.regs().y  = 0x6C;
+    cpu.regs().sp = 0xFF;
+    cpu.regs().p  = 0xA4;
+
+    uint32_t jsrCycles = cpu.step();
+    uint32_t rtsCycles = cpu.step();
+    uint32_t nopCycles = cpu.step();
+
+    std::stringstream dbg;
+    cpu.dumpDebugInfo(dbg);
+    std::string dbgText = dbg.str();
+
+    if (jsrCycles != 6 || rtsCycles != 6 || nopCycles != 2 || cpu.regs().pc != start + 4 ||
+        cpu.regs().sp != 0xFF || cpu.regs().a != 0x4A || cpu.regs().x != 0x5B ||
+        cpu.regs().y != 0x6C || cpu.regs().p != 0xA4 ||
+        dbgText.find("$23A0->$23E0") == std::string::npos ||
+        dbgText.find("$23E0->$23A3") == std::string::npos) {
+      std::cerr << "FAIL: JSR/RTS equivalence contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x23B0;
+    writeProgram(*mem, start,
+                 {
+                     0xA9,
+                     0xC1,
+                     0x6C,
+                     0x36,
+                     0x00,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0x0036, static_cast<uint16_t>(start + 5));
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    std::stringstream    coutLog;
+    cpu.setDebugLogs(nullptr, &coutLog);
+    cpu.reset();
+
+    uint32_t ldaCycles = cpu.step();
+    uint32_t jmpCycles = cpu.step();
+    uint32_t nopCycles = cpu.step();
+
+    std::stringstream dbg;
+    cpu.dumpDebugInfo(dbg);
+    std::string dbgText = dbg.str();
+
+    if (ldaCycles != 2 || jmpCycles != 5 || nopCycles != 2 || cpu.regs().pc != start + 6 ||
+        coutLog.str() != "A" || dbgText.find("$23B2->$23B5") == std::string::npos) {
+      std::cerr << "FAIL: COUT/JMP(ind) equivalence contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x23D0;
+    writeProgram(*mem, start,
+                 {
+                     0x20,
+                     0xB8,
+                     0xDC,
+                     0xEA,
+                 });
+    writeProgram(*mem, 0xDCBD,
+                 {
+                     0x60,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x11;
+    cpu.regs().x  = 0x22;
+    cpu.regs().y  = 0x33;
+    cpu.regs().sp = 0xFF;
+    cpu.regs().p  = 0x65;
+
+    uint32_t jsrCycles = cpu.step();
+    uint32_t rtsCycles = cpu.step();
+
+    std::stringstream dbg;
+    cpu.dumpDebugInfo(dbg);
+    std::string dbgText = dbg.str();
+
+    if (jsrCycles != 6 || rtsCycles != 6 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+        cpu.regs().sp != 0xFF || cpu.regs().a != 0xA0 || cpu.regs().x != 0x22 ||
+        cpu.regs().y != 0x33 || cpu.regs().p != 0x65 ||
+        dbgText.find("$23D0->$DCBD") == std::string::npos ||
+        dbgText.find("$DCBD->$23D3") == std::string::npos) {
+      std::cerr << "FAIL: JSR $DCB8 trap equivalence contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    const fs::path mliRoot = fs::temp_directory_path() / "prodos8emu-phase2-mli-trap";
+    fs::remove_all(mliRoot);
+    fs::create_directories(mliRoot);
+
+    auto           mem   = makeMem();
+    const uint16_t param = 0x0340;
+    prodos8emu::write_u8(mem->banks(), param, 0x00);
+
+    const uint16_t start = 0x23F0;
+    writeProgram(*mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xFF,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::MLIContext ctx(mliRoot);
+    prodos8emu::CPU65C02   cpu(*mem);
+    cpu.attachMLI(ctx);
+    cpu.reset();
+    cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x08);
+
+    uint32_t trapCycles = cpu.step();
+    uint32_t nopCycles  = cpu.step();
+
+    std::stringstream dbg;
+    cpu.dumpDebugInfo(dbg);
+    std::string dbgText = dbg.str();
+
+    fs::remove_all(mliRoot);
+
+    if (trapCycles != 6 || nopCycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 7) ||
+        cpu.regs().sp != 0xFF || (cpu.regs().p & 0x08) != 0 ||
+        dbgText.find("$BF00->$23F6") == std::string::npos) {
+      std::cerr << "FAIL: JSR $BF00 trap equivalence contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: control_flow_refactor_equivalence_contracts\n";
+  }
+}
+
 __attribute__((noinline)) static void run_load_store_opcode_completeness_matrix_preserved_test(
     int& failures) {
   std::cout << "Test 51: load_store_opcode_completeness_matrix_preserved\n";
@@ -6802,6 +7035,7 @@ int main() {
   run_store_indexed_page_cross_cycle_contracts_test(failures);
   run_fallback_router_family_membership_contracts_test(failures);
   run_execute_decode_precedence_nonregression_test(failures);
+  run_control_flow_refactor_equivalence_contracts_test(failures);
 
   fs::remove_all(tempDir);
 

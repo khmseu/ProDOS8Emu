@@ -136,7 +136,9 @@ namespace prodos8emu {
     void branch(bool cond);
 
     // Record explicit PC change in ring buffer
-    void recordPCChange(uint16_t fromPC, uint16_t toPC);
+    void     recordPCChange(uint16_t fromPC, uint16_t toPC);
+    uint16_t control_flow_instruction_pc(uint8_t consumedOperandBytes) const;
+    void     apply_control_flow_pc_change(uint16_t fromPC, uint16_t toPC);
 
     // JSR trap
     uint32_t handle_mli_jsr_trap();
