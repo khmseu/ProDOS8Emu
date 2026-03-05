@@ -16,6 +16,87 @@ namespace prodos8emu {
     constexpr uint16_t VEC_IRQ         = 0xFFFE;
     constexpr uint16_t COUT_VECTOR_PTR = 0x0036;
 
+    enum class NopVariantMode : uint8_t {
+      Implied,
+      ImmediateDiscard,
+      ZpRead,
+      ZpXRead,
+      AbsRead,
+    };
+
+    struct NopVariantMetadata {
+      uint8_t        opcode;
+      NopVariantMode mode;
+      uint8_t        cycles;
+    };
+
+    static constexpr NopVariantMetadata kNopVariantTable[] = {
+        // 1-byte, 1-cycle NOPs (no operand)
+        {0x03, NopVariantMode::Implied, 1},
+        {0x0B, NopVariantMode::Implied, 1},
+        {0x13, NopVariantMode::Implied, 1},
+        {0x1B, NopVariantMode::Implied, 1},
+        {0x23, NopVariantMode::Implied, 1},
+        {0x2B, NopVariantMode::Implied, 1},
+        {0x33, NopVariantMode::Implied, 1},
+        {0x3B, NopVariantMode::Implied, 1},
+        {0x43, NopVariantMode::Implied, 1},
+        {0x4B, NopVariantMode::Implied, 1},
+        {0x53, NopVariantMode::Implied, 1},
+        {0x5B, NopVariantMode::Implied, 1},
+        {0x63, NopVariantMode::Implied, 1},
+        {0x6B, NopVariantMode::Implied, 1},
+        {0x73, NopVariantMode::Implied, 1},
+        {0x7B, NopVariantMode::Implied, 1},
+        {0x83, NopVariantMode::Implied, 1},
+        {0x8B, NopVariantMode::Implied, 1},
+        {0x93, NopVariantMode::Implied, 1},
+        {0x9B, NopVariantMode::Implied, 1},
+        {0xA3, NopVariantMode::Implied, 1},
+        {0xAB, NopVariantMode::Implied, 1},
+        {0xB3, NopVariantMode::Implied, 1},
+        {0xBB, NopVariantMode::Implied, 1},
+        {0xC3, NopVariantMode::Implied, 1},
+        {0xD3, NopVariantMode::Implied, 1},
+        {0xE3, NopVariantMode::Implied, 1},
+        {0xEB, NopVariantMode::Implied, 1},
+        {0xF3, NopVariantMode::Implied, 1},
+        {0xFB, NopVariantMode::Implied, 1},
+
+        // 2-byte, 2-cycle NOP immediate
+        {0x02, NopVariantMode::ImmediateDiscard, 2},
+        {0x22, NopVariantMode::ImmediateDiscard, 2},
+        {0x42, NopVariantMode::ImmediateDiscard, 2},
+        {0x62, NopVariantMode::ImmediateDiscard, 2},
+        {0x82, NopVariantMode::ImmediateDiscard, 2},
+        {0xC2, NopVariantMode::ImmediateDiscard, 2},
+        {0xE2, NopVariantMode::ImmediateDiscard, 2},
+
+        // 2-byte NOP with zp read
+        {0x44, NopVariantMode::ZpRead, 3},
+
+        // 2-byte NOP with zp,X read
+        {0x54, NopVariantMode::ZpXRead, 4},
+        {0xD4, NopVariantMode::ZpXRead, 4},
+        {0xF4, NopVariantMode::ZpXRead, 4},
+
+        // 3-byte NOP with absolute read
+        {0xDC, NopVariantMode::AbsRead, 4},
+        {0xFC, NopVariantMode::AbsRead, 4},
+
+        // 3-byte NOP with unusual read behavior (modeled as absolute read + 8 cycles)
+        {0x5C, NopVariantMode::AbsRead, 8},
+    };
+
+    const NopVariantMetadata* find_nop_variant_metadata(uint8_t opcode) {
+      for (const NopVariantMetadata& metadata : kNopVariantTable) {
+        if (metadata.opcode == opcode) {
+          return &metadata;
+        }
+      }
+      return nullptr;
+    }
+
     inline uint16_t make_u16(uint8_t lo, uint8_t hi) {
       return static_cast<uint16_t>(static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8));
     }
@@ -1626,93 +1707,36 @@ namespace prodos8emu {
   }
 
   bool CPU65C02::execute_nop_variant_opcode(uint8_t op, uint32_t& cycles) {
-    switch (op) {
-      // Unused opcodes on WDC 65C02: documented as NOP variants.
-      // See: 6502.org 65C02 opcodes, section "Unused opcodes (undocumented NOPs)".
-      // 1-byte, 1-cycle NOPs (no operand)
-      case 0x03:
-      case 0x0B:
-      case 0x13:
-      case 0x1B:
-      case 0x23:
-      case 0x2B:
-      case 0x33:
-      case 0x3B:
-      case 0x43:
-      case 0x4B:
-      case 0x53:
-      case 0x5B:
-      case 0x63:
-      case 0x6B:
-      case 0x73:
-      case 0x7B:
-      case 0x83:
-      case 0x8B:
-      case 0x93:
-      case 0x9B:
-      case 0xA3:
-      case 0xAB:
-      case 0xB3:
-      case 0xBB:
-      case 0xC3:
-      case 0xD3:
-      case 0xE3:
-      case 0xEB:
-      case 0xF3:
-      case 0xFB:
-        cycles = 1;
-        return true;
+    const NopVariantMetadata* metadata = find_nop_variant_metadata(op);
+    if (metadata == nullptr) {
+      return false;
+    }
 
-      // 2-byte, 2-cycle NOP immediate
-      case 0x02:
-      case 0x22:
-      case 0x42:
-      case 0x62:
-      case 0x82:
-      case 0xC2:
-      case 0xE2:
+    switch (metadata->mode) {
+      case NopVariantMode::Implied:
+        break;
+      case NopVariantMode::ImmediateDiscard:
         (void)fetch8();
-        cycles = 2;
-        return true;
-
-      // 2-byte NOP with zp read
-      case 0x44: {
+        break;
+      case NopVariantMode::ZpRead: {
         uint8_t zp = fetch8();
         (void)read8(zp);
-        cycles = 3;
-        return true;
+        break;
       }
-
-      // 2-byte NOP with zp,X read
-      case 0x54:
-      case 0xD4:
-      case 0xF4: {
+      case NopVariantMode::ZpXRead: {
         uint8_t zp = fetch8();
         (void)read8(static_cast<uint8_t>(zp + m_r.x));
-        cycles = 4;
-        return true;
+        break;
       }
-
-      // 3-byte NOP with absolute read
-      case 0xDC:
-      case 0xFC: {
+      case NopVariantMode::AbsRead: {
         uint16_t a = fetch16();
         (void)read8(a);
-        cycles = 4;
-        return true;
+        break;
       }
-
-      // 3-byte NOP with unusual read behavior (treat as absolute read for now)
-      case 0x5C: {
-        uint16_t a = fetch16();
-        (void)read8(a);
-        cycles = 8;
-        return true;
-      }
-
-      default:
-        return false;
     }
+
+    cycles = metadata->cycles;
+    return true;
   }
 
   bool CPU65C02::execute_misc_tail_opcode(uint8_t op, uint32_t& cycles) {

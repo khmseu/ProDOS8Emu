@@ -35,14 +35,9 @@ __attribute__((noinline)) static void run_branch_opcode_matrix_preserved_test(in
   };
 
   static const BranchCase cases[] = {
-      {"BPL", 0x10, 0x80, false},
-      {"BMI", 0x30, 0x80, true},
-      {"BVC", 0x50, 0x40, false},
-      {"BVS", 0x70, 0x40, true},
-      {"BCC", 0x90, 0x01, false},
-      {"BCS", 0xB0, 0x01, true},
-      {"BNE", 0xD0, 0x02, false},
-      {"BEQ", 0xF0, 0x02, true},
+      {"BPL", 0x10, 0x80, false}, {"BMI", 0x30, 0x80, true},  {"BVC", 0x50, 0x40, false},
+      {"BVS", 0x70, 0x40, true},  {"BCC", 0x90, 0x01, false}, {"BCS", 0xB0, 0x01, true},
+      {"BNE", 0xD0, 0x02, false}, {"BEQ", 0xF0, 0x02, true},
   };
 
   for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])) && !testFailed; ++i) {
@@ -120,7 +115,8 @@ __attribute__((noinline)) static void run_branch_opcode_matrix_preserved_test(in
   }
 }
 
-__attribute__((noinline)) static void run_cout_escape_mapping_contracts_preserved_test(int& failures) {
+__attribute__((noinline)) static void run_cout_escape_mapping_contracts_preserved_test(
+    int& failures) {
   std::cout << "Test 44: cout_escape_mapping_contracts_preserved\n";
 
   bool testFailed = false;
@@ -264,19 +260,12 @@ __attribute__((noinline)) static void run_nop_variant_opcode_matrix_preserved_te
   bool testFailed = false;
 
   static const uint8_t oneByteNops[] = {
-      0x03, 0x0B, 0x13, 0x1B, 0x23, 0x2B, 0x33, 0x3B, 0x43, 0x4B,
-      0x53, 0x5B, 0x63, 0x6B, 0x73, 0x7B, 0x83, 0x8B, 0x93, 0x9B,
-      0xA3, 0xAB, 0xB3, 0xBB, 0xC3, 0xD3, 0xE3, 0xEB, 0xF3, 0xFB,
+      0x03, 0x0B, 0x13, 0x1B, 0x23, 0x2B, 0x33, 0x3B, 0x43, 0x4B, 0x53, 0x5B, 0x63, 0x6B, 0x73,
+      0x7B, 0x83, 0x8B, 0x93, 0x9B, 0xA3, 0xAB, 0xB3, 0xBB, 0xC3, 0xD3, 0xE3, 0xEB, 0xF3, 0xFB,
   };
 
   static const uint8_t immediateNops[] = {
-      0x02,
-      0x22,
-      0x42,
-      0x62,
-      0x82,
-      0xC2,
-      0xE2,
+      0x02, 0x22, 0x42, 0x62, 0x82, 0xC2, 0xE2,
   };
 
   struct NopCase {
@@ -325,8 +314,8 @@ __attribute__((noinline)) static void run_nop_variant_opcode_matrix_preserved_te
       return;
     }
 
-    if (c.observedAddress != 0 && prodos8emu::read_u8(mem->constBanks(), c.observedAddress) !=
-                                    c.observedValue) {
+    if (c.observedAddress != 0 &&
+        prodos8emu::read_u8(mem->constBanks(), c.observedAddress) != c.observedValue) {
       std::cerr << "FAIL: NOP matrix memory-stability mismatch for " << c.name << "\n";
       failures++;
       testFailed = true;
@@ -439,8 +428,8 @@ __attribute__((noinline)) static void run_fallback_router_precedence_contracts_t
     cpu.regs().p = 0x61;
 
     uint32_t cycles = cpu.step();
-    if (!testFailed &&
-        (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5) || cpu.regs().p != 0x61)) {
+    if (!testFailed && (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 5) ||
+                        cpu.regs().p != 0x61)) {
       std::cerr << "FAIL: router precedence mismatch for BBR special decode path\n";
       failures++;
       testFailed = true;
@@ -622,12 +611,11 @@ __attribute__((noinline)) static void run_execute_fallback_router_dispatch_prese
     cpu.reset();
 
     (void)cpu.step();
-    cpu.regs().p = static_cast<uint8_t>((cpu.regs().p & static_cast<uint8_t>(~0xC3)) | 0x40);
+    cpu.regs().p    = static_cast<uint8_t>((cpu.regs().p & static_cast<uint8_t>(~0xC3)) | 0x40);
     uint32_t cycles = cpu.step();
-    if (!testFailed &&
-        (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 4) ||
-         (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x80) != 0 ||
-         (cpu.regs().p & 0x40) == 0)) {
+    if (!testFailed && (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 4) ||
+                        (cpu.regs().p & 0x01) == 0 || (cpu.regs().p & 0x02) == 0 ||
+                        (cpu.regs().p & 0x80) != 0 || (cpu.regs().p & 0x40) == 0)) {
       std::cerr << "FAIL: execute fallback router mismatch for compare-XY route\n";
       failures++;
       testFailed = true;
@@ -654,10 +642,9 @@ __attribute__((noinline)) static void run_execute_fallback_router_dispatch_prese
     cpu.regs().p = 0x20;
 
     uint32_t cycles = cpu.step();
-    if (!testFailed &&
-        (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
-         prodos8emu::read_u8(mem->constBanks(), 0x0014) != 0x80 || (cpu.regs().p & 0x80) == 0 ||
-         (cpu.regs().p & 0x02) != 0)) {
+    if (!testFailed && (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 2) ||
+                        prodos8emu::read_u8(mem->constBanks(), 0x0014) != 0x80 ||
+                        (cpu.regs().p & 0x80) == 0 || (cpu.regs().p & 0x02) != 0)) {
       std::cerr << "FAIL: execute fallback router mismatch for RMW family route\n";
       failures++;
       testFailed = true;
@@ -696,6 +683,154 @@ __attribute__((noinline)) static void run_execute_fallback_router_dispatch_prese
 
   if (!testFailed) {
     std::cout << "PASS: execute_fallback_router_dispatch_preserved\n";
+  }
+}
+
+__attribute__((noinline)) static void run_nop_variant_table_dispatch_equivalence_test(
+    int& failures) {
+  std::cout << "Test 49: nop_variant_table_dispatch_equivalence\n";
+
+  bool testFailed = false;
+
+  struct NopRunResult {
+    uint32_t cycles;
+    uint16_t pc;
+    uint8_t  a;
+    uint8_t  x;
+    uint8_t  y;
+    uint8_t  sp;
+    uint8_t  p;
+    uint8_t  probeValue;
+  };
+
+  auto runVariant = [&](uint8_t opcode, uint8_t operandLo, uint8_t operandHi, uint8_t initialX,
+                        uint16_t start, uint16_t probeAddress, uint8_t probeValue) -> NopRunResult {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    if (probeAddress != 0) {
+      prodos8emu::write_u8(mem->banks(), probeAddress, probeValue);
+    }
+
+    prodos8emu::write_u8(mem->banks(), start, opcode);
+    prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 1), operandLo);
+    prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 2), operandHi);
+    prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(start + 3), 0xEA);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a  = 0x31;
+    cpu.regs().x  = initialX;
+    cpu.regs().y  = 0x53;
+    cpu.regs().sp = 0xD1;
+    cpu.regs().p  = 0x65;
+
+    NopRunResult result{};
+    result.cycles = cpu.step();
+    result.pc     = cpu.regs().pc;
+    result.a      = cpu.regs().a;
+    result.x      = cpu.regs().x;
+    result.y      = cpu.regs().y;
+    result.sp     = cpu.regs().sp;
+    result.p      = cpu.regs().p;
+    result.probeValue =
+        (probeAddress == 0) ? 0 : prodos8emu::read_u8(mem->constBanks(), probeAddress);
+    return result;
+  };
+
+  struct VariantClass {
+    const char*    name;
+    const uint8_t* opcodes;
+    size_t         count;
+    uint8_t        operandLo;
+    uint8_t        operandHi;
+    uint8_t        initialX;
+    uint32_t       expectedCycles;
+    uint16_t       expectedPcAdvance;
+    uint16_t       probeAddress;
+    uint8_t        probeValue;
+  };
+
+  static const uint8_t oneByteNops[] = {
+      0x03, 0x0B, 0x13, 0x1B, 0x23, 0x2B, 0x33, 0x3B, 0x43, 0x4B, 0x53, 0x5B, 0x63, 0x6B, 0x73,
+      0x7B, 0x83, 0x8B, 0x93, 0x9B, 0xA3, 0xAB, 0xB3, 0xBB, 0xC3, 0xD3, 0xE3, 0xEB, 0xF3, 0xFB,
+  };
+  static const uint8_t immediateNops[] = {
+      0x02, 0x22, 0x42, 0x62, 0x82, 0xC2, 0xE2,
+  };
+  static const uint8_t zpReadNops[] = {
+      0x44,
+  };
+  static const uint8_t zpxReadNops[] = {
+      0x54,
+      0xD4,
+      0xF4,
+  };
+  static const uint8_t absReadNops[] = {
+      0xDC,
+      0xFC,
+  };
+  static const uint8_t absLongReadNops[] = {
+      0x5C,
+  };
+
+  static const VariantClass classes[] = {
+      {"one_byte", oneByteNops, sizeof(oneByteNops) / sizeof(oneByteNops[0]), 0x99, 0x77, 0x09, 1,
+       1, 0x0000, 0x00},
+      {"immediate", immediateNops, sizeof(immediateNops) / sizeof(immediateNops[0]), 0x99, 0x77,
+       0x09, 2, 2, 0x0000, 0x00},
+      {"zp_read", zpReadNops, sizeof(zpReadNops) / sizeof(zpReadNops[0]), 0x44, 0x77, 0x09, 3, 2,
+       0x0044, 0xAB},
+      {"zpx_read", zpxReadNops, sizeof(zpxReadNops) / sizeof(zpxReadNops[0]), 0x45, 0x77, 0x01, 4,
+       2, 0x0046, 0xBC},
+      {"abs_read", absReadNops, sizeof(absReadNops) / sizeof(absReadNops[0]), 0x45, 0x23, 0x09, 4,
+       3, 0x2345, 0xCD},
+      {"abs_long_read", absLongReadNops, sizeof(absLongReadNops) / sizeof(absLongReadNops[0]), 0x56,
+       0x34, 0x09, 8, 3, 0x3456, 0xDE},
+  };
+
+  uint16_t start = 0x1F80;
+  for (size_t classIndex = 0; classIndex < (sizeof(classes) / sizeof(classes[0])) && !testFailed;
+       ++classIndex) {
+    const VariantClass& c = classes[classIndex];
+
+    const NopRunResult reference = runVariant(c.opcodes[0], c.operandLo, c.operandHi, c.initialX,
+                                              start, c.probeAddress, c.probeValue);
+    if (reference.cycles != c.expectedCycles ||
+        reference.pc != static_cast<uint16_t>(start + c.expectedPcAdvance) || reference.a != 0x31 ||
+        reference.x != c.initialX || reference.y != 0x53 || reference.sp != 0xD1 ||
+        reference.p != 0x65 || (c.probeAddress != 0 && reference.probeValue != c.probeValue)) {
+      std::cerr << "FAIL: NOP class reference contract mismatch for " << c.name << "\n";
+      failures++;
+      testFailed = true;
+      break;
+    }
+
+    start = static_cast<uint16_t>(start + 0x20);
+
+    for (size_t i = 0; i < c.count && !testFailed; ++i) {
+      const uint8_t      opcode = c.opcodes[i];
+      const NopRunResult got    = runVariant(opcode, c.operandLo, c.operandHi, c.initialX, start,
+                                             c.probeAddress, c.probeValue);
+
+      if (got.cycles != reference.cycles ||
+          got.pc != static_cast<uint16_t>(start + c.expectedPcAdvance) || got.a != reference.a ||
+          got.x != reference.x || got.y != reference.y || got.sp != reference.sp ||
+          got.p != reference.p || got.probeValue != reference.probeValue) {
+        std::cerr << "FAIL: NOP table dispatch mismatch for class=" << c.name << " opcode=0x"
+                  << std::hex << static_cast<int>(opcode) << std::dec << "\n";
+        failures++;
+        testFailed = true;
+      }
+
+      start = static_cast<uint16_t>(start + 0x20);
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: nop_variant_table_dispatch_equivalence\n";
   }
 }
 
@@ -4924,8 +5059,8 @@ int main() {
       bool     crossN      = (cpu.regs().p & 0x80) != 0;
       bool     crossV      = (cpu.regs().p & 0x40) != 0;
 
-      if (noCrossCycles != 4 || noCrossZ || noCrossN || !noCrossV || crossCycles != 5 ||
-          crossZ || !crossN || crossV || cpu.regs().pc != static_cast<uint16_t>(start + 10)) {
+      if (noCrossCycles != 4 || noCrossZ || noCrossN || !noCrossV || crossCycles != 5 || crossZ ||
+          !crossN || crossV || cpu.regs().pc != static_cast<uint16_t>(start + 10)) {
         std::cerr << "FAIL: BIT abs,X page-cross cycle/flag/PC contract mismatch\n";
         failures++;
         testFailed = true;
@@ -4951,7 +5086,7 @@ int main() {
       cpu.reset();
 
       (void)cpu.step();
-      cpu.regs().p = static_cast<uint8_t>((cpu.regs().p | 0xC0) & static_cast<uint8_t>(~0x02));
+      cpu.regs().p    = static_cast<uint8_t>((cpu.regs().p | 0xC0) & static_cast<uint8_t>(~0x02));
       uint32_t cycles = cpu.step();
       if (cycles != 2 || (cpu.regs().p & 0x02) == 0 || (cpu.regs().p & 0x80) == 0 ||
           (cpu.regs().p & 0x40) == 0 || cpu.regs().pc != static_cast<uint16_t>(start + 4)) {
@@ -5214,8 +5349,8 @@ int main() {
     bool     deyN      = (cpu.regs().p & 0x80) != 0;
     uint8_t  deyY      = cpu.regs().y;
 
-    if (inxCycles != 2 || inxPc != static_cast<uint16_t>(start + 1) || inxX != 0x00 ||
-        !inxC || !inxV || !inxZ || inxN) {
+    if (inxCycles != 2 || inxPc != static_cast<uint16_t>(start + 1) || inxX != 0x00 || !inxC ||
+        !inxV || !inxZ || inxN) {
       std::cerr << "FAIL: INX contract mismatch for cycles/flags\n";
       failures++;
       testFailed = true;
@@ -5224,8 +5359,8 @@ int main() {
       std::cerr << "FAIL: DEX contract mismatch for cycles/flags\n";
       failures++;
       testFailed = true;
-    } else if (inyCycles != 2 || inyPc != static_cast<uint16_t>(start + 3) || inyY != 0x80 || !inyC ||
-               !inyV || inyZ || !inyN) {
+    } else if (inyCycles != 2 || inyPc != static_cast<uint16_t>(start + 3) || inyY != 0x80 ||
+               !inyC || !inyV || inyZ || !inyN) {
       std::cerr << "FAIL: INY contract mismatch for cycles/flags\n";
       failures++;
       testFailed = true;
@@ -5274,9 +5409,9 @@ int main() {
                      0x01,
                      0x20,
                  });
-            prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
 
-            prodos8emu::CPU65C02 cpu(*mem);
+    prodos8emu::CPU65C02 cpu(*mem);
     cpu.reset();
 
     (void)cpu.step();
@@ -5324,7 +5459,8 @@ int main() {
       failures++;
       testFailed = true;
     } else if (cpyAbsCycles != 4 || cpu.regs().x != 0x20 || cpu.regs().y != 0x40 || !cpyAbsC ||
-               !cpyAbsZ || cpyAbsN || !cpyAbsV || cpu.regs().pc != static_cast<uint16_t>(start + 14)) {
+               !cpyAbsZ || cpyAbsN || !cpyAbsV ||
+               cpu.regs().pc != static_cast<uint16_t>(start + 14)) {
       std::cerr << "FAIL: CPY abs contract mismatch for cycle/PC/flags/register stability\n";
       failures++;
       testFailed = true;
@@ -5363,7 +5499,8 @@ int main() {
       cpu.regs().p = 0xE1;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().p != 0xE1) {
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+          cpu.regs().p != 0xE1) {
         std::cerr << "FAIL: BBR not-taken cycle/PC/flags contract mismatch\n";
         failures++;
         testFailed = true;
@@ -5392,7 +5529,8 @@ int main() {
       cpu.regs().p = 0x61;
 
       uint32_t cycles = cpu.step();
-      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().p != 0x61) {
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) ||
+          cpu.regs().p != 0x61) {
         std::cerr << "FAIL: BBS not-taken cycle/PC/flags contract mismatch\n";
         failures++;
         testFailed = true;
@@ -5656,6 +5794,7 @@ int main() {
   run_nop_variant_opcode_matrix_preserved_test(failures);
   run_fallback_router_precedence_contracts_test(failures);
   run_execute_fallback_router_dispatch_preserved_test(failures);
+  run_nop_variant_table_dispatch_equivalence_test(failures);
 
   fs::remove_all(tempDir);
 
