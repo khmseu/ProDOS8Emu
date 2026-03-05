@@ -151,6 +151,12 @@ namespace prodos8emu {
     void     emit_cout_char(uint8_t ch);
     bool     execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_accumulator_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_load_store_load_immediate_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_load_store_load_read_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_load_store_load_page_cross_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_load_store_store_direct_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_load_store_store_indexed_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_load_store_store_zero_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_load_store_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_bit_family_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_nop_variant_opcode(uint8_t op, uint32_t& cycles);

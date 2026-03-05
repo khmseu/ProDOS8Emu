@@ -1487,14 +1487,30 @@ namespace prodos8emu {
     }
   }
 
-  bool CPU65C02::execute_load_store_opcode(uint8_t op, uint32_t& cycles) {
+  bool CPU65C02::execute_load_store_load_immediate_opcode(uint8_t op, uint32_t& cycles) {
     switch (op) {
-      // Loads
       case 0xA9:  // LDA #imm
         m_r.a = fetch8();
         setNZ(m_r.a);
         cycles = 2;
         return true;
+      case 0xA2:  // LDX #imm
+        m_r.x = fetch8();
+        setNZ(m_r.x);
+        cycles = 2;
+        return true;
+      case 0xA0:  // LDY #imm
+        m_r.y = fetch8();
+        setNZ(m_r.y);
+        cycles = 2;
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_load_store_load_read_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0xA5:
         m_r.a = read8(addr_zp());
         setNZ(m_r.a);
@@ -1510,6 +1526,56 @@ namespace prodos8emu {
         setNZ(m_r.a);
         cycles = 4;
         return true;
+      case 0xA1:
+        m_r.a = read8(addr_indx());
+        setNZ(m_r.a);
+        cycles = 6;
+        return true;
+      case 0xB2:  // LDA (zp)
+        m_r.a = read8(addr_zpind());
+        setNZ(m_r.a);
+        cycles = 5;
+        return true;
+
+      case 0xA6:
+        m_r.x = read8(addr_zp());
+        setNZ(m_r.x);
+        cycles = 3;
+        return true;
+      case 0xB6:
+        m_r.x = read8(addr_zpy());
+        setNZ(m_r.x);
+        cycles = 4;
+        return true;
+      case 0xAE:
+        m_r.x = read8(addr_abs());
+        setNZ(m_r.x);
+        cycles = 4;
+        return true;
+
+      case 0xA4:
+        m_r.y = read8(addr_zp());
+        setNZ(m_r.y);
+        cycles = 3;
+        return true;
+      case 0xB4:
+        m_r.y = read8(addr_zpx());
+        setNZ(m_r.y);
+        cycles = 4;
+        return true;
+      case 0xAC:
+        m_r.y = read8(addr_abs());
+        setNZ(m_r.y);
+        cycles = 4;
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_load_store_load_page_cross_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0xBD: {
         bool     pc = false;
         uint16_t a  = addr_absx(pc);
@@ -1526,11 +1592,6 @@ namespace prodos8emu {
         cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
         return true;
       }
-      case 0xA1:
-        m_r.a = read8(addr_indx());
-        setNZ(m_r.a);
-        cycles = 6;
-        return true;
       case 0xB1: {
         bool     pc = false;
         uint16_t a  = addr_indy(pc);
@@ -1539,32 +1600,6 @@ namespace prodos8emu {
         cycles = static_cast<uint32_t>(5 + (pc ? 1 : 0));
         return true;
       }
-      case 0xB2:  // LDA (zp)
-        m_r.a = read8(addr_zpind());
-        setNZ(m_r.a);
-        cycles = 5;
-        return true;
-
-      case 0xA2:  // LDX #imm
-        m_r.x = fetch8();
-        setNZ(m_r.x);
-        cycles = 2;
-        return true;
-      case 0xA6:
-        m_r.x = read8(addr_zp());
-        setNZ(m_r.x);
-        cycles = 3;
-        return true;
-      case 0xB6:
-        m_r.x = read8(addr_zpy());
-        setNZ(m_r.x);
-        cycles = 4;
-        return true;
-      case 0xAE:
-        m_r.x = read8(addr_abs());
-        setNZ(m_r.x);
-        cycles = 4;
-        return true;
       case 0xBE: {
         bool     pc = false;
         uint16_t a  = addr_absy(pc);
@@ -1573,27 +1608,6 @@ namespace prodos8emu {
         cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
         return true;
       }
-
-      case 0xA0:  // LDY #imm
-        m_r.y = fetch8();
-        setNZ(m_r.y);
-        cycles = 2;
-        return true;
-      case 0xA4:
-        m_r.y = read8(addr_zp());
-        setNZ(m_r.y);
-        cycles = 3;
-        return true;
-      case 0xB4:
-        m_r.y = read8(addr_zpx());
-        setNZ(m_r.y);
-        cycles = 4;
-        return true;
-      case 0xAC:
-        m_r.y = read8(addr_abs());
-        setNZ(m_r.y);
-        cycles = 4;
-        return true;
       case 0xBC: {
         bool     pc = false;
         uint16_t a  = addr_absx(pc);
@@ -1603,7 +1617,13 @@ namespace prodos8emu {
         return true;
       }
 
-      // Stores
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_load_store_store_direct_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0x85:
         write8(addr_zp(), m_r.a);
         cycles = 3;
@@ -1616,28 +1636,10 @@ namespace prodos8emu {
         write8(addr_abs(), m_r.a);
         cycles = 4;
         return true;
-      case 0x9D: {
-        bool pc = false;
-        write8(addr_absx(pc), m_r.a);
-        cycles = 5;
-        return true;
-      }
-      case 0x99: {
-        bool pc = false;
-        write8(addr_absy(pc), m_r.a);
-        cycles = 5;
-        return true;
-      }
       case 0x81:
         write8(addr_indx(), m_r.a);
         cycles = 6;
         return true;
-      case 0x91: {
-        bool pc = false;
-        write8(addr_indy(pc), m_r.a);
-        cycles = 6;
-        return true;
-      }
       case 0x92:  // STA (zp)
         write8(addr_zpind(), m_r.a);
         cycles = 5;
@@ -1669,7 +1671,39 @@ namespace prodos8emu {
         cycles = 4;
         return true;
 
-      // STZ
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_load_store_store_indexed_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      case 0x9D: {
+        bool pc = false;
+        write8(addr_absx(pc), m_r.a);
+        cycles = 5;
+        return true;
+      }
+      case 0x99: {
+        bool pc = false;
+        write8(addr_absy(pc), m_r.a);
+        cycles = 5;
+        return true;
+      }
+      case 0x91: {
+        bool pc = false;
+        write8(addr_indy(pc), m_r.a);
+        cycles = 6;
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_load_store_store_zero_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0x64:
         write8(addr_zp(), 0);
         cycles = 3;
@@ -1692,6 +1726,28 @@ namespace prodos8emu {
       default:
         return false;
     }
+  }
+
+  bool CPU65C02::execute_load_store_opcode(uint8_t op, uint32_t& cycles) {
+    if (execute_load_store_load_immediate_opcode(op, cycles)) {
+      return true;
+    }
+    if (execute_load_store_load_read_opcode(op, cycles)) {
+      return true;
+    }
+    if (execute_load_store_load_page_cross_opcode(op, cycles)) {
+      return true;
+    }
+    if (execute_load_store_store_direct_opcode(op, cycles)) {
+      return true;
+    }
+    if (execute_load_store_store_indexed_opcode(op, cycles)) {
+      return true;
+    }
+    if (execute_load_store_store_zero_opcode(op, cycles)) {
+      return true;
+    }
+    return false;
   }
 
   bool CPU65C02::execute_bit_family_opcode(uint8_t op, uint32_t& cycles) {

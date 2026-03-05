@@ -2081,6 +2081,337 @@ __attribute__((noinline)) static void run_fallback_classifier_equivalence_matrix
   }
 }
 
+__attribute__((noinline)) static void run_load_store_helper_dispatch_equivalence_test(
+    int& failures) {
+  std::cout << "Test 58: load_store_helper_dispatch_equivalence\n";
+
+  bool testFailed = false;
+
+  enum class LoadStoreRoute : uint8_t {
+    None,
+    LoadImmediate,
+    LoadDirectRead,
+    LoadIndexedPageCrossRead,
+    StoreDirectWrite,
+    StoreIndexedWriteNoCrossPenalty,
+    StoreZeroDirectWrite,
+    StoreZeroIndexedWriteNoCrossPenalty,
+  };
+
+  const auto classifyLegacy = [](uint8_t op) -> LoadStoreRoute {
+    switch (op) {
+      case 0xA9:
+      case 0xA2:
+      case 0xA0:
+        return LoadStoreRoute::LoadImmediate;
+
+      case 0xA5:
+      case 0xB5:
+      case 0xAD:
+      case 0xA1:
+      case 0xB2:
+      case 0xA6:
+      case 0xB6:
+      case 0xAE:
+      case 0xA4:
+      case 0xB4:
+      case 0xAC:
+        return LoadStoreRoute::LoadDirectRead;
+
+      case 0xBD:
+      case 0xB9:
+      case 0xB1:
+      case 0xBE:
+      case 0xBC:
+        return LoadStoreRoute::LoadIndexedPageCrossRead;
+
+      case 0x85:
+      case 0x95:
+      case 0x8D:
+      case 0x81:
+      case 0x92:
+      case 0x86:
+      case 0x96:
+      case 0x8E:
+      case 0x84:
+      case 0x94:
+      case 0x8C:
+        return LoadStoreRoute::StoreDirectWrite;
+
+      case 0x9D:
+      case 0x99:
+      case 0x91:
+        return LoadStoreRoute::StoreIndexedWriteNoCrossPenalty;
+
+      case 0x64:
+      case 0x74:
+      case 0x9C:
+        return LoadStoreRoute::StoreZeroDirectWrite;
+
+      case 0x9E:
+        return LoadStoreRoute::StoreZeroIndexedWriteNoCrossPenalty;
+
+      default:
+        return LoadStoreRoute::None;
+    }
+  };
+
+  const auto classifyHelperDispatch = [](uint8_t op) -> LoadStoreRoute {
+    switch (op) {
+      case 0xA9:
+      case 0xA2:
+      case 0xA0:
+        return LoadStoreRoute::LoadImmediate;
+
+      case 0xBD:
+      case 0xB9:
+      case 0xB1:
+      case 0xBE:
+      case 0xBC:
+        return LoadStoreRoute::LoadIndexedPageCrossRead;
+
+      case 0xA5:
+      case 0xB5:
+      case 0xAD:
+      case 0xA1:
+      case 0xB2:
+      case 0xA6:
+      case 0xB6:
+      case 0xAE:
+      case 0xA4:
+      case 0xB4:
+      case 0xAC:
+        return LoadStoreRoute::LoadDirectRead;
+
+      case 0x9D:
+      case 0x99:
+      case 0x91:
+        return LoadStoreRoute::StoreIndexedWriteNoCrossPenalty;
+
+      case 0x85:
+      case 0x95:
+      case 0x8D:
+      case 0x81:
+      case 0x92:
+      case 0x86:
+      case 0x96:
+      case 0x8E:
+      case 0x84:
+      case 0x94:
+      case 0x8C:
+        return LoadStoreRoute::StoreDirectWrite;
+
+      case 0x9E:
+        return LoadStoreRoute::StoreZeroIndexedWriteNoCrossPenalty;
+
+      case 0x64:
+      case 0x74:
+      case 0x9C:
+        return LoadStoreRoute::StoreZeroDirectWrite;
+
+      default:
+        return LoadStoreRoute::None;
+    }
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t        op       = static_cast<uint8_t>(opValue);
+    const LoadStoreRoute legacy   = classifyLegacy(op);
+    const LoadStoreRoute expected = classifyHelperDispatch(op);
+    if (legacy != expected) {
+      std::cerr << "FAIL: load/store helper dispatch classification mismatch for opcode=0x"
+                << std::hex << static_cast<int>(op) << std::dec << " (legacy="
+                << static_cast<int>(legacy) << ", helper=" << static_cast<int>(expected)
+                << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  if (!testFailed) {
+    auto           mem   = makeMem();
+    const uint16_t start = 0x2520;
+    writeProgram(*mem, start,
+                 {
+                     0xA9,
+                     0x00,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0xC1;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().a != 0x00 || (cpu.regs().p & 0x02) == 0 ||
+        (cpu.regs().p & 0x80) != 0 || (cpu.regs().p & static_cast<uint8_t>(~0x82)) != 0x61 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: load helper equivalence mismatch for LDA immediate\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x2600, 0x80);
+
+    const uint16_t start = 0x2540;
+    writeProgram(*mem, start,
+                 {
+                     0xBD,
+                     0xFF,
+                     0x25,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x01;
+    cpu.regs().p = 0x33;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || cpu.regs().a != 0x80 || (cpu.regs().p & 0x80) == 0 ||
+        (cpu.regs().p & 0x02) != 0 || (cpu.regs().p & static_cast<uint8_t>(~0x82)) != 0x31 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3)) {
+      std::cerr << "FAIL: load helper equivalence mismatch for LDA abs,X page-cross"
+                << " (cycles=" << cycles << ", a=0x" << std::hex
+                << static_cast<uint32_t>(cpu.regs().a) << ", p=0x"
+                << static_cast<uint32_t>(cpu.regs().p) << ", masked=0x"
+                << static_cast<uint32_t>(cpu.regs().p & static_cast<uint8_t>(~0x82))
+                << ", pc=0x" << static_cast<uint32_t>(cpu.regs().pc) << std::dec << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x2800, 0x00);
+
+    const uint16_t start = 0x2560;
+    writeProgram(*mem, start,
+                 {
+                     0xBE,
+                     0xFF,
+                     0x27,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().y = 0x01;
+    cpu.regs().p = 0x90;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || cpu.regs().x != 0x00 || (cpu.regs().p & 0x02) == 0 ||
+        (cpu.regs().p & 0x80) != 0 || (cpu.regs().p & static_cast<uint8_t>(~0x82)) != 0x30 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 3)) {
+      std::cerr << "FAIL: load helper equivalence mismatch for LDX abs,Y page-cross\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x2580;
+    writeProgram(*mem, start,
+                 {
+                     0x85,
+                     0x40,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x5A;
+    cpu.regs().x = 0x11;
+    cpu.regs().y = 0x22;
+    cpu.regs().p = 0xE5;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 3 || prodos8emu::read_u8(mem->constBanks(), 0x0040) != 0x5A ||
+        cpu.regs().a != 0x5A || cpu.regs().x != 0x11 || cpu.regs().y != 0x22 ||
+        cpu.regs().p != 0xE5 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: store helper equivalence mismatch for STA zp\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u16_le(mem->banks(), 0x0020, 0x34FF);
+
+    const uint16_t start = 0x25A0;
+    writeProgram(*mem, start,
+                 {
+                     0x91,
+                     0x20,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x66;
+    cpu.regs().x = 0x44;
+    cpu.regs().y = 0x01;
+    cpu.regs().p = 0x25;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 6 || prodos8emu::read_u8(mem->constBanks(), 0x3500) != 0x66 ||
+        cpu.regs().a != 0x66 || cpu.regs().x != 0x44 || cpu.regs().y != 0x01 ||
+        cpu.regs().p != 0x25 || cpu.regs().pc != static_cast<uint16_t>(start + 2)) {
+      std::cerr << "FAIL: store helper equivalence mismatch for STA (zp),Y page-cross\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+    prodos8emu::write_u8(mem->banks(), 0x3700, 0x7B);
+
+    const uint16_t start = 0x25C0;
+    writeProgram(*mem, start,
+                 {
+                     0x9E,
+                     0xFF,
+                     0x36,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x99;
+    cpu.regs().x = 0x01;
+    cpu.regs().y = 0x77;
+    cpu.regs().p = 0x45;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 5 || prodos8emu::read_u8(mem->constBanks(), 0x3700) != 0x00 ||
+        cpu.regs().a != 0x99 || cpu.regs().x != 0x01 || cpu.regs().y != 0x77 ||
+        cpu.regs().p != 0x45 || cpu.regs().pc != static_cast<uint16_t>(start + 3)) {
+      std::cerr << "FAIL: store helper equivalence mismatch for STZ abs,X page-cross\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: load_store_helper_dispatch_equivalence\n";
+  }
+}
+
 __attribute__((noinline)) static void run_execute_decode_precedence_nonregression_test(
     int& failures) {
   std::cout << "Test 54: execute_decode_precedence_nonregression\n";
@@ -7207,6 +7538,7 @@ int main() {
   run_store_indexed_page_cross_cycle_contracts_test(failures);
   run_fallback_router_family_membership_contracts_test(failures);
   run_fallback_classifier_equivalence_matrix_test(failures);
+  run_load_store_helper_dispatch_equivalence_test(failures);
   run_execute_decode_precedence_nonregression_test(failures);
   run_control_flow_refactor_equivalence_contracts_test(failures);
 
