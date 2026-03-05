@@ -139,6 +139,7 @@ namespace prodos8emu {
     void recordPCChange(uint16_t fromPC, uint16_t toPC);
 
     // JSR trap
+    uint32_t handle_mli_jsr_trap();
     uint32_t jsr_abs(uint16_t target);
 
     // Execute opcode

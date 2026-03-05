@@ -988,6 +988,262 @@ int main() {
     }
   }
 
+  // Test 13: mli_trap_sets_a_c_z_and_clears_d_as_expected
+  {
+    std::cout << "Test 13: mli_trap_sets_a_c_z_and_clears_d_as_expected\n";
+
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t param = 0x03B0;
+    prodos8emu::write_u8(mem.banks(), param + 0, 2);
+    prodos8emu::write_u8(mem.banks(), param + 1, 0);
+    prodos8emu::write_u16_le(mem.banks(), param + 2, 0x2500);
+
+    const uint16_t start = 0x02C0;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0x40,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    cpu.reset();
+
+    cpu.regs().p = static_cast<uint8_t>(cpu.regs().p | 0x08);
+    cpu.step();
+
+    bool c = (cpu.regs().p & 0x01) != 0;
+    bool z = (cpu.regs().p & 0x02) != 0;
+    bool d = (cpu.regs().p & 0x08) != 0;
+    bool n = (cpu.regs().p & 0x80) != 0;
+
+    if (cpu.regs().a != 0) {
+      std::cerr << "FAIL: Expected A=0 after successful MLI trap\n";
+      failures++;
+    } else if (c) {
+      std::cerr << "FAIL: Expected Carry clear after successful MLI trap\n";
+      failures++;
+    } else if (!z) {
+      std::cerr << "FAIL: Expected Z set after successful MLI trap\n";
+      failures++;
+    } else if (d) {
+      std::cerr << "FAIL: Expected D clear on MLI trap return\n";
+      failures++;
+    } else if (n) {
+      std::cerr << "FAIL: Expected N clear when A=0 on MLI trap return\n";
+      failures++;
+    } else {
+      std::cout << "PASS: mli_trap_sets_a_c_z_and_clears_d_as_expected\n";
+    }
+  }
+
+  // Test 14: mli_error_sets_carry_success_clears_carry
+  {
+    std::cout << "Test 14: mli_error_sets_carry_success_clears_carry\n";
+
+    bool testFailed = false;
+
+    {
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t param = 0x03C0;
+      prodos8emu::write_u8(mem.banks(), param + 0, 2);
+      prodos8emu::write_u8(mem.banks(), param + 1, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 2, 0x2600);
+
+      const uint16_t start = 0x02D0;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0x40,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      if (c) {
+        std::cerr << "FAIL: Expected Carry clear for successful MLI call\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      fs::path volume = tempDir / "VOL5";
+      fs::create_directories(volume);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t    pathnameAddr = 0x04A0;
+      const std::string pathname     = "/VOL5/MISSING";
+      prodos8emu::write_u8(mem.banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+      for (size_t i = 0; i < pathname.length(); i++) {
+        prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                             static_cast<uint8_t>(pathname[i]));
+      }
+
+      const uint16_t param = 0x03D0;
+      prodos8emu::write_u8(mem.banks(), param + 0, 3);
+      prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+      prodos8emu::write_u16_le(mem.banks(), param + 3, 0x2700);
+
+      const uint16_t start = 0x02E0;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0xC8,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+      cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      if (cpu.regs().a == 0) {
+        std::cerr << "FAIL: Expected non-zero A for failing MLI call\n";
+        failures++;
+        testFailed = true;
+      } else if (!c) {
+        std::cerr << "FAIL: Expected Carry set for failing MLI call\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: mli_error_sets_carry_success_clears_carry\n";
+    }
+  }
+
+  // Test 15: quit_stops_cpu_non_quit_does_not_stop
+  {
+    std::cout << "Test 15: quit_stops_cpu_non_quit_does_not_stop\n";
+
+    bool testFailed = false;
+
+    {
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t param = 0x03E0;
+      prodos8emu::write_u8(mem.banks(), param + 0, 2);
+      prodos8emu::write_u8(mem.banks(), param + 1, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 2, 0x2800);
+
+      const uint16_t start = 0x02F0;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0x40,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+      cpu.step();
+
+      if (cpu.isStopped()) {
+        std::cerr << "FAIL: Expected non-QUIT MLI call to keep CPU running\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      prodos8emu::Apple2Memory mem;
+      prodos8emu::MLIContext   ctx(tempDir);
+
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t param = 0x03F0;
+      prodos8emu::write_u8(mem.banks(), param + 0, 4);
+      prodos8emu::write_u8(mem.banks(), param + 1, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 2, 0);
+      prodos8emu::write_u8(mem.banks(), param + 4, 0);
+      prodos8emu::write_u16_le(mem.banks(), param + 5, 0);
+
+      const uint16_t start = 0x0300;
+      writeProgram(mem, start,
+                   {
+                       0x20,
+                       0x00,
+                       0xBF,
+                       0x65,
+                       static_cast<uint8_t>(param & 0xFF),
+                       static_cast<uint8_t>((param >> 8) & 0xFF),
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.attachMLI(ctx);
+      cpu.reset();
+      cpu.step();
+
+      uint16_t pcAfterQuit = cpu.regs().pc;
+      cpu.step();
+
+      if (!cpu.isStopped()) {
+        std::cerr << "FAIL: Expected QUIT MLI call to stop CPU\n";
+        failures++;
+        testFailed = true;
+      } else if (cpu.regs().pc != pcAfterQuit) {
+        std::cerr << "FAIL: Expected stopped CPU to keep PC unchanged\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: quit_stops_cpu_non_quit_does_not_stop\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {

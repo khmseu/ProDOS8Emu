@@ -961,83 +961,87 @@ namespace prodos8emu {
     recordPCChange(from, to);
   }
 
+  uint32_t CPU65C02::handle_mli_jsr_trap() {
+    // ProDOS MLI calling convention:
+    //   JSR $BF00
+    //   .byte callNumber
+    //   .word paramBlockAddr
+    // On return, execution continues after these 3 bytes.
+    uint16_t callPC     = m_r.pc;  // PC at MLI call (points to call number)
+    uint8_t  callNumber = read8(m_r.pc);
+    uint16_t paramBlock = read16(static_cast<uint16_t>(m_r.pc + 1));
+    uint16_t returnPC   = static_cast<uint16_t>(m_r.pc + 3);
+    m_r.pc              = returnPC;
+    recordPCChange(0xBF00, returnPC);  // from=$BF00 (MLI entry point)
+
+    uint8_t err = mli_dispatch(*m_mli, m_mem.banks(), callNumber, paramBlock);
+
+    if (m_mliLog != nullptr || m_traceLog != nullptr) {
+      std::ostringstream mli_msg;
+      mli_msg << "@" << m_instructionCount << " PC=$";
+      write_hex(mli_msg, callPC, 4);
+      mli_msg << " MLI call=$";
+      write_hex(mli_msg, callNumber, 2);
+      mli_msg << " (" << mli_call_name(callNumber) << ") param=$";
+      write_hex(mli_msg, paramBlock, 4);
+
+      // Extract and log pathnames if applicable
+      std::string pathInfo =
+          extract_mli_pathnames(m_mem.constBanks(), m_mli, callNumber, paramBlock, err);
+      if (!pathInfo.empty()) {
+        mli_msg << pathInfo;
+      }
+
+      mli_msg << " result=$";
+      write_hex(mli_msg, err, 2);
+      if (err == 0) {
+        mli_msg << " OK\n";
+      } else {
+        const char* errName = error_name(err);
+        if (errName[0] != '\0') {
+          mli_msg << " ERROR (" << errName << ")\n";
+        } else {
+          mli_msg << " ERROR\n";
+        }
+      }
+
+      // Write to both logs
+      if (m_mliLog != nullptr) {
+        *m_mliLog << mli_msg.str();
+        // Dump stack and PC ring on UNSUPPORTED_STOR_TYPE error
+        if (err == ERR_UNSUPPORTED_STOR_TYPE) {
+          dump_stack(*m_mliLog, m_mem.constBanks(), m_r.sp);
+          dump_pc_ring(*m_mliLog, m_pcRingFrom, m_pcRingTo, m_pcRingCount, PC_RING_SIZE,
+                       m_pcRingIndex);
+        }
+        m_mliLog->flush();
+      }
+      if (m_traceLog != nullptr) {
+        *m_traceLog << mli_msg.str();
+      }
+    }
+
+    // ProDOS convention: Carry set on error, A holds error code.
+    m_r.a = err;
+    setFlag(FLAG_C, err != 0);
+    setNZ(m_r.a);
+
+    // ProDOS MLI returns with decimal mode cleared.
+    setFlag(FLAG_D, false);
+
+    // QUIT ($65): stop emulation after standard MLI handling/logging.
+    if (callNumber == 0x65 && err == ERR_NO_ERROR) {
+      m_stopped = true;
+      m_waiting = false;
+    }
+
+    return 6;
+  }
+
   uint32_t CPU65C02::jsr_abs(uint16_t target) {
     // Special trap: JSR $BF00 invokes ProDOS MLI dispatch rather than changing PC.
     if (target == 0xBF00 && m_mli != nullptr) {
-      // ProDOS MLI calling convention:
-      //   JSR $BF00
-      //   .byte callNumber
-      //   .word paramBlockAddr
-      // On return, execution continues after these 3 bytes.
-      uint16_t callPC     = m_r.pc;  // PC at MLI call (points to call number)
-      uint8_t  callNumber = read8(m_r.pc);
-      uint16_t paramBlock = read16(static_cast<uint16_t>(m_r.pc + 1));
-      uint16_t returnPC   = static_cast<uint16_t>(m_r.pc + 3);
-      m_r.pc              = returnPC;
-      recordPCChange(0xBF00, returnPC);  // from=$BF00 (MLI entry point)
-
-      uint8_t err = mli_dispatch(*m_mli, m_mem.banks(), callNumber, paramBlock);
-
-      if (m_mliLog != nullptr || m_traceLog != nullptr) {
-        std::ostringstream mli_msg;
-        mli_msg << "@" << m_instructionCount << " PC=$";
-        write_hex(mli_msg, callPC, 4);
-        mli_msg << " MLI call=$";
-        write_hex(mli_msg, callNumber, 2);
-        mli_msg << " (" << mli_call_name(callNumber) << ") param=$";
-        write_hex(mli_msg, paramBlock, 4);
-
-        // Extract and log pathnames if applicable
-        std::string pathInfo =
-            extract_mli_pathnames(m_mem.constBanks(), m_mli, callNumber, paramBlock, err);
-        if (!pathInfo.empty()) {
-          mli_msg << pathInfo;
-        }
-
-        mli_msg << " result=$";
-        write_hex(mli_msg, err, 2);
-        if (err == 0) {
-          mli_msg << " OK\n";
-        } else {
-          const char* errName = error_name(err);
-          if (errName[0] != '\0') {
-            mli_msg << " ERROR (" << errName << ")\n";
-          } else {
-            mli_msg << " ERROR\n";
-          }
-        }
-
-        // Write to both logs
-        if (m_mliLog != nullptr) {
-          *m_mliLog << mli_msg.str();
-          // Dump stack and PC ring on UNSUPPORTED_STOR_TYPE error
-          if (err == ERR_UNSUPPORTED_STOR_TYPE) {
-            dump_stack(*m_mliLog, m_mem.constBanks(), m_r.sp);
-            dump_pc_ring(*m_mliLog, m_pcRingFrom, m_pcRingTo, m_pcRingCount, PC_RING_SIZE,
-                         m_pcRingIndex);
-          }
-          m_mliLog->flush();
-        }
-        if (m_traceLog != nullptr) {
-          *m_traceLog << mli_msg.str();
-        }
-      }
-
-      // ProDOS convention: Carry set on error, A holds error code.
-      m_r.a = err;
-      setFlag(FLAG_C, err != 0);
-      setNZ(m_r.a);
-
-      // ProDOS MLI returns with decimal mode cleared.
-      setFlag(FLAG_D, false);
-
-      // QUIT ($65): stop emulation after standard MLI handling/logging.
-      if (callNumber == 0x65 && err == ERR_NO_ERROR) {
-        m_stopped = true;
-        m_waiting = false;
-      }
-
-      return 6;
+      return handle_mli_jsr_trap();
     }
 
     // Special trap: JSR $DCB8 redirects to $DCBD with A=$A0.
