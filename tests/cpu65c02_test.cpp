@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -4475,6 +4476,312 @@ int main() {
 
     if (!testFailed) {
       std::cout << "PASS: nop_bus_read_shape_contracts\n";
+    }
+  }
+
+  // Test 38: register_incdec_nz_cycle_contracts
+  {
+    std::cout << "Test 38: register_incdec_nz_cycle_contracts\n";
+
+    bool testFailed = false;
+
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x13E0;
+    writeProgram(*mem, start,
+                 {
+                     0xE8,
+                     0xCA,
+                     0xC8,
+                     0x88,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    cpu.regs().x = 0xFF;
+    cpu.regs().y = 0x7F;
+    cpu.regs().p = static_cast<uint8_t>((cpu.regs().p & static_cast<uint8_t>(~0xC3)) | 0x41);
+
+    uint32_t inxCycles = cpu.step();
+    bool     inxC      = (cpu.regs().p & 0x01) != 0;
+    bool     inxV      = (cpu.regs().p & 0x40) != 0;
+    bool     inxZ      = (cpu.regs().p & 0x02) != 0;
+    bool     inxN      = (cpu.regs().p & 0x80) != 0;
+    uint8_t  inxX      = cpu.regs().x;
+    uint16_t inxPc     = cpu.regs().pc;
+
+    uint32_t dexCycles = cpu.step();
+    bool     dexC      = (cpu.regs().p & 0x01) != 0;
+    bool     dexV      = (cpu.regs().p & 0x40) != 0;
+    bool     dexZ      = (cpu.regs().p & 0x02) != 0;
+    bool     dexN      = (cpu.regs().p & 0x80) != 0;
+    uint8_t  dexX      = cpu.regs().x;
+    uint16_t dexPc     = cpu.regs().pc;
+
+    uint32_t inyCycles = cpu.step();
+    bool     inyC      = (cpu.regs().p & 0x01) != 0;
+    bool     inyV      = (cpu.regs().p & 0x40) != 0;
+    bool     inyZ      = (cpu.regs().p & 0x02) != 0;
+    bool     inyN      = (cpu.regs().p & 0x80) != 0;
+    uint8_t  inyY      = cpu.regs().y;
+    uint16_t inyPc     = cpu.regs().pc;
+
+    uint32_t deyCycles = cpu.step();
+    bool     deyC      = (cpu.regs().p & 0x01) != 0;
+    bool     deyV      = (cpu.regs().p & 0x40) != 0;
+    bool     deyZ      = (cpu.regs().p & 0x02) != 0;
+    bool     deyN      = (cpu.regs().p & 0x80) != 0;
+    uint8_t  deyY      = cpu.regs().y;
+
+    if (inxCycles != 2 || inxPc != static_cast<uint16_t>(start + 1) || inxX != 0x00 ||
+        !inxC || !inxV || !inxZ || inxN) {
+      std::cerr << "FAIL: INX contract mismatch for cycles/flags\n";
+      failures++;
+      testFailed = true;
+    } else if (dexCycles != 2 || dexPc != static_cast<uint16_t>(start + 2) || dexX != 0xFF ||
+               !dexC || !dexV || dexZ || !dexN) {
+      std::cerr << "FAIL: DEX contract mismatch for cycles/flags\n";
+      failures++;
+      testFailed = true;
+    } else if (inyCycles != 2 || inyPc != static_cast<uint16_t>(start + 3) || inyY != 0x80 || !inyC ||
+               !inyV || inyZ || !inyN) {
+      std::cerr << "FAIL: INY contract mismatch for cycles/flags\n";
+      failures++;
+      testFailed = true;
+    } else if (deyCycles != 2 || deyY != 0x7F || !deyC || !deyV || deyZ || deyN ||
+               cpu.regs().pc != static_cast<uint16_t>(start + 4)) {
+      std::cerr << "FAIL: DEY contract mismatch for cycles/PC/flags\n";
+      failures++;
+      testFailed = true;
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: register_incdec_nz_cycle_contracts\n";
+    }
+  }
+
+  // Test 39: cpx_cpy_zp_abs_cycle_flag_contracts
+  {
+    std::cout << "Test 39: cpx_cpy_zp_abs_cycle_flag_contracts\n";
+
+    bool testFailed = false;
+
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    prodos8emu::write_u8(mem->banks(), 0x0010, 0x20);
+    prodos8emu::write_u8(mem->banks(), 0x0011, 0x30);
+    prodos8emu::write_u8(mem->banks(), 0x2000, 0x30);
+    prodos8emu::write_u8(mem->banks(), 0x2001, 0x40);
+
+    const uint16_t start = 0x1400;
+    writeProgram(*mem, start,
+                 {
+                     0xA2,
+                     0x20,
+                     0xA0,
+                     0x40,
+                     0xE4,
+                     0x10,
+                     0xEC,
+                     0x00,
+                     0x20,
+                     0xC4,
+                     0x11,
+                     0xCC,
+                     0x01,
+                     0x20,
+                 });
+            prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+            prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    (void)cpu.step();
+    (void)cpu.step();
+
+    cpu.regs().p = static_cast<uint8_t>((cpu.regs().p & static_cast<uint8_t>(~0xC3)) | 0x40);
+
+    uint32_t cpxZpCycles = cpu.step();
+    bool     cpxZpC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpxZpZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpxZpN      = (cpu.regs().p & 0x80) != 0;
+    bool     cpxZpV      = (cpu.regs().p & 0x40) != 0;
+
+    uint32_t cpxAbsCycles = cpu.step();
+    bool     cpxAbsC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpxAbsZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpxAbsN      = (cpu.regs().p & 0x80) != 0;
+    bool     cpxAbsV      = (cpu.regs().p & 0x40) != 0;
+
+    uint32_t cpyZpCycles = cpu.step();
+    bool     cpyZpC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpyZpZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpyZpN      = (cpu.regs().p & 0x80) != 0;
+    bool     cpyZpV      = (cpu.regs().p & 0x40) != 0;
+
+    uint32_t cpyAbsCycles = cpu.step();
+    bool     cpyAbsC      = (cpu.regs().p & 0x01) != 0;
+    bool     cpyAbsZ      = (cpu.regs().p & 0x02) != 0;
+    bool     cpyAbsN      = (cpu.regs().p & 0x80) != 0;
+    bool     cpyAbsV      = (cpu.regs().p & 0x40) != 0;
+
+    if (cpxZpCycles != 3 || cpu.regs().x != 0x20 || cpu.regs().y != 0x40 || !cpxZpC || !cpxZpZ ||
+        cpxZpN || !cpxZpV) {
+      std::cerr << "FAIL: CPX zp contract mismatch for cycle/flags/register stability\n";
+      failures++;
+      testFailed = true;
+    } else if (cpxAbsCycles != 4 || cpu.regs().x != 0x20 || cpu.regs().y != 0x40 || cpxAbsC ||
+               cpxAbsZ || !cpxAbsN || !cpxAbsV) {
+      std::cerr << "FAIL: CPX abs contract mismatch for cycle/flags/register stability\n";
+      failures++;
+      testFailed = true;
+    } else if (cpyZpCycles != 3 || cpu.regs().x != 0x20 || cpu.regs().y != 0x40 || !cpyZpC ||
+               cpyZpZ || cpyZpN || !cpyZpV) {
+      std::cerr << "FAIL: CPY zp contract mismatch for cycle/flags/register stability\n";
+      failures++;
+      testFailed = true;
+    } else if (cpyAbsCycles != 4 || cpu.regs().x != 0x20 || cpu.regs().y != 0x40 || !cpyAbsC ||
+               !cpyAbsZ || cpyAbsN || !cpyAbsV || cpu.regs().pc != static_cast<uint16_t>(start + 14)) {
+      std::cerr << "FAIL: CPY abs contract mismatch for cycle/PC/flags/register stability\n";
+      failures++;
+      testFailed = true;
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: cpx_cpy_zp_abs_cycle_flag_contracts\n";
+    }
+  }
+
+  // Test 40: bbr_bbs_not_taken_and_page_cross_contracts
+  {
+    std::cout << "Test 40: bbr_bbs_not_taken_and_page_cross_contracts\n";
+
+    bool testFailed = false;
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem->banks(), 0x0020, 0x01);
+
+      const uint16_t start = 0x1450;
+      writeProgram(*mem, start,
+                   {
+                       0x0F,
+                       0x20,
+                       0x05,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0xE1;
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().p != 0xE1) {
+        std::cerr << "FAIL: BBR not-taken cycle/PC/flags contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem->banks(), 0x0021, 0x00);
+
+      const uint16_t start = 0x1470;
+      writeProgram(*mem, start,
+                   {
+                       0x8F,
+                       0x21,
+                       0x05,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0x61;
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().pc != static_cast<uint16_t>(start + 3) || cpu.regs().p != 0x61) {
+        std::cerr << "FAIL: BBS not-taken cycle/PC/flags contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem->banks(), 0x0022, 0x00);
+
+      const uint16_t start = 0x14FD;
+      writeProgram(*mem, start,
+                   {
+                       0x0F,
+                       0x22,
+                       0x00,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0xA1;
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().pc != 0x1500 || cpu.regs().p != 0xA1) {
+        std::cerr << "FAIL: BBR page-cross taken cycle/PC/flags contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem->banks(), 0x0023, 0x01);
+
+      const uint16_t start = 0x15FD;
+      writeProgram(*mem, start,
+                   {
+                       0x8F,
+                       0x23,
+                       0xFF,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+      cpu.regs().p = 0x23;
+
+      uint32_t cycles = cpu.step();
+      if (cycles != 5 || cpu.regs().pc != 0x15FF || cpu.regs().p != 0x23) {
+        std::cerr << "FAIL: BBS page-cross taken cycle/PC/flags contract mismatch\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: bbr_bbs_not_taken_and_page_cross_contracts\n";
     }
   }
 
