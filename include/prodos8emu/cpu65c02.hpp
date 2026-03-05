@@ -144,6 +144,9 @@ namespace prodos8emu {
 
     // Opcode-family helpers
     bool     execute_control_flow_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_control_flow_branch_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_control_flow_jump_return_opcode(uint8_t op, uint32_t& cycles);
+    void     emit_cout_char(uint8_t ch);
     bool     execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_accumulator_opcode(uint8_t op, uint32_t& cycles);
     bool     execute_load_store_opcode(uint8_t op, uint32_t& cycles);

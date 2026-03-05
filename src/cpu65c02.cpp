@@ -998,37 +998,61 @@ namespace prodos8emu {
     return 6;
   }
 
-  bool CPU65C02::execute_control_flow_opcode(uint8_t op, uint32_t& cycles) {
-    switch (op) {
-      case 0x00: {  // BRK
-        // BRK is treated as a 2-byte instruction; PC is incremented once more.
-        uint16_t brkPC = static_cast<uint16_t>(m_r.pc - 1);  // BRK instruction address
-        m_r.pc         = static_cast<uint16_t>(m_r.pc + 1);
-        push16(m_r.pc);
-        push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
-        setFlag(FLAG_I, true);
-        setFlag(FLAG_D, false);  // 65C02 clears D on interrupt
-        uint16_t irqVector = read16(VEC_IRQ);
-        m_r.pc             = irqVector;
-        recordPCChange(brkPC, irqVector);
-        cycles = 7;
-        return true;
+  void CPU65C02::emit_cout_char(uint8_t ch) {
+    if (m_coutLog == nullptr) {
+      return;
+    }
+
+    // ProDOS convention: 0x0D (CR) -> output newline
+    if (ch == 0x0D) {
+      *m_coutLog << '\n';
+    }
+    // Printable ASCII: output as-is
+    else if (ch >= 0x20 && ch <= 0x7E) {
+      *m_coutLog << static_cast<char>(ch);
+    }
+    // Control characters: output C-style escape sequences
+    else {
+      switch (ch) {
+        case 0x00:
+          *m_coutLog << "\\0";
+          break;
+        case 0x07:
+          *m_coutLog << "\\a";
+          break;
+        case 0x08:
+          *m_coutLog << "\\b";
+          break;
+        case 0x09:
+          *m_coutLog << "\\t";
+          break;
+        case 0x0A:
+          *m_coutLog << "\\n";
+          break;
+        case 0x0B:
+          *m_coutLog << "\\v";
+          break;
+        case 0x0C:
+          *m_coutLog << "\\f";
+          break;
+        case 0x1B:
+          *m_coutLog << "\\e";
+          break;
+        case 0x7F:
+          *m_coutLog << "\\x7f";
+          break;
+        default:
+          // Other control characters: use \xHH notation
+          *m_coutLog << "\\x";
+          write_hex(*m_coutLog, ch, 2);
+          break;
       }
+    }
+    m_coutLog->flush();
+  }
 
-      case 0xEA:  // NOP
-        cycles = 2;
-        return true;
-
-      case 0xDB:  // STP
-        m_stopped = true;
-        cycles    = 3;
-        return true;
-
-      case 0xCB:  // WAI
-        m_waiting = true;
-        cycles    = 3;
-        return true;
-
+  bool CPU65C02::execute_control_flow_jump_return_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0x4C: {                                            // JMP abs
         uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
         uint16_t target = fetch16();
@@ -1041,55 +1065,8 @@ namespace prodos8emu {
         uint16_t jmpPC  = static_cast<uint16_t>(m_r.pc - 1);  // JMP instruction address
         uint16_t ptr    = fetch16();
         uint16_t target = read16(ptr);
-        if (ptr == COUT_VECTOR_PTR && m_coutLog != nullptr) {
-          uint8_t ch = static_cast<uint8_t>(m_r.a & 0x7F);
-
-          // ProDOS convention: 0x0D (CR) -> output newline
-          if (ch == 0x0D) {
-            *m_coutLog << '\n';
-          }
-          // Printable ASCII: output as-is
-          else if (ch >= 0x20 && ch <= 0x7E) {
-            *m_coutLog << static_cast<char>(ch);
-          }
-          // Control characters: output C-style escape sequences
-          else {
-            switch (ch) {
-              case 0x00:
-                *m_coutLog << "\\0";
-                break;
-              case 0x07:
-                *m_coutLog << "\\a";
-                break;
-              case 0x08:
-                *m_coutLog << "\\b";
-                break;
-              case 0x09:
-                *m_coutLog << "\\t";
-                break;
-              case 0x0A:
-                *m_coutLog << "\\n";
-                break;
-              case 0x0B:
-                *m_coutLog << "\\v";
-                break;
-              case 0x0C:
-                *m_coutLog << "\\f";
-                break;
-              case 0x1B:
-                *m_coutLog << "\\e";
-                break;
-              case 0x7F:
-                *m_coutLog << "\\x7f";
-                break;
-              default:
-                // Other control characters: use \xHH notation
-                *m_coutLog << "\\x";
-                write_hex(*m_coutLog, ch, 2);
-                break;
-            }
-          }
-          m_coutLog->flush();
+        if (ptr == COUT_VECTOR_PTR) {
+          emit_cout_char(static_cast<uint8_t>(m_r.a & 0x7F));
         }
         m_r.pc = target;
         recordPCChange(jmpPC, target);
@@ -1127,6 +1104,13 @@ namespace prodos8emu {
         return true;
       }
 
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::execute_control_flow_branch_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
       case 0x80:  // BRA
         branch(true);
         cycles = 3;
@@ -1167,6 +1151,48 @@ namespace prodos8emu {
       default:
         return false;
     }
+  }
+
+  bool CPU65C02::execute_control_flow_opcode(uint8_t op, uint32_t& cycles) {
+    switch (op) {
+      case 0x00: {  // BRK
+        // BRK is treated as a 2-byte instruction; PC is incremented once more.
+        uint16_t brkPC = static_cast<uint16_t>(m_r.pc - 1);  // BRK instruction address
+        m_r.pc         = static_cast<uint16_t>(m_r.pc + 1);
+        push16(m_r.pc);
+        push8(static_cast<uint8_t>(m_r.p | FLAG_B | FLAG_U));
+        setFlag(FLAG_I, true);
+        setFlag(FLAG_D, false);  // 65C02 clears D on interrupt
+        uint16_t irqVector = read16(VEC_IRQ);
+        m_r.pc             = irqVector;
+        recordPCChange(brkPC, irqVector);
+        cycles = 7;
+        return true;
+      }
+
+      case 0xEA:  // NOP
+        cycles = 2;
+        return true;
+
+      case 0xDB:  // STP
+        m_stopped = true;
+        cycles    = 3;
+        return true;
+
+      case 0xCB:  // WAI
+        m_waiting = true;
+        cycles    = 3;
+        return true;
+
+      default:
+        break;
+    }
+
+    if (execute_control_flow_jump_return_opcode(op, cycles)) {
+      return true;
+    }
+
+    return execute_control_flow_branch_opcode(op, cycles);
   }
 
   bool CPU65C02::execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles) {

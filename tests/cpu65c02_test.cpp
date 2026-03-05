@@ -22,6 +22,186 @@ static void writeProgram(prodos8emu::Apple2Memory& mem, uint16_t addr,
   }
 }
 
+__attribute__((noinline)) static void run_branch_opcode_matrix_preserved_test(int& failures) {
+  std::cout << "Test 43: branch_opcode_matrix_preserved\n";
+
+  bool testFailed = false;
+
+  struct BranchCase {
+    const char* name;
+    uint8_t     opcode;
+    uint8_t     flagMask;
+    bool        takenWhenSet;
+  };
+
+  static const BranchCase cases[] = {
+      {"BPL", 0x10, 0x80, false},
+      {"BMI", 0x30, 0x80, true},
+      {"BVC", 0x50, 0x40, false},
+      {"BVS", 0x70, 0x40, true},
+      {"BCC", 0x90, 0x01, false},
+      {"BCS", 0xB0, 0x01, true},
+      {"BNE", 0xD0, 0x02, false},
+      {"BEQ", 0xF0, 0x02, true},
+  };
+
+  for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])) && !testFailed; ++i) {
+    const BranchCase& c = cases[i];
+    for (int scenario = 0; scenario < 2 && !testFailed; ++scenario) {
+      const bool expectedTaken = (scenario == 0);
+
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = static_cast<uint16_t>(0x1700 + (i * 0x10) + (scenario * 0x04));
+      writeProgram(mem, start,
+                   {
+                       c.opcode,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint8_t startP = 0x20;
+      if (expectedTaken == c.takenWhenSet) {
+        startP = static_cast<uint8_t>(startP | c.flagMask);
+      } else {
+        startP = static_cast<uint8_t>(startP & ~c.flagMask);
+      }
+      cpu.regs().p = startP;
+
+      uint32_t cycles     = cpu.step();
+      uint16_t expectedPC = static_cast<uint16_t>(expectedTaken ? (start + 4) : (start + 2));
+      if (cycles != 2 || cpu.regs().pc != expectedPC || cpu.regs().p != startP) {
+        std::cerr << "FAIL: " << c.name << " " << (expectedTaken ? "taken" : "not-taken")
+                  << " contract mismatch (cycles=" << cycles << ", pc=0x" << std::hex
+                  << cpu.regs().pc << ", p=0x" << static_cast<uint32_t>(cpu.regs().p) << std::dec
+                  << ")\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+  }
+
+  if (!testFailed) {
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = 0x1790;
+    writeProgram(mem, start,
+                 {
+                     0x80,
+                     0x02,
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.reset();
+    cpu.regs().p = 0xE3;
+
+    uint32_t cycles = cpu.step();
+    if (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 4) || cpu.regs().p != 0xE3) {
+      std::cerr << "FAIL: BRA unconditional branch contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: branch_opcode_matrix_preserved\n";
+  }
+}
+
+__attribute__((noinline)) static void run_cout_escape_mapping_contracts_preserved_test(int& failures) {
+  std::cout << "Test 44: cout_escape_mapping_contracts_preserved\n";
+
+  bool testFailed = false;
+
+  struct CoutCase {
+    const char* name;
+    uint8_t     aValue;
+    const char* expected;
+  };
+
+  static const CoutCase cases[] = {
+      {"printable_high_bit_clear", 0xC1, "A"},
+      {"carriage_return_newline", 0x0D, "\n"},
+      {"nul_escape", 0x00, "\\0"},
+      {"bel_escape", 0x07, "\\a"},
+      {"backspace_escape", 0x08, "\\b"},
+      {"tab_escape", 0x09, "\\t"},
+      {"line_feed_escape", 0x0A, "\\n"},
+      {"vertical_tab_escape", 0x0B, "\\v"},
+      {"form_feed_escape", 0x0C, "\\f"},
+      {"escape_escape", 0x1B, "\\e"},
+      {"del_escape", 0x7F, "\\x7f"},
+      {"default_hex_escape", 0x01, "\\x01"},
+      {"default_hex_escape_high_bit_clear", 0x9A, "\\x1A"},
+  };
+
+  for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])) && !testFailed; ++i) {
+    const CoutCase& c = cases[i];
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = static_cast<uint16_t>(0x17C0 + (i * 0x10));
+    writeProgram(mem, start,
+                 {
+                     0xA9,
+                     c.aValue,
+                     0x6C,
+                     0x36,
+                     0x00,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0x0036, static_cast<uint16_t>(start + 5));
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    coutLog;
+    cpu.setDebugLogs(nullptr, &coutLog);
+    cpu.reset();
+
+    uint32_t ldaCycles = cpu.step();
+    uint32_t jmpCycles = cpu.step();
+    uint32_t nopCycles = cpu.step();
+
+    const std::string got = coutLog.str();
+    if (ldaCycles != 2 || jmpCycles != 5 || nopCycles != 2 || got != c.expected ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+      std::cerr << "FAIL: COUT mapping contract mismatch for " << c.name << " (got='";
+      for (char ch : got) {
+        if (ch == '\n') {
+          std::cerr << "\\n";
+        } else if (ch == '\\') {
+          std::cerr << "\\\\";
+        } else if (ch >= 0x20 && ch <= 0x7E) {
+          std::cerr << ch;
+        } else {
+          std::cerr << "\\x" << std::hex << static_cast<int>(static_cast<uint8_t>(ch)) << std::dec;
+        }
+      }
+      std::cerr << "', expected='" << c.expected << "')\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: cout_escape_mapping_contracts_preserved\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -4972,6 +5152,9 @@ int main() {
       std::cout << "PASS: compare_xy_dispatch_contracts_preserved\n";
     }
   }
+
+  run_branch_opcode_matrix_preserved_test(failures);
+  run_cout_escape_mapping_contracts_preserved_test(failures);
 
   fs::remove_all(tempDir);
 
