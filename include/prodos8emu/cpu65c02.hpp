@@ -143,7 +143,12 @@ namespace prodos8emu {
     uint32_t jsr_abs(uint16_t target);
 
     // Opcode-family helpers
-    bool execute_control_flow_opcode(uint8_t op, uint32_t& cycles);
+    bool     execute_control_flow_opcode(uint8_t op, uint32_t& cycles);
+    bool     read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles);
+    uint32_t execute_alu_family_opcode(uint8_t op);
+    bool     read_rmw_target_for_mode(uint8_t mode, uint16_t& addr, uint32_t& cycles);
+    uint8_t  apply_rmw_family_op(uint8_t op, uint8_t value);
+    uint32_t execute_rmw_family_opcode(uint8_t op);
 
     struct TraceFlagSnapshot {
       uint8_t genf     = 0;

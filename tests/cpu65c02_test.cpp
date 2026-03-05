@@ -2133,6 +2133,465 @@ int main() {
     }
   }
 
+  // Test 26: alu_family_dispatch_cycles_match_baseline
+  {
+    std::cout << "Test 26: alu_family_dispatch_cycles_match_baseline\n";
+
+    bool testFailed = false;
+
+    {
+      // ORA abs,X with page cross: 4+1 cycles.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2100, 0xF0);
+
+      const uint16_t start = 0x0C00;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x0F,
+                       0xA2,
+                       0x01,
+                       0x1D,
+                       0xFF,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 5 || cpu.regs().a != 0xFF || z || !n) {
+        std::cerr << "FAIL: ORA abs,X page-cross expected cycles=5,A=$FF,Z=0,N=1\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // AND abs,X without page cross: 4 cycles.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x20FF, 0x0F);
+
+      const uint16_t start = 0x0C20;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0xF0,
+                       0xA2,
+                       0x01,
+                       0x3D,
+                       0xFE,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 4 || cpu.regs().a != 0x00 || !z || n) {
+        std::cerr << "FAIL: AND abs,X no-cross expected cycles=4,A=$00,Z=1,N=0\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // EOR (zp),Y with page cross: 5+1 cycles.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u16_le(mem.banks(), 0x0010, 0x21FF);
+      prodos8emu::write_u8(mem.banks(), 0x2200, 0x0F);
+
+      const uint16_t start = 0x0C40;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0xF0,
+                       0xA0,
+                       0x01,
+                       0x51,
+                       0x10,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 6 || cpu.regs().a != 0xFF || z || !n) {
+        std::cerr << "FAIL: EOR (zp),Y page-cross expected cycles=6,A=$FF,Z=0,N=1\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // ADC (zp): 5 cycles.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u16_le(mem.banks(), 0x0020, 0x2000);
+      prodos8emu::write_u8(mem.banks(), 0x2000, 0x02);
+
+      const uint16_t start = 0x0C60;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x01,
+                       0x18,
+                       0x72,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 5 || cpu.regs().a != 0x03 || c || z || n) {
+        std::cerr << "FAIL: ADC (zp) expected cycles=5,A=$03,C=0,Z=0,N=0\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // SBC abs: 4 cycles.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2000, 0x01);
+
+      const uint16_t start = 0x0C80;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x05,
+                       0x38,
+                       0xED,
+                       0x00,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 4 || cpu.regs().a != 0x04 || !c || z || n) {
+        std::cerr << "FAIL: SBC abs expected cycles=4,A=$04,C=1,Z=0,N=0\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // CMP #imm: 2 cycles and A must remain unchanged.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      const uint16_t start = 0x0CA0;
+      writeProgram(mem, start,
+                   {
+                       0xA9,
+                       0x33,
+                       0xC9,
+                       0x44,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      bool c = (cpu.regs().p & 0x01) != 0;
+      bool z = (cpu.regs().p & 0x02) != 0;
+      bool n = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 2 || cpu.regs().a != 0x33 || c || z || !n) {
+        std::cerr << "FAIL: CMP #imm expected cycles=2,A unchanged,C=0,Z=0,N=1\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: alu_family_dispatch_cycles_match_baseline\n";
+    }
+  }
+
+  // Test 27: rmw_family_dispatch_preserves_carry_nz_and_memory
+  {
+    std::cout << "Test 27: rmw_family_dispatch_preserves_carry_nz_and_memory\n";
+
+    bool testFailed = false;
+
+    {
+      // INC abs,X: cycles=7, memory writeback and C preserved.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2010, 0xFF);
+
+      const uint16_t start = 0x0CC0;
+      writeProgram(mem, start,
+                   {
+                       0x38,
+                       0xA2,
+                       0x01,
+                       0xFE,
+                       0x0F,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      uint8_t memVal = prodos8emu::read_u8(mem.constBanks(), 0x2010);
+      bool    c      = (cpu.regs().p & 0x01) != 0;
+      bool    z      = (cpu.regs().p & 0x02) != 0;
+      bool    n      = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 7 || memVal != 0x00 || !c || !z || n) {
+        std::cerr << "FAIL: INC abs,X expected cycles=7,M=$00,C preserved=1,Z=1,N=0\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // DEC zp: cycles=5, memory writeback and C preserved.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x0040, 0x00);
+
+      const uint16_t start = 0x0CE0;
+      writeProgram(mem, start,
+                   {
+                       0x38,
+                       0xC6,
+                       0x40,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+
+      uint8_t memVal = prodos8emu::read_u8(mem.constBanks(), 0x0040);
+      bool    c      = (cpu.regs().p & 0x01) != 0;
+      bool    z      = (cpu.regs().p & 0x02) != 0;
+      bool    n      = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 5 || memVal != 0xFF || !c || z || !n) {
+        std::cerr << "FAIL: DEC zp expected cycles=5,M=$FF,C preserved=1,Z=0,N=1\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // ASL abs: cycles=6, carry from bit 7.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2030, 0x80);
+
+      const uint16_t start = 0x0D00;
+      writeProgram(mem, start,
+                   {
+                       0x0E,
+                       0x30,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      uint32_t cycles = cpu.step();
+      uint8_t  memVal = prodos8emu::read_u8(mem.constBanks(), 0x2030);
+      bool     c      = (cpu.regs().p & 0x01) != 0;
+      bool     z      = (cpu.regs().p & 0x02) != 0;
+      bool     n      = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 6 || memVal != 0x00 || !c || !z || n) {
+        std::cerr << "FAIL: ASL abs expected cycles=6,M=$00,C=1,Z=1,N=0\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // LSR zp,X: cycles=6, carry from bit 0.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x0051, 0x01);
+
+      const uint16_t start = 0x0D20;
+      writeProgram(mem, start,
+                   {
+                       0xA2,
+                       0x01,
+                       0x56,
+                       0x50,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      uint8_t  memVal = prodos8emu::read_u8(mem.constBanks(), 0x0051);
+      bool     c      = (cpu.regs().p & 0x01) != 0;
+      bool     z      = (cpu.regs().p & 0x02) != 0;
+      bool     n      = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 6 || memVal != 0x00 || !c || !z || n) {
+        std::cerr << "FAIL: LSR zp,X expected cycles=6,M=$00,C=1,Z=1,N=0\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // ROL zp: cycles=5, uses incoming carry and updates carry from bit 7.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x0060, 0x80);
+
+      const uint16_t start = 0x0D40;
+      writeProgram(mem, start,
+                   {
+                       0x38,
+                       0x26,
+                       0x60,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      uint8_t  memVal = prodos8emu::read_u8(mem.constBanks(), 0x0060);
+      bool     c      = (cpu.regs().p & 0x01) != 0;
+      bool     z      = (cpu.regs().p & 0x02) != 0;
+      bool     n      = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 5 || memVal != 0x01 || !c || z || n) {
+        std::cerr << "FAIL: ROL zp expected cycles=5,M=$01,C=1,Z=0,N=0\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    {
+      // ROR abs,X: cycles=7, uses incoming carry and updates carry from bit 0.
+      prodos8emu::Apple2Memory mem;
+      mem.setLCReadEnabled(true);
+      mem.setLCWriteEnabled(true);
+
+      prodos8emu::write_u8(mem.banks(), 0x2041, 0x01);
+
+      const uint16_t start = 0x0D60;
+      writeProgram(mem, start,
+                   {
+                       0x38,
+                       0xA2,
+                       0x01,
+                       0x7E,
+                       0x40,
+                       0x20,
+                   });
+      prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(mem);
+      cpu.reset();
+
+      (void)cpu.step();
+      (void)cpu.step();
+      uint32_t cycles = cpu.step();
+      uint8_t  memVal = prodos8emu::read_u8(mem.constBanks(), 0x2041);
+      bool     c      = (cpu.regs().p & 0x01) != 0;
+      bool     z      = (cpu.regs().p & 0x02) != 0;
+      bool     n      = (cpu.regs().p & 0x80) != 0;
+
+      if (cycles != 7 || memVal != 0x80 || !c || z || !n) {
+        std::cerr << "FAIL: ROR abs,X expected cycles=7,M=$80,C=1,Z=0,N=1\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+
+    if (!testFailed) {
+      std::cout << "PASS: rmw_family_dispatch_preserves_carry_nz_and_memory\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {

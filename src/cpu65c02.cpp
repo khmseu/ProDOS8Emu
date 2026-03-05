@@ -1231,6 +1231,164 @@ namespace prodos8emu {
     }
   }
 
+  bool CPU65C02::read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles) {
+    switch (mode) {
+      case 0x09:
+        operand = fetch8();
+        cycles  = 2;
+        return true;
+      case 0x05:
+        operand = read8(addr_zp());
+        cycles  = 3;
+        return true;
+      case 0x15:
+        operand = read8(addr_zpx());
+        cycles  = 4;
+        return true;
+      case 0x0D:
+        operand = read8(addr_abs());
+        cycles  = 4;
+        return true;
+      case 0x1D: {
+        bool     pc = false;
+        uint16_t a  = addr_absx(pc);
+        operand     = read8_pageCrossed(a, pc);
+        cycles      = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+        return true;
+      }
+      case 0x19: {
+        bool     pc = false;
+        uint16_t a  = addr_absy(pc);
+        operand     = read8_pageCrossed(a, pc);
+        cycles      = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+        return true;
+      }
+      case 0x01:
+        operand = read8(addr_indx());
+        cycles  = 6;
+        return true;
+      case 0x11: {
+        bool     pc = false;
+        uint16_t a  = addr_indy(pc);
+        operand     = read8_pageCrossed(a, pc);
+        cycles      = static_cast<uint32_t>(5 + (pc ? 1 : 0));
+        return true;
+      }
+      case 0x12:
+        operand = read8(addr_zpind());
+        cycles  = 5;
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  uint32_t CPU65C02::execute_alu_family_opcode(uint8_t op) {
+    uint8_t  operand = 0;
+    uint32_t cycles  = 0;
+    if (!read_alu_operand_for_mode(static_cast<uint8_t>(op & 0x1F), operand, cycles)) {
+      return 0;
+    }
+
+    switch (op & 0xE0) {
+      case 0x00:
+        m_r.a = static_cast<uint8_t>(m_r.a | operand);
+        setNZ(m_r.a);
+        return cycles;
+      case 0x20:
+        m_r.a = static_cast<uint8_t>(m_r.a & operand);
+        setNZ(m_r.a);
+        return cycles;
+      case 0x40:
+        m_r.a = static_cast<uint8_t>(m_r.a ^ operand);
+        setNZ(m_r.a);
+        return cycles;
+      case 0x60:
+        m_r.a = adc(m_r.a, operand);
+        return cycles;
+      case 0xC0:
+        (void)cmp(m_r.a, operand);
+        return cycles;
+      case 0xE0:
+        m_r.a = sbc(m_r.a, operand);
+        return cycles;
+      default:
+        return 0;
+    }
+  }
+
+  bool CPU65C02::read_rmw_target_for_mode(uint8_t mode, uint16_t& addr, uint32_t& cycles) {
+    switch (mode) {
+      case 0x06:
+        addr   = addr_zp();
+        cycles = 5;
+        return true;
+      case 0x16:
+        addr   = addr_zpx();
+        cycles = 6;
+        return true;
+      case 0x0E:
+        addr   = addr_abs();
+        cycles = 6;
+        return true;
+      case 0x1E: {
+        bool pc = false;
+        addr    = addr_absx(pc);
+        cycles  = 7;
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  uint8_t CPU65C02::apply_rmw_family_op(uint8_t op, uint8_t value) {
+    switch (op & 0xE0) {
+      case 0xE0:
+        return static_cast<uint8_t>(value + 1);
+      case 0xC0:
+        return static_cast<uint8_t>(value - 1);
+      case 0x00:
+        setFlag(FLAG_C, (value & 0x80) != 0);
+        return static_cast<uint8_t>(value << 1);
+      case 0x40:
+        setFlag(FLAG_C, (value & 0x01) != 0);
+        return static_cast<uint8_t>(value >> 1);
+      case 0x20: {
+        bool c = getFlag(FLAG_C);
+        setFlag(FLAG_C, (value & 0x80) != 0);
+        return static_cast<uint8_t>((value << 1) | (c ? 1 : 0));
+      }
+      case 0x60: {
+        bool c = getFlag(FLAG_C);
+        setFlag(FLAG_C, (value & 0x01) != 0);
+        return static_cast<uint8_t>((value >> 1) | (c ? 0x80 : 0));
+      }
+      default:
+        return value;
+    }
+  }
+
+  uint32_t CPU65C02::execute_rmw_family_opcode(uint8_t op) {
+    uint16_t addr   = 0;
+    uint32_t cycles = 0;
+    if (!read_rmw_target_for_mode(static_cast<uint8_t>(op & 0x1F), addr, cycles)) {
+      return 0;
+    }
+
+    uint8_t group = static_cast<uint8_t>(op & 0xE0);
+    if (group != 0x00 && group != 0x20 && group != 0x40 && group != 0x60 && group != 0xC0 &&
+        group != 0xE0) {
+      return 0;
+    }
+
+    uint8_t v = read8(addr);
+    v         = apply_rmw_family_op(op, v);
+    write8(addr, v);
+    setNZ(v);
+    return cycles;
+  }
+
   uint32_t CPU65C02::execute(uint8_t op) {
     // Rockwell/WDC 65C02 bit manipulation/branch opcodes.
     // RMBn: 07,17,27,37,47,57,67,77 (clear bit n in zp)
@@ -1548,260 +1706,62 @@ namespace prodos8emu {
         return 5;
       }
 
-      // Logical
-      // ORA
+      // Logical/ALU families (ORA/AND/EOR/ADC/SBC/CMP A)
       case 0x09:
-        m_r.a = static_cast<uint8_t>(m_r.a | fetch8());
-        setNZ(m_r.a);
-        return 2;
       case 0x05:
-        m_r.a = static_cast<uint8_t>(m_r.a | read8(addr_zp()));
-        setNZ(m_r.a);
-        return 3;
       case 0x15:
-        m_r.a = static_cast<uint8_t>(m_r.a | read8(addr_zpx()));
-        setNZ(m_r.a);
-        return 4;
       case 0x0D:
-        m_r.a = static_cast<uint8_t>(m_r.a | read8(addr_abs()));
-        setNZ(m_r.a);
-        return 4;
-      case 0x1D: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a | read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0x19: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a | read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
+      case 0x1D:
+      case 0x19:
       case 0x01:
-        m_r.a = static_cast<uint8_t>(m_r.a | read8(addr_indx()));
-        setNZ(m_r.a);
-        return 6;
-      case 0x11: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a | read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(5 + (pc ? 1 : 0));
-      }
-      case 0x12:  // ORA (zp)
-        m_r.a = static_cast<uint8_t>(m_r.a | read8(addr_zpind()));
-        setNZ(m_r.a);
-        return 5;
-
-      // AND
+      case 0x11:
+      case 0x12:
       case 0x29:
-        m_r.a = static_cast<uint8_t>(m_r.a & fetch8());
-        setNZ(m_r.a);
-        return 2;
       case 0x25:
-        m_r.a = static_cast<uint8_t>(m_r.a & read8(addr_zp()));
-        setNZ(m_r.a);
-        return 3;
       case 0x35:
-        m_r.a = static_cast<uint8_t>(m_r.a & read8(addr_zpx()));
-        setNZ(m_r.a);
-        return 4;
       case 0x2D:
-        m_r.a = static_cast<uint8_t>(m_r.a & read8(addr_abs()));
-        setNZ(m_r.a);
-        return 4;
-      case 0x3D: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a & read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0x39: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a & read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
+      case 0x3D:
+      case 0x39:
       case 0x21:
-        m_r.a = static_cast<uint8_t>(m_r.a & read8(addr_indx()));
-        setNZ(m_r.a);
-        return 6;
-      case 0x31: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a & read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(5 + (pc ? 1 : 0));
-      }
-      case 0x32:  // AND (zp)
-        m_r.a = static_cast<uint8_t>(m_r.a & read8(addr_zpind()));
-        setNZ(m_r.a);
-        return 5;
-
-      // EOR
+      case 0x31:
+      case 0x32:
       case 0x49:
-        m_r.a = static_cast<uint8_t>(m_r.a ^ fetch8());
-        setNZ(m_r.a);
-        return 2;
       case 0x45:
-        m_r.a = static_cast<uint8_t>(m_r.a ^ read8(addr_zp()));
-        setNZ(m_r.a);
-        return 3;
       case 0x55:
-        m_r.a = static_cast<uint8_t>(m_r.a ^ read8(addr_zpx()));
-        setNZ(m_r.a);
-        return 4;
       case 0x4D:
-        m_r.a = static_cast<uint8_t>(m_r.a ^ read8(addr_abs()));
-        setNZ(m_r.a);
-        return 4;
-      case 0x5D: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a ^ read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0x59: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a ^ read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
+      case 0x5D:
+      case 0x59:
       case 0x41:
-        m_r.a = static_cast<uint8_t>(m_r.a ^ read8(addr_indx()));
-        setNZ(m_r.a);
-        return 6;
-      case 0x51: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        m_r.a       = static_cast<uint8_t>(m_r.a ^ read8_pageCrossed(a, pc));
-        setNZ(m_r.a);
-        return static_cast<uint32_t>(5 + (pc ? 1 : 0));
-      }
-      case 0x52:  // EOR (zp)
-        m_r.a = static_cast<uint8_t>(m_r.a ^ read8(addr_zpind()));
-        setNZ(m_r.a);
-        return 5;
-
-      // ADC/SBC
+      case 0x51:
+      case 0x52:
       case 0x69:
-        m_r.a = adc(m_r.a, fetch8());
-        return 2;
       case 0x65:
-        m_r.a = adc(m_r.a, read8(addr_zp()));
-        return 3;
       case 0x75:
-        m_r.a = adc(m_r.a, read8(addr_zpx()));
-        return 4;
       case 0x6D:
-        m_r.a = adc(m_r.a, read8(addr_abs()));
-        return 4;
-      case 0x7D: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        m_r.a       = adc(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0x79: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        m_r.a       = adc(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
+      case 0x7D:
+      case 0x79:
       case 0x61:
-        m_r.a = adc(m_r.a, read8(addr_indx()));
-        return 6;
-      case 0x71: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        m_r.a       = adc(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(5 + (pc ? 1 : 0));
-      }
+      case 0x71:
       case 0x72:
-        m_r.a = adc(m_r.a, read8(addr_zpind()));
-        return 5;
-
       case 0xE9:
-        m_r.a = sbc(m_r.a, fetch8());
-        return 2;
       case 0xE5:
-        m_r.a = sbc(m_r.a, read8(addr_zp()));
-        return 3;
       case 0xF5:
-        m_r.a = sbc(m_r.a, read8(addr_zpx()));
-        return 4;
       case 0xED:
-        m_r.a = sbc(m_r.a, read8(addr_abs()));
-        return 4;
-      case 0xFD: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        m_r.a       = sbc(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0xF9: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        m_r.a       = sbc(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
+      case 0xFD:
+      case 0xF9:
       case 0xE1:
-        m_r.a = sbc(m_r.a, read8(addr_indx()));
-        return 6;
-      case 0xF1: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        m_r.a       = sbc(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(5 + (pc ? 1 : 0));
-      }
+      case 0xF1:
       case 0xF2:
-        m_r.a = sbc(m_r.a, read8(addr_zpind()));
-        return 5;
-
-      // Compare
       case 0xC9:
-        (void)cmp(m_r.a, fetch8());
-        return 2;
       case 0xC5:
-        (void)cmp(m_r.a, read8(addr_zp()));
-        return 3;
       case 0xD5:
-        (void)cmp(m_r.a, read8(addr_zpx()));
-        return 4;
       case 0xCD:
-        (void)cmp(m_r.a, read8(addr_abs()));
-        return 4;
-      case 0xDD: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        (void)cmp(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
-      case 0xD9: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        (void)cmp(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(4 + (pc ? 1 : 0));
-      }
+      case 0xDD:
+      case 0xD9:
       case 0xC1:
-        (void)cmp(m_r.a, read8(addr_indx()));
-        return 6;
-      case 0xD1: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        (void)cmp(m_r.a, read8_pageCrossed(a, pc));
-        return static_cast<uint32_t>(5 + (pc ? 1 : 0));
-      }
+      case 0xD1:
       case 0xD2:
-        (void)cmp(m_r.a, read8(addr_zpind()));
-        return 5;
+        return execute_alu_family_opcode(op);
 
       case 0xE0:
         (void)cmp(m_r.x, fetch8());
@@ -1822,109 +1782,39 @@ namespace prodos8emu {
         (void)cmp(m_r.y, read8(addr_abs()));
         return 4;
 
-      // INC/DEC memory
-      case 0xE6: {
-        uint16_t a = addr_zp();
-        uint8_t  v = static_cast<uint8_t>(read8(a) + 1);
-        write8(a, v);
-        setNZ(v);
-        return 5;
-      }
-      case 0xF6: {
-        uint16_t a = addr_zpx();
-        uint8_t  v = static_cast<uint8_t>(read8(a) + 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0xEE: {
-        uint16_t a = addr_abs();
-        uint8_t  v = static_cast<uint8_t>(read8(a) + 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0xFE: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = static_cast<uint8_t>(read8(a) + 1);
-        write8(a, v);
-        setNZ(v);
-        return 7;
-      }
-      case 0xC6: {
-        uint16_t a = addr_zp();
-        uint8_t  v = static_cast<uint8_t>(read8(a) - 1);
-        write8(a, v);
-        setNZ(v);
-        return 5;
-      }
-      case 0xD6: {
-        uint16_t a = addr_zpx();
-        uint8_t  v = static_cast<uint8_t>(read8(a) - 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0xCE: {
-        uint16_t a = addr_abs();
-        uint8_t  v = static_cast<uint8_t>(read8(a) - 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0xDE: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = static_cast<uint8_t>(read8(a) - 1);
-        write8(a, v);
-        setNZ(v);
-        return 7;
-      }
+      // INC/DEC memory and memory shifts/rotates
+      case 0xE6:
+      case 0xF6:
+      case 0xEE:
+      case 0xFE:
+      case 0xC6:
+      case 0xD6:
+      case 0xCE:
+      case 0xDE:
+      case 0x06:
+      case 0x16:
+      case 0x0E:
+      case 0x1E:
+      case 0x46:
+      case 0x56:
+      case 0x4E:
+      case 0x5E:
+      case 0x26:
+      case 0x36:
+      case 0x2E:
+      case 0x3E:
+      case 0x66:
+      case 0x76:
+      case 0x6E:
+      case 0x7E:
+        return execute_rmw_family_opcode(op);
 
-      // Shifts/rotates
+      // Shifts/rotates accumulator
       case 0x0A: {  // ASL A
         setFlag(FLAG_C, (m_r.a & 0x80) != 0);
         m_r.a = static_cast<uint8_t>(m_r.a << 1);
         setNZ(m_r.a);
         return 2;
-      }
-      case 0x06: {
-        uint16_t a = addr_zp();
-        uint8_t  v = read8(a);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>(v << 1);
-        write8(a, v);
-        setNZ(v);
-        return 5;
-      }
-      case 0x16: {
-        uint16_t a = addr_zpx();
-        uint8_t  v = read8(a);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>(v << 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x0E: {
-        uint16_t a = addr_abs();
-        uint8_t  v = read8(a);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>(v << 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x1E: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = read8(a);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>(v << 1);
-        write8(a, v);
-        setNZ(v);
-        return 7;
       }
 
       case 0x4A: {  // LSR A
@@ -1932,43 +1822,6 @@ namespace prodos8emu {
         m_r.a = static_cast<uint8_t>(m_r.a >> 1);
         setNZ(m_r.a);
         return 2;
-      }
-      case 0x46: {
-        uint16_t a = addr_zp();
-        uint8_t  v = read8(a);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>(v >> 1);
-        write8(a, v);
-        setNZ(v);
-        return 5;
-      }
-      case 0x56: {
-        uint16_t a = addr_zpx();
-        uint8_t  v = read8(a);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>(v >> 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x4E: {
-        uint16_t a = addr_abs();
-        uint8_t  v = read8(a);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>(v >> 1);
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x5E: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = read8(a);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>(v >> 1);
-        write8(a, v);
-        setNZ(v);
-        return 7;
       }
 
       case 0x2A: {  // ROL A
@@ -1978,47 +1831,6 @@ namespace prodos8emu {
         setNZ(m_r.a);
         return 2;
       }
-      case 0x26: {
-        uint16_t a = addr_zp();
-        uint8_t  v = read8(a);
-        bool     c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>((v << 1) | (c ? 1 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 5;
-      }
-      case 0x36: {
-        uint16_t a = addr_zpx();
-        uint8_t  v = read8(a);
-        bool     c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>((v << 1) | (c ? 1 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x2E: {
-        uint16_t a = addr_abs();
-        uint8_t  v = read8(a);
-        bool     c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>((v << 1) | (c ? 1 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x3E: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = read8(a);
-        bool     c  = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x80) != 0);
-        v = static_cast<uint8_t>((v << 1) | (c ? 1 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 7;
-      }
 
       case 0x6A: {  // ROR A
         bool c = getFlag(FLAG_C);
@@ -2026,47 +1838,6 @@ namespace prodos8emu {
         m_r.a = static_cast<uint8_t>((m_r.a >> 1) | (c ? 0x80 : 0));
         setNZ(m_r.a);
         return 2;
-      }
-      case 0x66: {
-        uint16_t a = addr_zp();
-        uint8_t  v = read8(a);
-        bool     c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>((v >> 1) | (c ? 0x80 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 5;
-      }
-      case 0x76: {
-        uint16_t a = addr_zpx();
-        uint8_t  v = read8(a);
-        bool     c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>((v >> 1) | (c ? 0x80 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x6E: {
-        uint16_t a = addr_abs();
-        uint8_t  v = read8(a);
-        bool     c = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>((v >> 1) | (c ? 0x80 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 6;
-      }
-      case 0x7E: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = read8(a);
-        bool     c  = getFlag(FLAG_C);
-        setFlag(FLAG_C, (v & 0x01) != 0);
-        v = static_cast<uint8_t>((v >> 1) | (c ? 0x80 : 0));
-        write8(a, v);
-        setNZ(v);
-        return 7;
       }
 
       // BIT
