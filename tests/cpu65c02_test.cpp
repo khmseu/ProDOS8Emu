@@ -1527,6 +1527,146 @@ int main() {
     }
   }
 
+  // Test 19: trace_markers_emit_for_known_entry_points
+  {
+    std::cout << "Test 19: trace_markers_emit_for_known_entry_points\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    prodos8emu::write_u8(mem.banks(), 0x7800, 0xEA);
+    prodos8emu::write_u8(mem.banks(), 0x7816, 0xEA);
+    prodos8emu::write_u8(mem.banks(), 0x7C98, 0xEA);
+    prodos8emu::write_u8(mem.banks(), 0x0067, 0x12);
+    prodos8emu::write_u8(mem.banks(), 0x00BF, 0x34);
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, 0x7800);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    traceLog;
+    cpu.setTraceLog(&traceLog);
+    cpu.reset();
+
+    cpu.step();
+    cpu.regs().pc = 0x7816;
+    cpu.step();
+    cpu.regs().pc = 0x7C98;
+    cpu.step();
+
+    std::string traceText = traceLog.str();
+
+    if (traceText.find("PC=$7800 >>> ENTER EdAsm.Asm") == std::string::npos) {
+      std::cerr << "FAIL: Expected trace marker for PC=$7800 entry point\n";
+      failures++;
+    } else if (traceText.find("PC=$7816 >>> ENTER ExecAsm PassNbr(ZP$67)=$12 GenF(ZP$BF)=$34") ==
+               std::string::npos) {
+      std::cerr << "FAIL: Expected trace marker with PassNbr/GenF for PC=$7816\n";
+      failures++;
+    } else if (traceText.find("PC=$7C98 >>> PrtSetup") == std::string::npos) {
+      std::cerr << "FAIL: Expected trace marker for PC=$7C98\n";
+      failures++;
+    } else {
+      std::cout << "PASS: trace_markers_emit_for_known_entry_points\n";
+    }
+  }
+
+  // Test 20: passnbr_genf_listing_deltas_logged_consistently
+  {
+    std::cout << "Test 20: passnbr_genf_listing_deltas_logged_consistently\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = 0x0900;
+    writeProgram(mem, start,
+                 {
+                     0xA9,
+                     0x05,
+                     0x85,
+                     0x67,
+                     0xE6,
+                     0x67,
+                     0xA9,
+                     0xAA,
+                     0x85,
+                     0xBF,
+                     0xA9,
+                     0x01,
+                     0x85,
+                     0x68,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    traceLog;
+    cpu.setTraceLog(&traceLog);
+    cpu.reset();
+
+    for (int i = 0; i < 7; ++i) {
+      cpu.step();
+    }
+
+    std::string traceText = traceLog.str();
+
+    if (traceText.find("STA PassNbr($67): $00 -> $05") == std::string::npos) {
+      std::cerr << "FAIL: Expected STA PassNbr delta trace line\n";
+      failures++;
+    } else if (traceText.find("INC PassNbr($67): $05 -> $06") == std::string::npos) {
+      std::cerr << "FAIL: Expected INC PassNbr delta trace line\n";
+      failures++;
+    } else if (traceText.find("GenF($BF): $00 -> $AA") == std::string::npos) {
+      std::cerr << "FAIL: Expected GenF delta trace line\n";
+      failures++;
+    } else if (traceText.find("ListingF($68): $00 -> $01") == std::string::npos) {
+      std::cerr << "FAIL: Expected ListingF delta trace line\n";
+      failures++;
+    } else {
+      std::cout << "PASS: passnbr_genf_listing_deltas_logged_consistently\n";
+    }
+  }
+
+  // Test 21: trace_disabled_emits_no_trace_lines
+  {
+    std::cout << "Test 21: trace_disabled_emits_no_trace_lines\n";
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    prodos8emu::write_u8(mem.banks(), 0x7800, 0xEA);
+
+    const uint16_t start = 0x0920;
+    writeProgram(mem, start,
+                 {
+                     0xA9,
+                     0x01,
+                     0x85,
+                     0x67,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, 0x7800);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    traceLog;
+    cpu.setTraceLog(&traceLog);
+    cpu.setTraceLog(nullptr);
+    cpu.reset();
+
+    cpu.step();
+    cpu.regs().pc = start;
+    cpu.step();
+    cpu.step();
+
+    std::string traceText = traceLog.str();
+
+    if (!traceText.empty()) {
+      std::cerr << "FAIL: Expected no trace output when trace logging is disabled\n";
+      failures++;
+    } else {
+      std::cout << "PASS: trace_disabled_emits_no_trace_lines\n";
+    }
+  }
+
   fs::remove_all(tempDir);
 
   if (failures == 0) {

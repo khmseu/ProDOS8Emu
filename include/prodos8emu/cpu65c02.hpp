@@ -145,6 +145,19 @@ namespace prodos8emu {
     // Opcode-family helpers
     bool execute_control_flow_opcode(uint8_t op, uint32_t& cycles);
 
+    struct TraceFlagSnapshot {
+      uint8_t genf     = 0;
+      uint8_t listingf = 0;
+      uint8_t dsklistf = 0;
+      uint8_t passnbr  = 0;
+    };
+
+    void               log_step_trace_marker(uint16_t pc);
+    TraceFlagSnapshot  read_step_trace_flags();
+    static const char* passnbr67_mutator_name(uint8_t opcode);
+    void               log_step_trace_flag_deltas(uint8_t opcode, const TraceFlagSnapshot& oldFlags,
+                                                  const TraceFlagSnapshot& newFlags);
+
     // Execute opcode
     uint32_t execute(uint8_t opcode);
   };
