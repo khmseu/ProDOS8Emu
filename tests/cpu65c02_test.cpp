@@ -3423,6 +3423,389 @@ __attribute__((noinline)) static void run_accumulator_misc_helper_dispatch_equiv
   }
 }
 
+__attribute__((noinline)) static void run_bit_family_mode_metadata_equivalence_test(int& failures) {
+  std::cout << "Test 63: bit_family_mode_metadata_equivalence\n";
+
+  bool testFailed = false;
+
+  enum class BitFamilyModeRoute : uint8_t {
+    None,
+    BitImmediate,
+    BitZp,
+    BitAbs,
+    BitZpx,
+    BitAbsx,
+    TsbZp,
+    TsbAbs,
+    TrbZp,
+    TrbAbs,
+  };
+
+  struct BitFamilyMetadata {
+    uint8_t            opcode;
+    BitFamilyModeRoute route;
+    uint8_t            baseCycles;
+    bool               hasPageCrossPenalty;
+  };
+
+  static const BitFamilyMetadata metadataTable[] = {
+      {0x89, BitFamilyModeRoute::BitImmediate, 2, false},
+      {0x24, BitFamilyModeRoute::BitZp, 3, false},
+      {0x2C, BitFamilyModeRoute::BitAbs, 4, false},
+      {0x34, BitFamilyModeRoute::BitZpx, 4, false},
+      {0x3C, BitFamilyModeRoute::BitAbsx, 4, true},
+      {0x04, BitFamilyModeRoute::TsbZp, 5, false},
+      {0x0C, BitFamilyModeRoute::TsbAbs, 6, false},
+      {0x14, BitFamilyModeRoute::TrbZp, 5, false},
+      {0x1C, BitFamilyModeRoute::TrbAbs, 6, false},
+  };
+
+  const auto classifyLegacy = [](uint8_t op) -> BitFamilyModeRoute {
+    switch (op) {
+      case 0x89:
+        return BitFamilyModeRoute::BitImmediate;
+      case 0x24:
+        return BitFamilyModeRoute::BitZp;
+      case 0x2C:
+        return BitFamilyModeRoute::BitAbs;
+      case 0x34:
+        return BitFamilyModeRoute::BitZpx;
+      case 0x3C:
+        return BitFamilyModeRoute::BitAbsx;
+      case 0x04:
+        return BitFamilyModeRoute::TsbZp;
+      case 0x0C:
+        return BitFamilyModeRoute::TsbAbs;
+      case 0x14:
+        return BitFamilyModeRoute::TrbZp;
+      case 0x1C:
+        return BitFamilyModeRoute::TrbAbs;
+      default:
+        return BitFamilyModeRoute::None;
+    }
+  };
+
+  const auto findMetadata = [](uint8_t op) -> const BitFamilyMetadata* {
+    for (const BitFamilyMetadata& metadata : metadataTable) {
+      if (metadata.opcode == op) {
+        return &metadata;
+      }
+    }
+    return nullptr;
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t            op       = static_cast<uint8_t>(opValue);
+    const BitFamilyModeRoute legacy   = classifyLegacy(op);
+    const BitFamilyMetadata* metadata = findMetadata(op);
+    const BitFamilyModeRoute fromTable =
+        (metadata == nullptr) ? BitFamilyModeRoute::None : metadata->route;
+    if (legacy != fromTable) {
+      std::cerr << "FAIL: bit-family mode metadata classification mismatch for opcode=0x"
+                << std::hex << static_cast<int>(op) << std::dec
+                << " (legacy=" << static_cast<int>(legacy)
+                << ", metadata=" << static_cast<int>(fromTable) << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    const BitFamilyMetadata* bitAbsx = findMetadata(0x3C);
+    if (bitAbsx == nullptr || bitAbsx->baseCycles != 4 || !bitAbsx->hasPageCrossPenalty) {
+      std::cerr << "FAIL: BIT abs,X metadata contract mismatch for base cycle/page-cross policy\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x37C0;
+    prodos8emu::write_u8(mem->banks(), 0x0010, 0xCF);
+    prodos8emu::write_u8(mem->banks(), 0x2100, 0xCF);
+    prodos8emu::write_u8(mem->banks(), 0x2101, 0xF0);
+    writeProgram(*mem, start,
+                 {
+                     0x89,
+                     0x0F,
+                     0x24,
+                     0x10,
+                     0x3C,
+                     0xFF,
+                     0x20,
+                     0x0C,
+                     0x00,
+                     0x21,
+                     0x1C,
+                     0x01,
+                     0x21,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0x0F;
+    cpu.regs().x = 0x01;
+    cpu.regs().p = 0xE0;
+
+    uint32_t bitImmCycles = cpu.step();
+    bool     bitImmZ      = (cpu.regs().p & 0x02) != 0;
+    bool     bitImmN      = (cpu.regs().p & 0x80) != 0;
+    bool     bitImmV      = (cpu.regs().p & 0x40) != 0;
+
+    uint32_t bitZpCycles = cpu.step();
+    bool     bitZpZ      = (cpu.regs().p & 0x02) != 0;
+    bool     bitZpN      = (cpu.regs().p & 0x80) != 0;
+    bool     bitZpV      = (cpu.regs().p & 0x40) != 0;
+
+    uint32_t bitAbsxCycles = cpu.step();
+    bool     bitAbsxZ      = (cpu.regs().p & 0x02) != 0;
+    bool     bitAbsxN      = (cpu.regs().p & 0x80) != 0;
+    bool     bitAbsxV      = (cpu.regs().p & 0x40) != 0;
+
+    uint32_t tsbAbsCycles = cpu.step();
+    uint8_t  tsbAbsMem    = prodos8emu::read_u8(mem->constBanks(), 0x2100);
+    bool     tsbAbsZ      = (cpu.regs().p & 0x02) != 0;
+
+    uint32_t trbAbsCycles = cpu.step();
+    uint8_t  trbAbsMem    = prodos8emu::read_u8(mem->constBanks(), 0x2101);
+    bool     trbAbsZ      = (cpu.regs().p & 0x02) != 0;
+
+    if (bitImmCycles != 2 || bitImmZ || !bitImmN || !bitImmV || bitZpCycles != 3 || bitZpZ ||
+        !bitZpN || !bitZpV || bitAbsxCycles != 5 || bitAbsxZ || !bitAbsxN || !bitAbsxV ||
+        tsbAbsCycles != 6 || tsbAbsMem != 0xCF || tsbAbsZ || trbAbsCycles != 6 ||
+        trbAbsMem != 0xF0 || !trbAbsZ || cpu.regs().pc != static_cast<uint16_t>(start + 13)) {
+      std::cerr << "FAIL: bit-family metadata equivalence behavior contract mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: bit_family_mode_metadata_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_bit_opcode_shared_primitive_equivalence_test(
+    int& failures) {
+  std::cout << "Test 64: bit_opcode_shared_primitive_equivalence\n";
+
+  bool testFailed = false;
+
+  enum class BitOpcodeRoute : uint8_t {
+    None,
+    RmbSmb,
+    BbrBbs,
+  };
+
+  const auto classifyLegacy = [](uint8_t op) -> BitOpcodeRoute {
+    switch (op) {
+      case 0x07:
+      case 0x17:
+      case 0x27:
+      case 0x37:
+      case 0x47:
+      case 0x57:
+      case 0x67:
+      case 0x77:
+      case 0x87:
+      case 0x97:
+      case 0xA7:
+      case 0xB7:
+      case 0xC7:
+      case 0xD7:
+      case 0xE7:
+      case 0xF7:
+        return BitOpcodeRoute::RmbSmb;
+
+      case 0x0F:
+      case 0x1F:
+      case 0x2F:
+      case 0x3F:
+      case 0x4F:
+      case 0x5F:
+      case 0x6F:
+      case 0x7F:
+      case 0x8F:
+      case 0x9F:
+      case 0xAF:
+      case 0xBF:
+      case 0xCF:
+      case 0xDF:
+      case 0xEF:
+      case 0xFF:
+        return BitOpcodeRoute::BbrBbs;
+
+      default:
+        return BitOpcodeRoute::None;
+    }
+  };
+
+  const auto classifyPrimitive = [](uint8_t op) -> BitOpcodeRoute {
+    const uint8_t lowNibble = static_cast<uint8_t>(op & 0x0F);
+    if (lowNibble == 0x07) {
+      return BitOpcodeRoute::RmbSmb;
+    }
+    if (lowNibble == 0x0F) {
+      return BitOpcodeRoute::BbrBbs;
+    }
+    return BitOpcodeRoute::None;
+  };
+
+  const auto legacyBitIndex = [](uint8_t op) -> uint8_t {
+    switch (op) {
+      case 0x07:
+      case 0x87:
+      case 0x0F:
+      case 0x8F:
+        return 0;
+      case 0x17:
+      case 0x97:
+      case 0x1F:
+      case 0x9F:
+        return 1;
+      case 0x27:
+      case 0xA7:
+      case 0x2F:
+      case 0xAF:
+        return 2;
+      case 0x37:
+      case 0xB7:
+      case 0x3F:
+      case 0xBF:
+        return 3;
+      case 0x47:
+      case 0xC7:
+      case 0x4F:
+      case 0xCF:
+        return 4;
+      case 0x57:
+      case 0xD7:
+      case 0x5F:
+      case 0xDF:
+        return 5;
+      case 0x67:
+      case 0xE7:
+      case 0x6F:
+      case 0xEF:
+        return 6;
+      case 0x77:
+      case 0xF7:
+      case 0x7F:
+      case 0xFF:
+        return 7;
+      default:
+        return 0xFF;
+    }
+  };
+
+  const auto primitiveBitIndex = [](uint8_t op) -> uint8_t {
+    return static_cast<uint8_t>((op >> 4) & 0x07);
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t        op       = static_cast<uint8_t>(opValue);
+    const BitOpcodeRoute legacy   = classifyLegacy(op);
+    const BitOpcodeRoute expected = classifyPrimitive(op);
+    if (legacy != expected) {
+      std::cerr << "FAIL: shared bit primitive opcode family mismatch for opcode=0x" << std::hex
+                << static_cast<int>(op) << std::dec << " (legacy=" << static_cast<int>(legacy)
+                << ", primitive=" << static_cast<int>(expected) << ")\n";
+      failures++;
+      testFailed = true;
+      break;
+    }
+
+    if (legacy != BitOpcodeRoute::None) {
+      const uint8_t bitA = legacyBitIndex(op);
+      const uint8_t bitB = primitiveBitIndex(op);
+      if (bitA == 0xFF || bitA != bitB) {
+        std::cerr << "FAIL: shared bit primitive index mismatch for opcode=0x" << std::hex
+                  << static_cast<int>(op) << std::dec << " (legacy=" << static_cast<int>(bitA)
+                  << ", primitive=" << static_cast<int>(bitB) << ")\n";
+        failures++;
+        testFailed = true;
+        break;
+      }
+    }
+  }
+
+  for (uint8_t bit = 0; bit < 8 && !testFailed; ++bit) {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint8_t mask      = static_cast<uint8_t>(1u << bit);
+    const uint8_t rmbOpcode = static_cast<uint8_t>(0x07u + static_cast<uint8_t>(bit << 4));
+    const uint8_t smbOpcode = static_cast<uint8_t>(0x87u + static_cast<uint8_t>(bit << 4));
+    const uint8_t bbrOpcode = static_cast<uint8_t>(0x0Fu + static_cast<uint8_t>(bit << 4));
+    const uint8_t bbsOpcode = static_cast<uint8_t>(0x8Fu + static_cast<uint8_t>(bit << 4));
+
+    const uint8_t rmbAddr = static_cast<uint8_t>(0x20u + static_cast<uint8_t>(bit * 4u));
+    const uint8_t smbAddr = static_cast<uint8_t>(rmbAddr + 1u);
+    const uint8_t bbrAddr = static_cast<uint8_t>(rmbAddr + 2u);
+    const uint8_t bbsAddr = static_cast<uint8_t>(rmbAddr + 3u);
+
+    prodos8emu::write_u8(mem->banks(), rmbAddr, 0xFF);
+    prodos8emu::write_u8(mem->banks(), smbAddr, 0x00);
+    prodos8emu::write_u8(mem->banks(), bbrAddr, static_cast<uint8_t>(0xFFu ^ mask));
+    prodos8emu::write_u8(mem->banks(), bbsAddr, mask);
+
+    const uint16_t start = static_cast<uint16_t>(0x3820u + static_cast<uint16_t>(bit) * 0x20u);
+    writeProgram(*mem, start,
+                 {
+                     rmbOpcode,
+                     rmbAddr,
+                     smbOpcode,
+                     smbAddr,
+                     bbrOpcode,
+                     bbrAddr,
+                     0x02,
+                     0xEA,
+                     0xEA,
+                     bbsOpcode,
+                     bbsAddr,
+                     0x02,
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0xA4;
+
+    const uint32_t rmbCycles = cpu.step();
+    const uint8_t  rmbMem    = prodos8emu::read_u8(mem->constBanks(), rmbAddr);
+
+    const uint32_t smbCycles = cpu.step();
+    const uint8_t  smbMem    = prodos8emu::read_u8(mem->constBanks(), smbAddr);
+
+    const uint32_t bbrCycles = cpu.step();
+    const uint16_t bbrPc     = cpu.regs().pc;
+
+    const uint32_t bbsCycles = cpu.step();
+    const uint16_t bbsPc     = cpu.regs().pc;
+
+    if (rmbCycles != 5 || rmbMem != static_cast<uint8_t>(0xFFu ^ mask) || smbCycles != 5 ||
+        smbMem != mask || bbrCycles != 5 || bbrPc != static_cast<uint16_t>(start + 9) ||
+        bbsCycles != 5 || bbsPc != static_cast<uint16_t>(start + 14) || cpu.regs().p != 0xA4) {
+      std::cerr << "FAIL: shared bit primitive runtime contract mismatch for bit="
+                << static_cast<int>(bit) << "\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: bit_opcode_shared_primitive_equivalence\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -8396,6 +8779,8 @@ int main() {
   run_rmb_smb_bbr_bbs_full_bit_matrix_contracts_test(failures);
   run_flag_transfer_stack_helper_dispatch_equivalence_test(failures);
   run_accumulator_misc_helper_dispatch_equivalence_test(failures);
+  run_bit_family_mode_metadata_equivalence_test(failures);
+  run_bit_opcode_shared_primitive_equivalence_test(failures);
 
   fs::remove_all(tempDir);
 

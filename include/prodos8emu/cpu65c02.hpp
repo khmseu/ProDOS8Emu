@@ -145,36 +145,50 @@ namespace prodos8emu {
     uint32_t jsr_abs(uint16_t target);
 
     // Opcode-family helpers
-    bool     execute_control_flow_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_control_flow_branch_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_control_flow_jump_return_opcode(uint8_t op, uint32_t& cycles);
-    void     emit_cout_char(uint8_t ch);
-    bool     execute_flag_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_transfer_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_stack_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_accumulator_inc_dec_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_accumulator_shift_rotate_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_accumulator_misc_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_load_store_load_immediate_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_load_store_load_read_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_load_store_load_page_cross_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_load_store_store_direct_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_load_store_store_indexed_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_load_store_store_zero_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_load_store_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_bit_family_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_nop_variant_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_misc_tail_opcode(uint8_t op, uint32_t& cycles);
-    bool     execute_compare_xy_opcode(uint8_t op, uint32_t& cycles);
-    uint32_t execute_rmb_smb_opcode(uint8_t op);
-    uint32_t execute_bbr_bbs_opcode(uint8_t op);
-    uint32_t execute_fallback_router_opcode(uint8_t op);
-    bool     read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles);
-    uint32_t execute_alu_family_opcode(uint8_t op);
-    bool     read_rmw_target_for_mode(uint8_t mode, uint16_t& addr, uint32_t& cycles);
-    uint8_t  apply_rmw_family_op(uint8_t op, uint8_t value);
-    uint32_t execute_rmw_family_opcode(uint8_t op);
+    bool execute_control_flow_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_control_flow_branch_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_control_flow_jump_return_opcode(uint8_t op, uint32_t& cycles);
+    void emit_cout_char(uint8_t ch);
+    bool execute_flag_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_transfer_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_stack_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_flag_transfer_stack_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_accumulator_inc_dec_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_accumulator_shift_rotate_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_accumulator_misc_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_load_store_load_immediate_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_load_store_load_read_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_load_store_load_page_cross_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_load_store_store_direct_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_load_store_store_indexed_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_load_store_store_zero_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_load_store_opcode(uint8_t op, uint32_t& cycles);
+    enum class BitFamilyMode : uint8_t {
+      Immediate,
+      Zp,
+      Abs,
+      Zpx,
+      Absx,
+    };
+    bool read_bit_operand_for_mode(BitFamilyMode mode, uint8_t& operand, uint32_t& cycles);
+    bool read_bit_modify_target_for_mode(BitFamilyMode mode, uint16_t& addr, uint32_t& cycles);
+    void apply_bit_test_flags(uint8_t operand, bool updateNV);
+    bool execute_bit_family_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_nop_variant_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_misc_tail_opcode(uint8_t op, uint32_t& cycles);
+    bool execute_compare_xy_opcode(uint8_t op, uint32_t& cycles);
+    static uint8_t bit_index_from_opcode(uint8_t op);
+    static uint8_t bit_mask_for_index(uint8_t bitIndex);
+    static uint8_t apply_rmb_smb_bit(uint8_t value, uint8_t bitIndex, bool setBit);
+    static bool    test_bit_index(uint8_t value, uint8_t bitIndex);
+    uint32_t       execute_rmb_smb_opcode(uint8_t op);
+    uint32_t       execute_bbr_bbs_opcode(uint8_t op);
+    uint32_t       execute_fallback_router_opcode(uint8_t op);
+    bool           read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles);
+    uint32_t       execute_alu_family_opcode(uint8_t op);
+    bool           read_rmw_target_for_mode(uint8_t mode, uint16_t& addr, uint32_t& cycles);
+    uint8_t        apply_rmw_family_op(uint8_t op, uint8_t value);
+    uint32_t       execute_rmw_family_opcode(uint8_t op);
 
     struct TraceFlagSnapshot {
       uint8_t genf     = 0;

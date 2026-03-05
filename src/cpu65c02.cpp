@@ -30,6 +30,65 @@ namespace prodos8emu {
       uint8_t        cycles;
     };
 
+    enum class BitFamilyKind : uint8_t {
+      Bit,
+      Tsb,
+      Trb,
+    };
+
+    enum class BitFamilyModeMeta : uint8_t {
+      Immediate,
+      Zp,
+      Abs,
+      Zpx,
+      Absx,
+    };
+
+    struct BitFamilyMetadata {
+      uint8_t           opcode;
+      BitFamilyKind     kind;
+      BitFamilyModeMeta mode;
+      bool              updateNV;
+    };
+
+    static constexpr BitFamilyMetadata kBitFamilyTable[] = {
+        {0x89, BitFamilyKind::Bit, BitFamilyModeMeta::Immediate, false},
+        {0x24, BitFamilyKind::Bit, BitFamilyModeMeta::Zp, true},
+        {0x2C, BitFamilyKind::Bit, BitFamilyModeMeta::Abs, true},
+        {0x34, BitFamilyKind::Bit, BitFamilyModeMeta::Zpx, true},
+        {0x3C, BitFamilyKind::Bit, BitFamilyModeMeta::Absx, true},
+        {0x04, BitFamilyKind::Tsb, BitFamilyModeMeta::Zp, false},
+        {0x0C, BitFamilyKind::Tsb, BitFamilyModeMeta::Abs, false},
+        {0x14, BitFamilyKind::Trb, BitFamilyModeMeta::Zp, false},
+        {0x1C, BitFamilyKind::Trb, BitFamilyModeMeta::Abs, false},
+    };
+
+    const BitFamilyMetadata* find_bit_family_metadata(uint8_t opcode) {
+      for (const BitFamilyMetadata& metadata : kBitFamilyTable) {
+        if (metadata.opcode == opcode) {
+          return &metadata;
+        }
+      }
+      return nullptr;
+    }
+
+    enum class BitOpcodeFamily : uint8_t {
+      None,
+      RmbSmb,
+      BbrBbs,
+    };
+
+    BitOpcodeFamily classify_bit_opcode_family(uint8_t opcode) {
+      const uint8_t lowNibble = static_cast<uint8_t>(opcode & 0x0F);
+      if (lowNibble == 0x07) {
+        return BitOpcodeFamily::RmbSmb;
+      }
+      if (lowNibble == 0x0F) {
+        return BitOpcodeFamily::BbrBbs;
+      }
+      return BitOpcodeFamily::None;
+    }
+
     static constexpr NopVariantMetadata kNopVariantTable[] = {
         // 1-byte, 1-cycle NOPs (no operand)
         {0x03, NopVariantMode::Implied, 1},
@@ -1786,66 +1845,112 @@ namespace prodos8emu {
     return false;
   }
 
+  bool CPU65C02::read_bit_operand_for_mode(BitFamilyMode mode, uint8_t& operand, uint32_t& cycles) {
+    switch (mode) {
+      case BitFamilyMode::Immediate:
+        operand = fetch8();
+        cycles  = 2;
+        return true;
+      case BitFamilyMode::Zp:
+        operand = read8(addr_zp());
+        cycles  = 3;
+        return true;
+      case BitFamilyMode::Abs:
+        operand = read8(addr_abs());
+        cycles  = 4;
+        return true;
+      case BitFamilyMode::Zpx:
+        operand = read8(addr_zpx());
+        cycles  = 4;
+        return true;
+      case BitFamilyMode::Absx: {
+        bool     pageCrossed = false;
+        uint16_t addr        = addr_absx(pageCrossed);
+        operand              = read8_pageCrossed(addr, pageCrossed);
+        cycles               = static_cast<uint32_t>(4 + (pageCrossed ? 1 : 0));
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  bool CPU65C02::read_bit_modify_target_for_mode(BitFamilyMode mode, uint16_t& addr,
+                                                 uint32_t& cycles) {
+    switch (mode) {
+      case BitFamilyMode::Zp:
+        addr   = addr_zp();
+        cycles = 5;
+        return true;
+      case BitFamilyMode::Abs:
+        addr   = addr_abs();
+        cycles = 6;
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  void CPU65C02::apply_bit_test_flags(uint8_t operand, bool updateNV) {
+    setFlag(FLAG_Z, (m_r.a & operand) == 0);
+    if (updateNV) {
+      setFlag(FLAG_N, (operand & 0x80) != 0);
+      setFlag(FLAG_V, (operand & 0x40) != 0);
+    }
+  }
+
   bool CPU65C02::execute_bit_family_opcode(uint8_t op, uint32_t& cycles) {
-    switch (op) {
-      case 0x89: {  // BIT #imm (65C02)
-        uint8_t v = fetch8();
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        cycles = 2;
-        return true;
-      }
-      case 0x24: {
-        uint8_t v = read8(addr_zp());
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        cycles = 3;
-        return true;
-      }
-      case 0x2C: {
-        uint8_t v = read8(addr_abs());
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        cycles = 4;
-        return true;
-      }
-      case 0x34: {
-        uint8_t v = read8(addr_zpx());
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        cycles = 4;
-        return true;
-      }
-      case 0x3C: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        uint8_t  v  = read8_pageCrossed(a, pc);
-        setFlag(FLAG_Z, (m_r.a & v) == 0);
-        setFlag(FLAG_N, (v & 0x80) != 0);
-        setFlag(FLAG_V, (v & 0x40) != 0);
-        cycles = static_cast<uint32_t>(4 + (pc ? 1 : 0));
+    const BitFamilyMetadata* metadata = find_bit_family_metadata(op);
+    if (metadata == nullptr) {
+      return false;
+    }
+
+    BitFamilyMode mode = BitFamilyMode::Immediate;
+    switch (metadata->mode) {
+      case BitFamilyModeMeta::Immediate:
+        mode = BitFamilyMode::Immediate;
+        break;
+      case BitFamilyModeMeta::Zp:
+        mode = BitFamilyMode::Zp;
+        break;
+      case BitFamilyModeMeta::Abs:
+        mode = BitFamilyMode::Abs;
+        break;
+      case BitFamilyModeMeta::Zpx:
+        mode = BitFamilyMode::Zpx;
+        break;
+      case BitFamilyModeMeta::Absx:
+        mode = BitFamilyMode::Absx;
+        break;
+    }
+
+    switch (metadata->kind) {
+      case BitFamilyKind::Bit: {
+        uint8_t  operand     = 0;
+        uint32_t bitOpCycles = 0;
+        if (!read_bit_operand_for_mode(mode, operand, bitOpCycles)) {
+          return false;
+        }
+        apply_bit_test_flags(operand, metadata->updateNV);
+        cycles = bitOpCycles;
         return true;
       }
 
-      // TSB/TRB
-      case 0x04:
-        tsb(addr_zp());
-        cycles = 5;
+      case BitFamilyKind::Tsb:
+      case BitFamilyKind::Trb: {
+        uint16_t addr        = 0;
+        uint32_t bitOpCycles = 0;
+        if (!read_bit_modify_target_for_mode(mode, addr, bitOpCycles)) {
+          return false;
+        }
+        if (metadata->kind == BitFamilyKind::Tsb) {
+          tsb(addr);
+        } else {
+          trb(addr);
+        }
+        cycles = bitOpCycles;
         return true;
-      case 0x0C:
-        tsb(addr_abs());
-        cycles = 6;
-        return true;
-      case 0x14:
-        trb(addr_zp());
-        cycles = 5;
-        return true;
-      case 0x1C:
-        trb(addr_abs());
-        cycles = 6;
-        return true;
+      }
 
       default:
         return false;
@@ -2101,35 +2206,52 @@ namespace prodos8emu {
     return cycles;
   }
 
+  uint8_t CPU65C02::bit_index_from_opcode(uint8_t op) {
+    return static_cast<uint8_t>((op >> 4) & 0x07);
+  }
+
+  uint8_t CPU65C02::bit_mask_for_index(uint8_t bitIndex) {
+    return static_cast<uint8_t>(1u << bitIndex);
+  }
+
+  uint8_t CPU65C02::apply_rmb_smb_bit(uint8_t value, uint8_t bitIndex, bool setBit) {
+    const uint8_t mask = bit_mask_for_index(bitIndex);
+    if (setBit) {
+      return static_cast<uint8_t>(value | mask);
+    }
+    return static_cast<uint8_t>(value & static_cast<uint8_t>(~mask));
+  }
+
+  bool CPU65C02::test_bit_index(uint8_t value, uint8_t bitIndex) {
+    return (value & bit_mask_for_index(bitIndex)) != 0;
+  }
+
   uint32_t CPU65C02::execute_rmb_smb_opcode(uint8_t op) {
-    if ((op & 0x0F) != 0x07) {
+    if (classify_bit_opcode_family(op) != BitOpcodeFamily::RmbSmb) {
       return 0;
     }
 
-    uint8_t bit = static_cast<uint8_t>((op >> 4) & 0x07);
-    uint8_t zp  = fetch8();
-    uint8_t m   = read8(zp);
-    if ((op & 0x80) != 0) {
-      m = static_cast<uint8_t>(m | static_cast<uint8_t>(1u << bit));
-    } else {
-      m = static_cast<uint8_t>(m & static_cast<uint8_t>(~static_cast<uint8_t>(1u << bit)));
-    }
+    const uint8_t bit    = bit_index_from_opcode(op);
+    const bool    setBit = (op & 0x80) != 0;
+    uint8_t       zp     = fetch8();
+    uint8_t       m      = read8(zp);
+    m                    = apply_rmb_smb_bit(m, bit, setBit);
     write8(zp, m);
     return 5;
   }
 
   uint32_t CPU65C02::execute_bbr_bbs_opcode(uint8_t op) {
-    if ((op & 0x0F) != 0x0F) {
+    if (classify_bit_opcode_family(op) != BitOpcodeFamily::BbrBbs) {
       return 0;
     }
 
-    uint8_t bit   = static_cast<uint8_t>((op >> 4) & 0x07);
-    bool    isBBS = (op & 0x80) != 0;
-    uint8_t zp    = fetch8();
-    int8_t  rel   = static_cast<int8_t>(fetch8());
+    const uint8_t bit   = bit_index_from_opcode(op);
+    const bool    isBBS = (op & 0x80) != 0;
+    uint8_t       zp    = fetch8();
+    int8_t        rel   = static_cast<int8_t>(fetch8());
 
     uint8_t m      = read8(zp);
-    bool    bitSet = (m & static_cast<uint8_t>(1u << bit)) != 0;
+    bool    bitSet = test_bit_index(m, bit);
     bool    take   = isBBS ? bitSet : !bitSet;
     if (take) {
       uint16_t from        = m_r.pc;
