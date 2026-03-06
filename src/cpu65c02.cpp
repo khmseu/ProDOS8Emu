@@ -395,6 +395,8 @@ namespace prodos8emu {
         {0xA7, "SavLstF"},
         {0xAE, "EndianF"},
         {0xBF, "GenF"},
+  {0xD0, "RLDEnd"},
+  {0xD1, "RLDEnd+1"},
         {0xE0, "LstCyc"},
         {0xE1, "LstUnAsm"},
         {0xE2, "LstExpMac"},
@@ -2629,21 +2631,21 @@ namespace prodos8emu {
     static const MarkerMetadata kMarkerTable[] = {
         {0x7800, ">>> ENTER EdAsm.Asm", MarkerPayload::None},
         {0x7816, ">>> ENTER ExecAsm", MarkerPayload::PassNbrAndGenF},
-        {0x7E30, ">>> ENTER DoPass1", MarkerPayload::PassNbrAndGenF},
-        {0x7F0F, ">>> ENTER DoPass2", MarkerPayload::PassNbrAndGenF},
-        {0xD000, ">>> ENTER DoPass3", MarkerPayload::PassNbrAndGenF},
-        {0x7E45, ">>> FlushObj", MarkerPayload::GenFOnly},
-        {0x99DF, ">>> L99DF (flush obj code)", MarkerPayload::GenFOnly},
-        {0x8A82, ">>> ORG directive", MarkerPayload::PassNbrAndGenF},
-        {0x8A9A, ">>> ORG GenF check", MarkerPayload::GenFOnly},
-        {0x8AAE, ">>> ORG open file path", MarkerPayload::GenFOnly},
-        {0x9918, ">>> Open4RW", MarkerPayload::None},
         {0x7C98, ">>> PrtSetup", MarkerPayload::None},
         {0x7D07, ">>> ParseDCS", MarkerPayload::None},
         {0x7D2E, ">>> IsFileLst", MarkerPayload::None},
         {0x7D3A, ">>> Lst2File", MarkerPayload::None},
+        {0x7E30, ">>> ENTER DoPass1", MarkerPayload::PassNbrAndGenF},
+        {0x7E45, ">>> FlushObj", MarkerPayload::GenFOnly},
+        {0x7F0F, ">>> ENTER DoPass2", MarkerPayload::PassNbrAndGenF},
+        {0x8A82, ">>> ORG directive", MarkerPayload::PassNbrAndGenF},
+        {0x8A9A, ">>> ORG GenF check", MarkerPayload::GenFOnly},
+        {0x8AAE, ">>> ORG open file path", MarkerPayload::GenFOnly},
+        {0x9918, ">>> Open4RW", MarkerPayload::None},
+        {0x99DF, ">>> L99DF (flush obj code)", MarkerPayload::GenFOnly},
         {0xA70B, ">>> XA70B (get user cmd)", MarkerPayload::None},
         {0xB6E6, ">>> DoAsmbly (prep for ASM)", MarkerPayload::None},
+        {0xD000, ">>> ENTER DoPass3", MarkerPayload::PassNbrAndGenF},
     };
 
     const MarkerMetadata* marker = nullptr;
@@ -2653,6 +2655,13 @@ namespace prodos8emu {
         break;
       }
     }
+    // MarkerMetadata        vicinityMarker = {};
+    // if (marker == nullptr) {
+    //   if (pc > 0x7D2E - 0x100 && pc < 0x7D2E + 0x100) {
+    //     vicinityMarker = MarkerMetadata{pc, ">>> IsFileLst vicinity", MarkerPayload::None};
+    //     marker         = &vicinityMarker;
+    //   }
+    // }
     if (marker == nullptr) {
       return;
     }
