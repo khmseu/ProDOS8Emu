@@ -134,6 +134,7 @@ namespace prodos8emu {
 
     // Branch helper
     void branch(bool cond);
+    void apply_relative_branch_offset(int8_t rel);
 
     // Record explicit PC change in ring buffer
     void     recordPCChange(uint16_t fromPC, uint16_t toPC);

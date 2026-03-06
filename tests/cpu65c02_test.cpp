@@ -4435,6 +4435,154 @@ __attribute__((noinline)) static void run_trace_dsklistf_delta_logged_consistent
   }
 }
 
+__attribute__((noinline)) static void run_relative_branch_apply_helper_equivalence_test(
+    int& failures) {
+  std::cout << "Test 71: relative_branch_apply_helper_equivalence\n";
+
+  bool testFailed = false;
+
+  struct Scenario {
+    const char* name;
+    int8_t      rel;
+    bool        taken;
+    uint16_t    expectedPC;
+    const char* expectedEdge;
+  };
+
+  static const Scenario scenarios[] = {
+      {"taken_no_page_cross", static_cast<int8_t>(0xFF), true, 0x20FE, "$20FF->$20FE"},
+      {"taken_page_cross", 0x01, true, 0x2100, "$20FF->$2100"},
+      {"not_taken", 0x01, false, 0x20FF, nullptr},
+  };
+
+  struct RunResult {
+    uint32_t    cycles;
+    uint16_t    pc;
+    uint8_t     p;
+    std::string dbg;
+  };
+
+  const auto runBranchCase = [](const Scenario& scenario) -> RunResult {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x20FD;
+    writeProgram(*mem, start,
+                 {
+                     0xD0,
+                     static_cast<uint8_t>(scenario.rel),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    uint8_t startP = 0x24;
+    if (scenario.taken) {
+      startP = static_cast<uint8_t>(startP & static_cast<uint8_t>(~0x02));
+    } else {
+      startP = static_cast<uint8_t>(startP | 0x02);
+    }
+    cpu.regs().p = startP;
+
+    const uint32_t    cycles = cpu.step();
+    std::stringstream dbg;
+    cpu.dumpDebugInfo(dbg);
+
+    return {
+        cycles,
+        cpu.regs().pc,
+        cpu.regs().p,
+        dbg.str(),
+    };
+  };
+
+  const auto runBbrCase = [](const Scenario& scenario) -> RunResult {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x20FC;
+    const uint8_t  zp    = 0x40;
+    prodos8emu::write_u8(mem->banks(), zp, scenario.taken ? 0x00 : 0x01);
+    writeProgram(*mem, start,
+                 {
+                     0x0F,
+                     zp,
+                     static_cast<uint8_t>(scenario.rel),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+
+    const uint8_t startP = 0xA4;
+    cpu.regs().p         = startP;
+
+    const uint32_t    cycles = cpu.step();
+    std::stringstream dbg;
+    cpu.dumpDebugInfo(dbg);
+
+    return {
+        cycles,
+        cpu.regs().pc,
+        cpu.regs().p,
+        dbg.str(),
+    };
+  };
+
+  for (size_t i = 0; i < (sizeof(scenarios) / sizeof(scenarios[0])) && !testFailed; ++i) {
+    const Scenario& scenario = scenarios[i];
+
+    const RunResult branchResult = runBranchCase(scenario);
+    const RunResult bbrResult    = runBbrCase(scenario);
+
+    if (branchResult.cycles != 2) {
+      std::cerr << "FAIL: branch helper equivalence branch cycle mismatch for " << scenario.name
+                << "\n";
+      failures++;
+      testFailed = true;
+    } else if (bbrResult.cycles != 5) {
+      std::cerr << "FAIL: branch helper equivalence BBR cycle mismatch for " << scenario.name
+                << "\n";
+      failures++;
+      testFailed = true;
+    } else if (branchResult.pc != scenario.expectedPC || bbrResult.pc != scenario.expectedPC) {
+      std::cerr << "FAIL: branch helper equivalence relative target mismatch for " << scenario.name
+                << "\n";
+      failures++;
+      testFailed = true;
+    } else if (branchResult.p != static_cast<uint8_t>(scenario.taken ? 0x24 : 0x26) ||
+               bbrResult.p != 0xA4) {
+      std::cerr << "FAIL: branch helper equivalence flag preservation mismatch for "
+                << scenario.name << "\n";
+      failures++;
+      testFailed = true;
+    } else if (scenario.expectedEdge != nullptr &&
+               (branchResult.dbg.find(scenario.expectedEdge) == std::string::npos ||
+                bbrResult.dbg.find(scenario.expectedEdge) == std::string::npos)) {
+      std::cerr << "FAIL: branch helper equivalence expected PC-change edge missing for "
+                << scenario.name << "\n";
+      failures++;
+      testFailed = true;
+    } else if (scenario.expectedEdge == nullptr &&
+               (branchResult.dbg.find("$20FF->$") != std::string::npos ||
+                bbrResult.dbg.find("$20FF->$") != std::string::npos)) {
+      std::cerr << "FAIL: branch helper equivalence unexpected PC-change edge recorded for "
+                << scenario.name << "\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: relative_branch_apply_helper_equivalence\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -9416,6 +9564,7 @@ int main() {
   run_control_flow_branch_decode_table_equivalence_test(failures);
   run_mli_error_path_logging_order_stable_test(failures);
   run_trace_dsklistf_delta_logged_consistently_test(failures);
+  run_relative_branch_apply_helper_equivalence_test(failures);
 
   fs::remove_all(tempDir);
 

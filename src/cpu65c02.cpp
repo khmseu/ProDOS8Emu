@@ -1206,20 +1206,23 @@ namespace prodos8emu {
     write8(addr, static_cast<uint8_t>(m & static_cast<uint8_t>(~m_r.a)));
   }
 
-  void CPU65C02::branch(bool cond) {
-    int8_t rel = rel8();
-    if (!cond) {
-      return;
-    }
-    uint16_t from        = m_r.pc;
-    uint16_t to          = static_cast<uint16_t>(from + rel);
-    bool     pageCrossed = (from & 0xFF00) != (to & 0xFF00);
+  void CPU65C02::apply_relative_branch_offset(int8_t rel) {
+    const uint16_t from        = m_r.pc;
+    const uint16_t to          = static_cast<uint16_t>(from + rel);
+    const bool     pageCrossed = (from & 0xFF00) != (to & 0xFF00);
     if (pageCrossed) {
       // Model the 65C02 page-cross extra read.
       dummyReadLastInstructionByte();
     }
-    m_r.pc = to;
-    recordPCChange(from, to);
+    apply_control_flow_pc_change(from, to);
+  }
+
+  void CPU65C02::branch(bool cond) {
+    const int8_t rel = rel8();
+    if (!cond) {
+      return;
+    }
+    apply_relative_branch_offset(rel);
   }
 
   uint32_t CPU65C02::handle_mli_jsr_trap() {
@@ -2419,14 +2422,7 @@ namespace prodos8emu {
     bool    bitSet = test_bit_index(m, bit);
     bool    take   = isBBS ? bitSet : !bitSet;
     if (take) {
-      uint16_t from        = m_r.pc;
-      uint16_t to          = static_cast<uint16_t>(from + rel);
-      bool     pageCrossed = (from & 0xFF00) != (to & 0xFF00);
-      if (pageCrossed) {
-        dummyReadLastInstructionByte();
-      }
-      m_r.pc = to;
-      recordPCChange(from, to);
+      apply_relative_branch_offset(rel);
     }
     return 5;
   }
