@@ -4851,6 +4851,214 @@ __attribute__((noinline)) static void run_trace_flag_delta_output_equivalence_te
   }
 }
 
+__attribute__((noinline)) static void run_zp_monitor_trigger_matrix_contracts_test(int& failures) {
+  std::cout << "Test 76: zp_monitor_trigger_matrix_contracts\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x3C00;
+  writeProgram(mem, start,
+               {
+                   0xA9, 0x12, 0x85, 0xBF, 0x64, 0xBF, 0xE6, 0xBF, 0x07, 0xBF, 0xF7,
+                   0xBF, 0xA9, 0x40, 0x04, 0xBF, 0xA9, 0x80, 0x14, 0xBF, 0xEA,
+               });
+  prodos8emu::write_u8(mem.banks(), 0x00BF, 0x5A);
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  for (int i = 0; i < 11; ++i) {
+    cpu.step();
+  }
+
+  struct ExpectedLine {
+    const char* family;
+    const char* text;
+  };
+
+  static const ExpectedLine kExpected[] = {
+      {"store", "GenF($BF): $5A -> $12"}, {"stz", "GenF($BF): $12 -> $00"},
+      {"rmw", "GenF($BF): $00 -> $01"},   {"rmb", "GenF($BF): $01 -> $00"},
+      {"smb", "GenF($BF): $00 -> $80"},   {"tsb", "GenF($BF): $80 -> $C0"},
+      {"trb", "GenF($BF): $C0 -> $40"},
+  };
+
+  const std::string traceText = traceLog.str();
+  size_t            searchPos = 0;
+  for (size_t i = 0; i < (sizeof(kExpected) / sizeof(kExpected[0])); ++i) {
+    const size_t found = traceText.find(kExpected[i].text, searchPos);
+    if (found == std::string::npos) {
+      std::cerr << "FAIL: Missing zero-page monitor trigger for family=" << kExpected[i].family
+                << " expected line fragment='" << kExpected[i].text << "'\n";
+      failures++;
+      return;
+    }
+    searchPos = found + std::string(kExpected[i].text).size();
+  }
+
+  size_t lineCount = 0;
+  for (size_t pos = traceText.find("GenF($BF):"); pos != std::string::npos;
+       pos        = traceText.find("GenF($BF):", pos + 1)) {
+    lineCount++;
+  }
+
+  if (lineCount != 7) {
+    std::cerr << "FAIL: Expected exactly 7 GenF monitor delta lines for write-family matrix, got "
+              << lineCount << "\n"
+              << traceText << "\n";
+    failures++;
+  } else if (prodos8emu::read_u8(mem.constBanks(), 0x00BF) != 0x40) {
+    std::cerr << "FAIL: Expected final GenF($BF) value $40 after trigger matrix sequence\n";
+    failures++;
+  } else {
+    std::cout << "PASS: zp_monitor_trigger_matrix_contracts\n";
+  }
+}
+
+__attribute__((noinline)) static void run_zp_monitor_all_writes_uniform_policy_contracts_test(
+    int& failures) {
+  std::cout << "Test 77: zp_monitor_all_writes_uniform_policy_contracts\n";
+
+  struct FieldCase {
+    const char* name;
+    uint8_t     addr;
+    const char* label;
+  };
+
+  static const FieldCase kFields[] = {
+      {"GenF", 0xBF, "GenF($BF)"},
+      {"ListingF", 0x68, "ListingF($68)"},
+      {"DskListF", 0x90, "DskListF($90)"},
+  };
+
+  static const uint8_t kOldValues[] = {0x5A, 0x12, 0x00, 0x01, 0x00, 0x80, 0xC0};
+  static const uint8_t kNewValues[] = {0x12, 0x00, 0x01, 0x00, 0x80, 0xC0, 0x40};
+
+  const auto hexByte = [](uint8_t v) {
+    static const char* kHex = "0123456789ABCDEF";
+    std::string        out;
+    out.push_back('$');
+    out.push_back(kHex[(v >> 4) & 0x0F]);
+    out.push_back(kHex[v & 0x0F]);
+    return out;
+  };
+
+  for (size_t fieldIndex = 0; fieldIndex < (sizeof(kFields) / sizeof(kFields[0])); ++fieldIndex) {
+    const FieldCase& field = kFields[fieldIndex];
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = static_cast<uint16_t>(0x3C20 + (fieldIndex * 0x20));
+    writeProgram(mem, start,
+                 {
+                     0xA9,       0x12,       0x85,       field.addr, 0x64,       field.addr, 0xE6,
+                     field.addr, 0x07,       field.addr, 0xF7,       field.addr, 0xA9,       0x40,
+                     0x04,       field.addr, 0xA9,       0x80,       0x14,       field.addr, 0xEA,
+                 });
+    prodos8emu::write_u8(mem.banks(), field.addr, 0x5A);
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    traceLog;
+    cpu.setTraceLog(&traceLog);
+    cpu.reset();
+
+    for (int i = 0; i < 11; ++i) {
+      cpu.step();
+    }
+
+    const std::string traceText = traceLog.str();
+
+    size_t searchPos = 0;
+    for (size_t i = 0; i < (sizeof(kOldValues) / sizeof(kOldValues[0])); ++i) {
+      const std::string expected = std::string(field.label) + ": " + hexByte(kOldValues[i]) +
+                                   " -> " + hexByte(kNewValues[i]);
+      const size_t found = traceText.find(expected, searchPos);
+      if (found == std::string::npos) {
+        std::cerr << "FAIL: Missing uniform all-write monitor transition for field=" << field.name
+                  << " expected fragment='" << expected << "'\n";
+        failures++;
+        return;
+      }
+      searchPos = found + expected.size();
+    }
+
+    const std::string labelPrefix = std::string(field.label) + ":";
+    size_t            lineCount   = 0;
+    for (size_t pos = traceText.find(labelPrefix); pos != std::string::npos;
+         pos        = traceText.find(labelPrefix, pos + 1)) {
+      lineCount++;
+    }
+
+    if (lineCount != 7) {
+      std::cerr << "FAIL: Expected exactly 7 monitor lines for field=" << field.name << ", got "
+                << lineCount << "\n"
+                << traceText << "\n";
+      failures++;
+      return;
+    }
+  }
+
+  std::cout << "PASS: zp_monitor_all_writes_uniform_policy_contracts\n";
+}
+
+__attribute__((noinline)) static void run_zp_monitor_trace_output_compatibility_baseline_test(
+    int& failures) {
+  std::cout << "Test 78: zp_monitor_trace_output_compatibility_baseline\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x3D00;
+  writeProgram(mem, start,
+               {
+                   0xA9, 0x12, 0x85, 0xBF, 0x64, 0xBF, 0xE6, 0xBF, 0x07, 0xBF, 0xF7,
+                   0xBF, 0xA9, 0x40, 0x04, 0xBF, 0xA9, 0x80, 0x14, 0xBF, 0xEA,
+               });
+  prodos8emu::write_u8(mem.banks(), 0x00BF, 0x5A);
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  for (int i = 0; i < 11; ++i) {
+    cpu.step();
+  }
+
+  const std::string expected =
+      "@2 PC=$3D04 GenF($BF): $5A -> $12\n"
+      "@3 PC=$3D06 GenF($BF): $12 -> $00\n"
+      "@4 PC=$3D08 GenF($BF): $00 -> $01\n"
+      "@5 PC=$3D0A GenF($BF): $01 -> $00\n"
+      "@6 PC=$3D0C GenF($BF): $00 -> $80\n"
+      "@8 PC=$3D10 GenF($BF): $80 -> $C0\n"
+      "@10 PC=$3D14 GenF($BF): $C0 -> $40\n";
+  const std::string actual = traceLog.str();
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Zero-page monitor trace output drifted from compatibility baseline\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else if (prodos8emu::read_u8(mem.constBanks(), 0x00BF) != 0x40) {
+    std::cerr << "FAIL: Expected final GenF($BF) value $40 for compatibility baseline\n";
+    failures++;
+  } else {
+    std::cout << "PASS: zp_monitor_trace_output_compatibility_baseline\n";
+  }
+}
+
 __attribute__((noinline)) static void run_trace_dsklistf_delta_logged_consistently_test(
     int& failures) {
   std::cout << "Test 70: trace_dsklistf_delta_logged_consistently\n";
@@ -10043,6 +10251,9 @@ int main() {
   run_mli_trap_result_flag_contract_nonregression_test(failures);
   run_trace_marker_table_equivalence_test(failures);
   run_trace_flag_delta_output_equivalence_test(failures);
+  run_zp_monitor_trigger_matrix_contracts_test(failures);
+  run_zp_monitor_all_writes_uniform_policy_contracts_test(failures);
+  run_zp_monitor_trace_output_compatibility_baseline_test(failures);
   run_trace_dsklistf_delta_logged_consistently_test(failures);
   run_relative_branch_apply_helper_equivalence_test(failures);
 
