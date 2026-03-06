@@ -25,6 +25,7 @@ namespace prodos8emu {
     void detachMLI();
     void setDebugLogs(std::ostream* mliLog, std::ostream* coutLog);
     void setTraceLog(std::ostream* traceLog);
+    void setJsrRtsTraceMonitorEnabled(bool enabled);
 
     // Reset vectors are read from $FFFC/$FFFD.
     void reset();
@@ -66,6 +67,7 @@ namespace prodos8emu {
     bool     m_waiting          = false;  // WAI
     bool     m_stopped          = false;  // STP
     uint64_t m_instructionCount = 0;      // Total instructions executed
+    bool     m_jsrRtsTraceMonitorEnabled = false;
 
     // PC ring buffer for tracking explicit PC changes (JMP, JSR, RTS, branches, etc.)
     // Stores from->to address pairs, with loop compression via counts
@@ -204,6 +206,7 @@ namespace prodos8emu {
     size_t         m_stepZpMonitorEventCount                    = 0;
 
     void log_step_trace_marker(uint16_t pc);
+    void log_jsr_rts_transition(const char* opcodeName, uint16_t fromPC, uint16_t toPC);
     void begin_step_zp_monitor_capture();
     void end_step_zp_monitor_capture();
     void append_step_zp_monitor_event(uint16_t addr, uint8_t oldValue, uint8_t newValue);

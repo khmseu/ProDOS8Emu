@@ -1042,6 +1042,10 @@ namespace prodos8emu {
     m_traceLog = traceLog;
   }
 
+  void CPU65C02::setJsrRtsTraceMonitorEnabled(bool enabled) {
+    m_jsrRtsTraceMonitorEnabled = enabled;
+  }
+
   void CPU65C02::recordPCChange(uint16_t fromPC, uint16_t toPC) {
     // Filter out ROM-internal transitions ($F800-$FFFF -> $F800-$FFFF)
     if (fromPC >= 0xF800 && toPC >= 0xF800) {
@@ -1451,6 +1455,7 @@ namespace prodos8emu {
     uint16_t jsrPC = control_flow_instruction_pc(2);
     push16(ret);
     apply_control_flow_pc_change(jsrPC, target);
+    log_jsr_rts_transition("JSR", jsrPC, target);
     return 6;
   }
 
@@ -1543,6 +1548,7 @@ namespace prodos8emu {
         uint16_t rtsPC      = control_flow_instruction_pc(0);
         uint16_t returnAddr = static_cast<uint16_t>(pull16() + 1);
         apply_control_flow_pc_change(rtsPC, returnAddr);
+        log_jsr_rts_transition("RTS", rtsPC, returnAddr);
         cycles = 6;
         return true;
       }
@@ -2686,6 +2692,20 @@ namespace prodos8emu {
                     << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
         break;
     }
+  }
+
+  void CPU65C02::log_jsr_rts_transition(const char* opcodeName, uint16_t fromPC, uint16_t toPC) {
+    if (!m_jsrRtsTraceMonitorEnabled || m_traceLog == nullptr) {
+      return;
+    }
+
+    *m_traceLog << "@" << m_instructionCount << " PC=$";
+    write_hex(*m_traceLog, toPC, 4);
+    *m_traceLog << " " << opcodeName << ": $";
+    write_hex(*m_traceLog, fromPC, 4);
+    *m_traceLog << " -> $";
+    write_hex(*m_traceLog, toPC, 4);
+    *m_traceLog << "\n";
   }
 
   void CPU65C02::begin_step_zp_monitor_capture() {
