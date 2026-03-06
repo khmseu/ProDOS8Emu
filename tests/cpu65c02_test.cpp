@@ -4496,6 +4496,219 @@ __attribute__((noinline)) static void run_mli_error_path_logging_order_stable_te
   fs::remove_all(tempDir);
 }
 
+__attribute__((noinline)) static void run_mli_trap_log_builder_equivalence_test(int& failures) {
+  std::cout << "Test 72: mli_trap_log_builder_equivalence\n";
+
+  const fs::path tempDir = fs::temp_directory_path() / "prodos8emu_cpu65c02_mli_log_builder_eq";
+  fs::remove_all(tempDir);
+  fs::create_directories(tempDir / "VOLLB");
+  std::ofstream(tempDir / "VOLLB" / "OKFILE") << "ok";
+
+  std::string mliText;
+  std::string traceText;
+
+  {
+    prodos8emu::Apple2Memory mem;
+    prodos8emu::MLIContext   ctx(tempDir);
+
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t    pathnameAddr = 0x04C0;
+    const std::string pathname     = "/VOLLB/OKFILE";
+    prodos8emu::write_u8(mem.banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+    for (size_t i = 0; i < pathname.length(); ++i) {
+      prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                           static_cast<uint8_t>(pathname[i]));
+    }
+
+    const uint16_t param = 0x03C0;
+    prodos8emu::write_u8(mem.banks(), param + 0, 10);
+    prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+
+    const uint16_t start = 0x03E0;
+    writeProgram(mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC4,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    cpu.attachMLI(ctx);
+    std::stringstream mliLog;
+    std::stringstream traceLog;
+    cpu.setDebugLogs(&mliLog, nullptr);
+    cpu.setTraceLog(&traceLog);
+    cpu.reset();
+
+    cpu.step();
+
+    mliText   = mliLog.str();
+    traceText = traceLog.str();
+  }
+
+  const size_t callPos   = mliText.find(" MLI call=$C4 (GET_FILE_INFO)");
+  const size_t paramPos  = mliText.find(" param=$03C0");
+  const size_t pathPos   = mliText.find(" path='/VOLLB/OKFILE'");
+  const size_t resultPos = mliText.find(" result=$00");
+  const size_t okPos     = mliText.find(" OK\n");
+
+  if (mliText.empty()) {
+    std::cerr << "FAIL: Expected MLI log output for OPEN trap\n";
+    failures++;
+  } else if (mliText != traceText) {
+    std::cerr << "FAIL: Expected MLI and trace trap logs to be byte-identical\n"
+              << "MLI:   " << mliText << "\n"
+              << "TRACE: " << traceText << "\n";
+    failures++;
+  } else if (callPos == std::string::npos || paramPos == std::string::npos ||
+             pathPos == std::string::npos || resultPos == std::string::npos ||
+             okPos == std::string::npos) {
+    std::cerr << "FAIL: Expected GET_FILE_INFO trap log fields were missing, got:\n"
+              << mliText << "\n";
+    failures++;
+  } else if (!(callPos < paramPos && paramPos < pathPos && pathPos < resultPos &&
+               resultPos < okPos)) {
+    std::cerr << "FAIL: Expected GET_FILE_INFO trap log field order "
+                 "call->param->path->result->OK, "
+                 "got:\n"
+              << mliText << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: mli_trap_log_builder_equivalence\n";
+  }
+
+  fs::remove_all(tempDir);
+}
+
+__attribute__((noinline)) static void run_mli_trap_result_flag_contract_nonregression_test(
+    int& failures) {
+  std::cout << "Test 73: mli_trap_result_flag_contract_nonregression\n";
+
+  const fs::path tempDir =
+      fs::temp_directory_path() / "prodos8emu_cpu65c02_mli_result_flag_contract";
+  fs::remove_all(tempDir);
+  fs::create_directories(tempDir / "VOLFG");
+
+  bool testFailed = false;
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    auto ctx = std::make_unique<prodos8emu::MLIContext>(tempDir);
+
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t param = 0x03D0;
+    prodos8emu::write_u8(mem->banks(), param + 0, 2);
+    prodos8emu::write_u8(mem->banks(), param + 1, 0);
+    prodos8emu::write_u16_le(mem->banks(), param + 2, 0x2B00);
+
+    const uint16_t start = 0x03F0;
+    writeProgram(*mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0x40,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.attachMLI(*ctx);
+    cpu.reset();
+    cpu.regs().p = 0xFF;
+
+    cpu.step();
+
+    const bool c = (cpu.regs().p & 0x01) != 0;
+    const bool z = (cpu.regs().p & 0x02) != 0;
+    const bool d = (cpu.regs().p & 0x08) != 0;
+    const bool n = (cpu.regs().p & 0x80) != 0;
+
+    if (cpu.regs().a != 0 || c || !z || d || n) {
+      std::cerr << "FAIL: Expected success trap flags A=0,C=0,Z=1,D=0,N=0\n";
+      failures++;
+      testFailed = true;
+    } else if (cpu.isStopped()) {
+      std::cerr << "FAIL: Expected non-QUIT trap to keep CPU running\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    auto ctx = std::make_unique<prodos8emu::MLIContext>(tempDir);
+
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t    pathnameAddr = 0x04D0;
+    const std::string pathname     = "/VOLFG/MISSING";
+    prodos8emu::write_u8(mem->banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+    for (size_t i = 0; i < pathname.length(); ++i) {
+      prodos8emu::write_u8(mem->banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                           static_cast<uint8_t>(pathname[i]));
+    }
+
+    const uint16_t param = 0x03E0;
+    prodos8emu::write_u8(mem->banks(), param + 0, 3);
+    prodos8emu::write_u16_le(mem->banks(), param + 1, pathnameAddr);
+    prodos8emu::write_u16_le(mem->banks(), param + 3, 0x2C00);
+
+    const uint16_t start = 0x0400;
+    writeProgram(*mem, start,
+                 {
+                     0x20,
+                     0x00,
+                     0xBF,
+                     0xC8,
+                     static_cast<uint8_t>(param & 0xFF),
+                     static_cast<uint8_t>((param >> 8) & 0xFF),
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.attachMLI(*ctx);
+    cpu.reset();
+    cpu.regs().p = 0x08;
+
+    cpu.step();
+
+    const bool c = (cpu.regs().p & 0x01) != 0;
+    const bool z = (cpu.regs().p & 0x02) != 0;
+    const bool d = (cpu.regs().p & 0x08) != 0;
+    const bool n = (cpu.regs().p & 0x80) != 0;
+
+    if (cpu.regs().a != 0x46 || !c || z || d || n) {
+      std::cerr << "FAIL: Expected error trap flags A=ERR_FILE_NOT_FOUND,C=1,Z=0,D=0,N=0\n";
+      failures++;
+      testFailed = true;
+    } else if (cpu.isStopped()) {
+      std::cerr << "FAIL: Expected failing non-QUIT trap to keep CPU running\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: mli_trap_result_flag_contract_nonregression\n";
+  }
+
+  fs::remove_all(tempDir);
+}
+
 __attribute__((noinline)) static void run_trace_dsklistf_delta_logged_consistently_test(
     int& failures) {
   std::cout << "Test 70: trace_dsklistf_delta_logged_consistently\n";
@@ -9684,6 +9897,8 @@ int main() {
   run_control_flow_branch_table_dispatch_equivalence_test(failures);
   run_control_flow_branch_precedence_nonregression_test(failures);
   run_mli_error_path_logging_order_stable_test(failures);
+  run_mli_trap_log_builder_equivalence_test(failures);
+  run_mli_trap_result_flag_contract_nonregression_test(failures);
   run_trace_dsklistf_delta_logged_consistently_test(failures);
   run_relative_branch_apply_helper_equivalence_test(failures);
 

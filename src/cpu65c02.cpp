@@ -912,6 +912,38 @@ namespace prodos8emu {
       return result;
     }
 
+    std::string build_mli_trap_log_message(uint64_t instructionCount, const ConstMemoryBanks& banks,
+                                           MLIContext* mli, uint16_t callPC, uint8_t callNumber,
+                                           uint16_t paramBlockAddr, uint8_t err) {
+      std::ostringstream mli_msg;
+      mli_msg << "@" << instructionCount << " PC=$";
+      write_hex(mli_msg, callPC, 4);
+      mli_msg << " MLI call=$";
+      write_hex(mli_msg, callNumber, 2);
+      mli_msg << " (" << mli_call_name(callNumber) << ") param=$";
+      write_hex(mli_msg, paramBlockAddr, 4);
+
+      std::string pathInfo = extract_mli_pathnames(banks, mli, callNumber, paramBlockAddr, err);
+      if (!pathInfo.empty()) {
+        mli_msg << pathInfo;
+      }
+
+      mli_msg << " result=$";
+      write_hex(mli_msg, err, 2);
+      if (err == 0) {
+        mli_msg << " OK\n";
+      } else {
+        const char* errName = error_name(err);
+        if (errName[0] != '\0') {
+          mli_msg << " ERROR (" << errName << ")\n";
+        } else {
+          mli_msg << " ERROR\n";
+        }
+      }
+
+      return mli_msg.str();
+    }
+
   }  // namespace
 
   CPU65C02::CPU65C02(Apple2Memory& mem) : m_mem(mem) {
@@ -1274,37 +1306,12 @@ namespace prodos8emu {
     uint8_t err = mli_dispatch(*m_mli, m_mem.banks(), callNumber, paramBlock);
 
     if (m_mliLog != nullptr || m_traceLog != nullptr) {
-      std::ostringstream mli_msg;
-      mli_msg << "@" << m_instructionCount << " PC=$";
-      write_hex(mli_msg, callPC, 4);
-      mli_msg << " MLI call=$";
-      write_hex(mli_msg, callNumber, 2);
-      mli_msg << " (" << mli_call_name(callNumber) << ") param=$";
-      write_hex(mli_msg, paramBlock, 4);
-
-      // Extract and log pathnames if applicable
-      std::string pathInfo =
-          extract_mli_pathnames(m_mem.constBanks(), m_mli, callNumber, paramBlock, err);
-      if (!pathInfo.empty()) {
-        mli_msg << pathInfo;
-      }
-
-      mli_msg << " result=$";
-      write_hex(mli_msg, err, 2);
-      if (err == 0) {
-        mli_msg << " OK\n";
-      } else {
-        const char* errName = error_name(err);
-        if (errName[0] != '\0') {
-          mli_msg << " ERROR (" << errName << ")\n";
-        } else {
-          mli_msg << " ERROR\n";
-        }
-      }
+      const std::string mliMsg = build_mli_trap_log_message(
+          m_instructionCount, m_mem.constBanks(), m_mli, callPC, callNumber, paramBlock, err);
 
       // Write to both logs
       if (m_mliLog != nullptr) {
-        *m_mliLog << mli_msg.str();
+        *m_mliLog << mliMsg;
         // Dump stack and PC ring on UNSUPPORTED_STOR_TYPE error
         if (err == ERR_UNSUPPORTED_STOR_TYPE) {
           dump_stack(*m_mliLog, m_mem.constBanks(), m_r.sp);
@@ -1314,7 +1321,7 @@ namespace prodos8emu {
         m_mliLog->flush();
       }
       if (m_traceLog != nullptr) {
-        *m_traceLog << mli_msg.str();
+        *m_traceLog << mliMsg;
       }
     }
 
