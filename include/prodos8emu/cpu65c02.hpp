@@ -191,18 +191,25 @@ namespace prodos8emu {
     uint8_t        apply_rmw_family_op(uint8_t group, uint8_t value);
     uint32_t       execute_rmw_family_opcode(uint8_t op);
 
-    struct TraceFlagSnapshot {
-      uint8_t genf     = 0;
-      uint8_t listingf = 0;
-      uint8_t dsklistf = 0;
-      uint8_t passnbr  = 0;
+    struct ZpMonitorEvent {
+      uint16_t address  = 0;
+      uint8_t  oldValue = 0;
+      uint8_t  newValue = 0;
     };
 
+    static constexpr size_t ZP_MONITOR_MAX_EVENTS = 8;
+
+    bool           m_stepZpMonitorCaptureActive                 = false;
+    uint8_t        m_stepTraceOpcode                            = 0;
+    ZpMonitorEvent m_stepZpMonitorEvents[ZP_MONITOR_MAX_EVENTS] = {};
+    size_t         m_stepZpMonitorEventCount                    = 0;
+
     void               log_step_trace_marker(uint16_t pc);
-    TraceFlagSnapshot  read_step_trace_flags();
     static const char* passnbr67_mutator_name(uint8_t opcode);
-    void               log_step_trace_flag_deltas(uint8_t opcode, const TraceFlagSnapshot& oldFlags,
-                                                  const TraceFlagSnapshot& newFlags);
+    void               begin_step_zp_monitor_capture(uint8_t opcode);
+    void               end_step_zp_monitor_capture();
+    void append_step_zp_monitor_event(uint16_t addr, uint8_t oldValue, uint8_t newValue);
+    void log_step_zp_monitor_events();
 
     // Execute opcode
     uint32_t execute(uint8_t opcode);

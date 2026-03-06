@@ -368,6 +368,33 @@ namespace prodos8emu {
       return static_cast<uint16_t>(static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8));
     }
 
+    struct ZpMonitoredFieldSpec {
+      uint8_t     address;
+      const char* label;
+    };
+
+    static const ZpMonitoredFieldSpec kZpMonitoredFieldSpecs[] = {
+        {0x67, "PassNbr"},
+        {0x68, "ListingF"},
+        {0x90, "DskListF"},
+        {0xBF, "GenF"},
+    };
+
+    const ZpMonitoredFieldSpec* find_zp_monitored_field_spec(uint16_t addr) {
+      if (addr > 0x00FF) {
+        return nullptr;
+      }
+
+      const uint8_t zpAddr = static_cast<uint8_t>(addr);
+      for (const ZpMonitoredFieldSpec& spec : kZpMonitoredFieldSpecs) {
+        if (spec.address == zpAddr) {
+          return &spec;
+        }
+      }
+
+      return nullptr;
+    }
+
     const char* mli_call_name(uint8_t callNumber) {
       switch (callNumber) {
         case 0xC0:
@@ -1013,7 +1040,20 @@ namespace prodos8emu {
       return;
     }
 
+    const ZpMonitoredFieldSpec* monitoredField = nullptr;
+    uint8_t                     oldValue       = 0;
+    if (m_stepZpMonitorCaptureActive) {
+      monitoredField = find_zp_monitored_field_spec(addr);
+      if (monitoredField != nullptr) {
+        oldValue = read_u8(m_mem.constBanks(), static_cast<uint16_t>(monitoredField->address));
+      }
+    }
+
     write_u8(m_mem.banks(), addr, value);
+
+    if (monitoredField != nullptr && oldValue != value) {
+      append_step_zp_monitor_event(static_cast<uint16_t>(monitoredField->address), oldValue, value);
+    }
   }
 
   uint16_t CPU65C02::read16(uint16_t addr) {
@@ -1102,7 +1142,10 @@ namespace prodos8emu {
     uint16_t resetVector = read16(VEC_RESET);
     m_r.pc               = resetVector;
     recordPCChange(0x0000, resetVector);  // from=0 for reset
-    m_instructionCount = 0;
+    m_instructionCount           = 0;
+    m_stepZpMonitorCaptureActive = false;
+    m_stepTraceOpcode            = 0;
+    m_stepZpMonitorEventCount    = 0;
   }
 
   uint64_t CPU65C02::run(uint64_t maxInstructions) {
@@ -2590,15 +2633,6 @@ namespace prodos8emu {
     }
   }
 
-  CPU65C02::TraceFlagSnapshot CPU65C02::read_step_trace_flags() {
-    TraceFlagSnapshot snapshot;
-    snapshot.genf     = read8(0xBF);
-    snapshot.listingf = read8(0x68);
-    snapshot.dsklistf = read8(0x90);
-    snapshot.passnbr  = read8(0x67);
-    return snapshot;
-  }
-
   const char* CPU65C02::passnbr67_mutator_name(uint8_t opcode) {
     struct PassNbrMutatorMetadata {
       uint8_t     opcode;
@@ -2629,42 +2663,61 @@ namespace prodos8emu {
     return nullptr;
   }
 
-  void CPU65C02::log_step_trace_flag_deltas(uint8_t opcode, const TraceFlagSnapshot& oldFlags,
-                                            const TraceFlagSnapshot& newFlags) {
+  void CPU65C02::begin_step_zp_monitor_capture(uint8_t opcode) {
+    m_stepZpMonitorCaptureActive = true;
+    m_stepTraceOpcode            = opcode;
+    m_stepZpMonitorEventCount    = 0;
+  }
+
+  void CPU65C02::end_step_zp_monitor_capture() {
+    m_stepZpMonitorCaptureActive = false;
+    m_stepTraceOpcode            = 0;
+    m_stepZpMonitorEventCount    = 0;
+  }
+
+  void CPU65C02::append_step_zp_monitor_event(uint16_t addr, uint8_t oldValue, uint8_t newValue) {
+    if (m_stepZpMonitorEventCount >= ZP_MONITOR_MAX_EVENTS) {
+      return;
+    }
+
+    ZpMonitorEvent& event = m_stepZpMonitorEvents[m_stepZpMonitorEventCount];
+    event.address         = addr;
+    event.oldValue        = oldValue;
+    event.newValue        = newValue;
+    m_stepZpMonitorEventCount++;
+  }
+
+  void CPU65C02::log_step_zp_monitor_events() {
     if (m_traceLog == nullptr) {
       return;
     }
 
-    const char* passnbr_mutator = passnbr67_mutator_name(opcode);
-    if (passnbr_mutator != nullptr && newFlags.passnbr != oldFlags.passnbr) {
-      *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                  << std::setfill('0') << std::setw(4) << m_r.pc << " " << passnbr_mutator
-                  << " PassNbr($67): $" << std::setw(2) << static_cast<unsigned>(oldFlags.passnbr)
-                  << " -> $" << std::setw(2) << static_cast<unsigned>(newFlags.passnbr) << std::dec
-                  << "\n";
-    }
-
-    struct TraceDeltaField {
-      const char* label;
-      uint16_t    address;
-      uint8_t     oldValue;
-      uint8_t     newValue;
-    };
-
-    const TraceDeltaField deltaFields[] = {
-        {"GenF", 0xBF, oldFlags.genf, newFlags.genf},
-        {"ListingF", 0x68, oldFlags.listingf, newFlags.listingf},
-        {"DskListF", 0x90, oldFlags.dsklistf, newFlags.dsklistf},
-    };
-
-    for (const TraceDeltaField& field : deltaFields) {
-      if (field.newValue != field.oldValue) {
-        *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                    << std::setfill('0') << std::setw(4) << m_r.pc << " " << field.label << "($"
-                    << std::setw(2) << field.address << "): $" << std::setw(2)
-                    << static_cast<unsigned>(field.oldValue) << " -> $" << std::setw(2)
-                    << static_cast<unsigned>(field.newValue) << std::dec << "\n";
+    for (size_t i = 0; i < m_stepZpMonitorEventCount; ++i) {
+      const ZpMonitorEvent&       event     = m_stepZpMonitorEvents[i];
+      const ZpMonitoredFieldSpec* fieldSpec = find_zp_monitored_field_spec(event.address);
+      if (fieldSpec == nullptr) {
+        continue;
       }
+
+      const bool isPassNbr = (event.address == 0x67);
+      if (isPassNbr) {
+        const char* passnbrMutator = passnbr67_mutator_name(m_stepTraceOpcode);
+        if (passnbrMutator != nullptr) {
+          *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                      << std::setfill('0') << std::setw(4) << m_r.pc << " " << passnbrMutator << " "
+                      << fieldSpec->label << "($" << std::setw(2)
+                      << static_cast<unsigned>(event.address) << "): $" << std::setw(2)
+                      << static_cast<unsigned>(event.oldValue) << " -> $" << std::setw(2)
+                      << static_cast<unsigned>(event.newValue) << std::dec << "\n";
+          continue;
+        }
+      }
+
+      *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                  << std::setfill('0') << std::setw(4) << m_r.pc << " " << fieldSpec->label << "($"
+                  << std::setw(2) << static_cast<unsigned>(event.address) << "): $" << std::setw(2)
+                  << static_cast<unsigned>(event.oldValue) << " -> $" << std::setw(2)
+                  << static_cast<unsigned>(event.newValue) << std::dec << "\n";
     }
   }
 
@@ -2685,16 +2738,15 @@ namespace prodos8emu {
 
     uint8_t op = fetch8();
 
-    TraceFlagSnapshot oldFlags;
     if (track_trace) {
-      oldFlags = read_step_trace_flags();
+      begin_step_zp_monitor_capture(op);
     }
 
     uint32_t cycles = execute(op);
 
     if (track_trace) {
-      TraceFlagSnapshot newFlags = read_step_trace_flags();
-      log_step_trace_flag_deltas(op, oldFlags, newFlags);
+      log_step_zp_monitor_events();
+      end_step_zp_monitor_capture();
     }
 
     return cycles;

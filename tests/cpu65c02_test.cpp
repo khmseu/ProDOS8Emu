@@ -4832,6 +4832,7 @@ __attribute__((noinline)) static void run_trace_flag_delta_output_equivalence_te
   const std::string traceText = traceLog.str();
   const std::string expected =
       "@2 PC=$3B44 STA PassNbr($67): $00 -> $05\n"
+      "@3 PC=$3B46 PassNbr($67): $05 -> $00\n"
       "@4 PC=$3B48 INC PassNbr($67): $00 -> $01\n"
       "@6 PC=$3B4C GenF($BF): $00 -> $AA\n"
       "@8 PC=$3B50 ListingF($68): $00 -> $01\n"
@@ -4843,12 +4844,173 @@ __attribute__((noinline)) static void run_trace_flag_delta_output_equivalence_te
               << expected << "Actual:\n"
               << traceText << "\n";
     failures++;
-  } else if (traceText.find("PassNbr($67): $05 -> $00") != std::string::npos) {
-    std::cerr << "FAIL: Unexpected PassNbr delta emitted for STZ opcode\n";
-    failures++;
   } else {
     std::cout << "PASS: trace_flag_delta_output_equivalence\n";
   }
+}
+
+__attribute__((noinline)) static void run_zp_monitor_write8_hook_equivalence_test(int& failures) {
+  std::cout << "Test 79: zp_monitor_write8_hook_equivalence\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x3D40;
+  writeProgram(mem, start,
+               {
+                   0xA9, 0x12, 0x85, 0x67, 0x64, 0x67, 0xE6, 0x67, 0x07, 0x67, 0xF7,
+                   0x67, 0xA9, 0x40, 0x04, 0x67, 0xA9, 0x80, 0x14, 0x67, 0xEA,
+               });
+  prodos8emu::write_u8(mem.banks(), 0x0067, 0x5A);
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  for (int i = 0; i < 11; ++i) {
+    cpu.step();
+  }
+
+  static const char* kExpectedFragments[] = {
+      "STA PassNbr($67): $5A -> $12", "PassNbr($67): $12 -> $00", "INC PassNbr($67): $00 -> $01",
+      "PassNbr($67): $01 -> $00",     "PassNbr($67): $00 -> $80", "PassNbr($67): $80 -> $C0",
+      "PassNbr($67): $C0 -> $40",
+  };
+
+  const std::string traceText = traceLog.str();
+  size_t            searchPos = 0;
+  for (size_t i = 0; i < (sizeof(kExpectedFragments) / sizeof(kExpectedFragments[0])); ++i) {
+    const std::string fragment = kExpectedFragments[i];
+    const size_t      found    = traceText.find(fragment, searchPos);
+    if (found == std::string::npos) {
+      std::cerr << "FAIL: Missing PassNbr write8-hook monitor fragment='" << fragment << "'\n";
+      failures++;
+      return;
+    }
+    searchPos = found + fragment.size();
+  }
+
+  size_t lineCount = 0;
+  for (size_t pos = traceText.find("PassNbr($67):"); pos != std::string::npos;
+       pos        = traceText.find("PassNbr($67):", pos + 1)) {
+    lineCount++;
+  }
+
+  if (lineCount != 7) {
+    std::cerr << "FAIL: Expected exactly 7 PassNbr monitor lines from write8 hook, got "
+              << lineCount << "\n"
+              << traceText << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: zp_monitor_write8_hook_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_zp_monitor_uniform_emission_nonregression_test(
+    int& failures) {
+  std::cout << "Test 80: zp_monitor_uniform_emission_nonregression\n";
+
+  struct FieldCase {
+    const char* name;
+    uint8_t     addr;
+    const char* label;
+    bool        expectMutatorPrefix;
+  };
+
+  static const FieldCase kFields[] = {
+      {"PassNbr", 0x67, "PassNbr($67)", true},
+      {"GenF", 0xBF, "GenF($BF)", false},
+      {"ListingF", 0x68, "ListingF($68)", false},
+      {"DskListF", 0x90, "DskListF($90)", false},
+  };
+
+  static const uint8_t kOldValues[] = {0x5A, 0x12, 0x00, 0x01, 0x00, 0x80, 0xC0};
+  static const uint8_t kNewValues[] = {0x12, 0x00, 0x01, 0x00, 0x80, 0xC0, 0x40};
+
+  const auto hexByte = [](uint8_t v) {
+    static const char* kHex = "0123456789ABCDEF";
+    std::string        out;
+    out.push_back('$');
+    out.push_back(kHex[(v >> 4) & 0x0F]);
+    out.push_back(kHex[v & 0x0F]);
+    return out;
+  };
+
+  for (size_t fieldIndex = 0; fieldIndex < (sizeof(kFields) / sizeof(kFields[0])); ++fieldIndex) {
+    const FieldCase& field = kFields[fieldIndex];
+
+    prodos8emu::Apple2Memory mem;
+    mem.setLCReadEnabled(true);
+    mem.setLCWriteEnabled(true);
+
+    const uint16_t start = static_cast<uint16_t>(0x3D60 + (fieldIndex * 0x20));
+    writeProgram(mem, start,
+                 {
+                     0xA9,       0x12,       0x85,       field.addr, 0x64,       field.addr, 0xE6,
+                     field.addr, 0x07,       field.addr, 0xF7,       field.addr, 0xA9,       0x40,
+                     0x04,       field.addr, 0xA9,       0x80,       0x14,       field.addr, 0xEA,
+                 });
+    prodos8emu::write_u8(mem.banks(), field.addr, 0x5A);
+    prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(mem);
+    std::stringstream    traceLog;
+    cpu.setTraceLog(&traceLog);
+    cpu.reset();
+
+    for (int i = 0; i < 11; ++i) {
+      cpu.step();
+    }
+
+    const std::string traceText = traceLog.str();
+
+    if (field.expectMutatorPrefix) {
+      if (traceText.find("STA PassNbr($67): $5A -> $12") == std::string::npos) {
+        std::cerr << "FAIL: Missing STA mutator-prefixed PassNbr delta\n";
+        failures++;
+        return;
+      }
+      if (traceText.find("INC PassNbr($67): $00 -> $01") == std::string::npos) {
+        std::cerr << "FAIL: Missing INC mutator-prefixed PassNbr delta\n";
+        failures++;
+        return;
+      }
+    }
+
+    size_t searchPos = 0;
+    for (size_t i = 0; i < (sizeof(kOldValues) / sizeof(kOldValues[0])); ++i) {
+      const std::string expected = std::string(field.label) + ": " + hexByte(kOldValues[i]) +
+                                   " -> " + hexByte(kNewValues[i]);
+      const size_t found = traceText.find(expected, searchPos);
+      if (found == std::string::npos) {
+        std::cerr << "FAIL: Missing uniform monitor transition for field=" << field.name
+                  << " expected fragment='" << expected << "'\n";
+        failures++;
+        return;
+      }
+      searchPos = found + expected.size();
+    }
+
+    const std::string labelPrefix = std::string(field.label) + ":";
+    size_t            lineCount   = 0;
+    for (size_t pos = traceText.find(labelPrefix); pos != std::string::npos;
+         pos        = traceText.find(labelPrefix, pos + 1)) {
+      lineCount++;
+    }
+
+    if (lineCount != 7) {
+      std::cerr << "FAIL: Expected exactly 7 monitor lines for field=" << field.name << ", got "
+                << lineCount << "\n"
+                << traceText << "\n";
+      failures++;
+      return;
+    }
+  }
+
+  std::cout << "PASS: zp_monitor_uniform_emission_nonregression\n";
 }
 
 __attribute__((noinline)) static void run_zp_monitor_trigger_matrix_contracts_test(int& failures) {
@@ -10254,6 +10416,8 @@ int main() {
   run_zp_monitor_trigger_matrix_contracts_test(failures);
   run_zp_monitor_all_writes_uniform_policy_contracts_test(failures);
   run_zp_monitor_trace_output_compatibility_baseline_test(failures);
+  run_zp_monitor_write8_hook_equivalence_test(failures);
+  run_zp_monitor_uniform_emission_nonregression_test(failures);
   run_trace_dsklistf_delta_logged_consistently_test(failures);
   run_relative_branch_apply_helper_equivalence_test(failures);
 
