@@ -22,6 +22,21 @@ static void writeProgram(prodos8emu::Apple2Memory& mem, uint16_t addr,
   }
 }
 
+template <typename T>
+auto try_enable_jsr_rts_trace_monitor(T& cpu, int)
+    -> decltype(cpu.setJsrRtsTraceMonitorEnabled(true), void()) {
+  cpu.setJsrRtsTraceMonitorEnabled(true);
+}
+
+template <typename T>
+void try_enable_jsr_rts_trace_monitor(T&, long) {
+}
+
+static void enable_jsr_rts_trace_monitor(prodos8emu::CPU65C02& cpu) {
+  // Phase 1 compatibility: no-op until CPU exposes an explicit toggle API.
+  try_enable_jsr_rts_trace_monitor(cpu, 0);
+}
+
 __attribute__((noinline)) static void run_branch_opcode_matrix_preserved_test(int& failures) {
   std::cout << "Test 43: branch_opcode_matrix_preserved\n";
 
@@ -5371,6 +5386,218 @@ __attribute__((noinline)) static void run_trace_dsklistf_delta_logged_consistent
   }
 }
 
+__attribute__((noinline)) static void run_jsr_rts_trace_monitor_default_off_compatibility_test(
+    int& failures) {
+  std::cout << "Test 83: jsr_rts_trace_monitor_default_off_compatibility\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x2500;
+  const uint16_t sub   = 0x2520;
+  writeProgram(mem, start,
+               {
+                   0x20,
+                   static_cast<uint8_t>(sub & 0xFF),
+                   static_cast<uint8_t>((sub >> 8) & 0xFF),
+                   0xEA,
+               });
+  writeProgram(mem, sub,
+               {
+                   0x60,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  cpu.step();
+  cpu.step();
+  cpu.step();
+
+  const std::string traceText = traceLog.str();
+  if (!traceText.empty()) {
+    std::cerr << "FAIL: Expected JSR/RTS monitor to be off by default; got trace:\n"
+              << traceText << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: jsr_rts_trace_monitor_default_off_compatibility\n";
+  }
+}
+
+__attribute__((noinline)) static void
+run_jsr_rts_trace_monitor_enabled_normal_jsr_rts_logs_old_new_pc_test(int& failures) {
+  std::cout << "Test 84: jsr_rts_trace_monitor_enabled_normal_jsr_rts_logs_old_new_pc\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x2600;
+  const uint16_t sub   = 0x2630;
+  writeProgram(mem, start,
+               {
+                   0x20,
+                   static_cast<uint8_t>(sub & 0xFF),
+                   static_cast<uint8_t>((sub >> 8) & 0xFF),
+                   0xEA,
+               });
+  writeProgram(mem, sub,
+               {
+                   0x60,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  enable_jsr_rts_trace_monitor(cpu);
+  cpu.reset();
+
+  cpu.step();
+  cpu.step();
+
+  const std::string expected =
+      "@1 PC=$2630 JSR: $2600 -> $2630\n"
+      "@2 PC=$2603 RTS: $2630 -> $2603\n";
+  const std::string actual = traceLog.str();
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Expected enabled JSR/RTS monitor to emit old/new PC transitions\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: jsr_rts_trace_monitor_enabled_normal_jsr_rts_logs_old_new_pc\n";
+  }
+}
+
+__attribute__((noinline)) static void run_jsr_rts_trace_monitor_enabled_dcb8_redirect_behavior_test(
+    int& failures) {
+  std::cout << "Test 85: jsr_rts_trace_monitor_enabled_dcb8_redirect_behavior\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x2700;
+  writeProgram(mem, start,
+               {
+                   0x20,
+                   0xB8,
+                   0xDC,
+                   0xEA,
+               });
+  writeProgram(mem, 0xDCBD,
+               {
+                   0x60,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  enable_jsr_rts_trace_monitor(cpu);
+  cpu.reset();
+
+  cpu.regs().a = 0x11;
+
+  cpu.step();
+  cpu.step();
+
+  const std::string expected =
+      "@1 PC=$DCBD JSR: $2700 -> $DCBD\n"
+      "@2 PC=$2703 RTS: $DCBD -> $2703\n";
+  const std::string actual = traceLog.str();
+
+  if (actual != expected) {
+    std::cerr
+        << "FAIL: Expected enabled monitor to log JSR $DCB8 redirect and RTS PC transitions\n"
+        << "Expected:\n"
+        << expected << "Actual:\n"
+        << actual << "\n";
+    failures++;
+  } else if (cpu.regs().a != 0xA0) {
+    std::cerr << "FAIL: Expected JSR $DCB8 redirect behavior to set A=$A0\n";
+    failures++;
+  } else {
+    std::cout << "PASS: jsr_rts_trace_monitor_enabled_dcb8_redirect_behavior\n";
+  }
+}
+
+__attribute__((noinline)) static void run_jsr_rts_trace_monitor_excludes_mli_trap_test(
+    int& failures) {
+  std::cout << "Test 86: jsr_rts_trace_monitor_excludes_mli_trap\n";
+
+  const fs::path mliRoot = fs::temp_directory_path() / "prodos8emu-jsr-rts-monitor-mli-exclude";
+  fs::remove_all(mliRoot);
+  fs::create_directories(mliRoot);
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t param = 0x0300;
+  prodos8emu::write_u8(mem.banks(), param + 0, 2);
+  prodos8emu::write_u8(mem.banks(), param + 1, 0);
+  prodos8emu::write_u16_le(mem.banks(), param + 2, 0x2000);
+
+  const uint16_t start = 0x2800;
+  const uint16_t sub   = 0x2810;
+  writeProgram(mem, start,
+               {
+                   0x20,
+                   static_cast<uint8_t>(sub & 0xFF),
+                   static_cast<uint8_t>((sub >> 8) & 0xFF),
+                   0x20,
+                   0x00,
+                   0xBF,
+                   0x40,
+                   static_cast<uint8_t>(param & 0xFF),
+                   static_cast<uint8_t>((param >> 8) & 0xFF),
+                   0xEA,
+               });
+  writeProgram(mem, sub,
+               {
+                   0x60,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::MLIContext ctx(mliRoot);
+  prodos8emu::CPU65C02   cpu(mem);
+  std::stringstream      traceLog;
+  cpu.attachMLI(ctx);
+  cpu.setTraceLog(&traceLog);
+  enable_jsr_rts_trace_monitor(cpu);
+  cpu.reset();
+
+  cpu.step();
+  cpu.step();
+  cpu.step();
+
+  const std::string expected =
+      "@1 PC=$2810 JSR: $2800 -> $2810\n"
+      "@2 PC=$2803 RTS: $2810 -> $2803\n"
+      "@3 PC=$2806 MLI call=$40 (ALLOC_INTERRUPT) param=$0300 result=$00 OK\n";
+  const std::string actual = traceLog.str();
+
+  fs::remove_all(mliRoot);
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Expected JSR/RTS monitor to exclude JSR $BF00 MLI trap transition\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: jsr_rts_trace_monitor_excludes_mli_trap\n";
+  }
+}
+
 __attribute__((noinline)) static void run_relative_branch_apply_helper_equivalence_test(
     int& failures) {
   std::cout << "Test 71: relative_branch_apply_helper_equivalence\n";
@@ -10504,6 +10731,10 @@ int main() {
   run_mli_trap_result_flag_contract_nonregression_test(failures);
   run_trace_marker_table_equivalence_test(failures);
   run_trace_flag_delta_output_equivalence_test(failures);
+  run_jsr_rts_trace_monitor_default_off_compatibility_test(failures);
+  run_jsr_rts_trace_monitor_enabled_normal_jsr_rts_logs_old_new_pc_test(failures);
+  run_jsr_rts_trace_monitor_enabled_dcb8_redirect_behavior_test(failures);
+  run_jsr_rts_trace_monitor_excludes_mli_trap_test(failures);
   run_zp_monitor_trigger_matrix_contracts_test(failures);
   run_zp_monitor_all_writes_uniform_policy_contracts_test(failures);
   run_zp_monitor_trace_output_compatibility_baseline_test(failures);
