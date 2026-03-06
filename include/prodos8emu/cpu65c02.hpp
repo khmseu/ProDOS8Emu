@@ -187,7 +187,7 @@ namespace prodos8emu {
     bool           read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles);
     uint32_t       execute_alu_family_opcode(uint8_t op);
     bool           read_rmw_target_for_mode(uint8_t mode, uint16_t& addr, uint32_t& cycles);
-    uint8_t        apply_rmw_family_op(uint8_t op, uint8_t value);
+    uint8_t        apply_rmw_family_op(uint8_t group, uint8_t value);
     uint32_t       execute_rmw_family_opcode(uint8_t op);
 
     struct TraceFlagSnapshot {

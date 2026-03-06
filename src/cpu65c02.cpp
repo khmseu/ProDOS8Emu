@@ -164,18 +164,139 @@ namespace prodos8emu {
       RmwFamily,
     };
 
+    enum class AluOperandMode : uint8_t {
+      IndX,
+      Zp,
+      Immediate,
+      Abs,
+      IndY,
+      ZpInd,
+      ZpX,
+      AbsY,
+      AbsX,
+    };
+
+    struct AluModeMetadata {
+      uint8_t        mode;
+      AluOperandMode operandMode;
+      uint8_t        baseCycles;
+      bool           hasPageCrossPenalty;
+    };
+
+    enum class AluGroupOperation : uint8_t {
+      Ora,
+      And,
+      Eor,
+      Adc,
+      Cmp,
+      Sbc,
+    };
+
+    struct AluGroupMetadata {
+      uint8_t           group;
+      AluGroupOperation operation;
+    };
+
+    enum class RmwTargetMode : uint8_t {
+      Zp,
+      ZpX,
+      Abs,
+      AbsX,
+    };
+
+    struct RmwModeMetadata {
+      uint8_t       mode;
+      RmwTargetMode targetMode;
+      uint8_t       cycles;
+    };
+
+    enum class RmwGroupOperation : uint8_t {
+      Asl,
+      Rol,
+      Lsr,
+      Ror,
+      Dec,
+      Inc,
+    };
+
+    struct RmwGroupMetadata {
+      uint8_t           group;
+      RmwGroupOperation operation;
+    };
+
+    static constexpr AluModeMetadata kAluModeTable[] = {
+        {0x01, AluOperandMode::IndX, 6, false},      {0x05, AluOperandMode::Zp, 3, false},
+        {0x09, AluOperandMode::Immediate, 2, false}, {0x0D, AluOperandMode::Abs, 4, false},
+        {0x11, AluOperandMode::IndY, 5, true},       {0x12, AluOperandMode::ZpInd, 5, false},
+        {0x15, AluOperandMode::ZpX, 4, false},       {0x19, AluOperandMode::AbsY, 4, true},
+        {0x1D, AluOperandMode::AbsX, 4, true},
+    };
+
+    static constexpr AluGroupMetadata kAluGroupTable[] = {
+        {0x00, AluGroupOperation::Ora}, {0x20, AluGroupOperation::And},
+        {0x40, AluGroupOperation::Eor}, {0x60, AluGroupOperation::Adc},
+        {0xC0, AluGroupOperation::Cmp}, {0xE0, AluGroupOperation::Sbc},
+    };
+
+    static constexpr RmwModeMetadata kRmwModeTable[] = {
+        {0x06, RmwTargetMode::Zp, 5},
+        {0x16, RmwTargetMode::ZpX, 6},
+        {0x0E, RmwTargetMode::Abs, 6},
+        {0x1E, RmwTargetMode::AbsX, 7},
+    };
+
+    static constexpr RmwGroupMetadata kRmwGroupTable[] = {
+        {0x00, RmwGroupOperation::Asl}, {0x20, RmwGroupOperation::Rol},
+        {0x40, RmwGroupOperation::Lsr}, {0x60, RmwGroupOperation::Ror},
+        {0xC0, RmwGroupOperation::Dec}, {0xE0, RmwGroupOperation::Inc},
+    };
+
+    const AluModeMetadata* find_alu_mode_metadata(uint8_t mode) {
+      for (const AluModeMetadata& metadata : kAluModeTable) {
+        if (metadata.mode == mode) {
+          return &metadata;
+        }
+      }
+      return nullptr;
+    }
+
+    const AluGroupMetadata* find_alu_group_metadata(uint8_t group) {
+      for (const AluGroupMetadata& metadata : kAluGroupTable) {
+        if (metadata.group == group) {
+          return &metadata;
+        }
+      }
+      return nullptr;
+    }
+
+    const RmwModeMetadata* find_rmw_mode_metadata(uint8_t mode) {
+      for (const RmwModeMetadata& metadata : kRmwModeTable) {
+        if (metadata.mode == mode) {
+          return &metadata;
+        }
+      }
+      return nullptr;
+    }
+
+    const RmwGroupMetadata* find_rmw_group_metadata(uint8_t group) {
+      for (const RmwGroupMetadata& metadata : kRmwGroupTable) {
+        if (metadata.group == group) {
+          return &metadata;
+        }
+      }
+      return nullptr;
+    }
+
     bool is_fallback_misc_tail_opcode(uint8_t opcode) {
       return opcode == 0xE8 || opcode == 0xCA || opcode == 0xC8 || opcode == 0x88;
     }
 
     bool is_fallback_alu_rmw_group(uint8_t group) {
-      return group == 0x00 || group == 0x20 || group == 0x40 || group == 0x60 || group == 0xC0 ||
-             group == 0xE0;
+      return find_alu_group_metadata(group) != nullptr;
     }
 
     bool is_fallback_alu_mode(uint8_t mode) {
-      return mode == 0x01 || mode == 0x05 || mode == 0x09 || mode == 0x0D || mode == 0x11 ||
-             mode == 0x12 || mode == 0x15 || mode == 0x19 || mode == 0x1D;
+      return find_alu_mode_metadata(mode) != nullptr;
     }
 
     bool is_fallback_compare_mode(uint8_t mode) {
@@ -183,7 +304,7 @@ namespace prodos8emu {
     }
 
     bool is_fallback_rmw_mode(uint8_t mode) {
-      return mode == 0x06 || mode == 0x16 || mode == 0x0E || mode == 0x1E;
+      return find_rmw_mode_metadata(mode) != nullptr;
     }
 
     FallbackRoute classify_fallback_route(uint8_t opcode) {
@@ -2049,55 +2170,71 @@ namespace prodos8emu {
   }
 
   bool CPU65C02::read_alu_operand_for_mode(uint8_t mode, uint8_t& operand, uint32_t& cycles) {
-    switch (mode) {
-      case 0x09:
-        operand = fetch8();
-        cycles  = 2;
-        return true;
-      case 0x05:
-        operand = read8(addr_zp());
-        cycles  = 3;
-        return true;
-      case 0x15:
-        operand = read8(addr_zpx());
-        cycles  = 4;
-        return true;
-      case 0x0D:
-        operand = read8(addr_abs());
-        cycles  = 4;
-        return true;
-      case 0x1D: {
-        bool     pc = false;
-        uint16_t a  = addr_absx(pc);
-        operand     = read8_pageCrossed(a, pc);
-        cycles      = static_cast<uint32_t>(4 + (pc ? 1 : 0));
-        return true;
-      }
-      case 0x19: {
-        bool     pc = false;
-        uint16_t a  = addr_absy(pc);
-        operand     = read8_pageCrossed(a, pc);
-        cycles      = static_cast<uint32_t>(4 + (pc ? 1 : 0));
-        return true;
-      }
-      case 0x01:
-        operand = read8(addr_indx());
-        cycles  = 6;
-        return true;
-      case 0x11: {
-        bool     pc = false;
-        uint16_t a  = addr_indy(pc);
-        operand     = read8_pageCrossed(a, pc);
-        cycles      = static_cast<uint32_t>(5 + (pc ? 1 : 0));
-        return true;
-      }
-      case 0x12:
-        operand = read8(addr_zpind());
-        cycles  = 5;
-        return true;
-      default:
-        return false;
+    const AluModeMetadata* metadata = find_alu_mode_metadata(mode);
+    if (metadata == nullptr) {
+      return false;
     }
+
+    switch (metadata->operandMode) {
+      case AluOperandMode::Immediate:
+        operand = fetch8();
+        cycles  = metadata->baseCycles;
+        return true;
+
+      case AluOperandMode::Zp:
+        operand = read8(addr_zp());
+        cycles  = metadata->baseCycles;
+        return true;
+
+      case AluOperandMode::ZpX:
+        operand = read8(addr_zpx());
+        cycles  = metadata->baseCycles;
+        return true;
+
+      case AluOperandMode::Abs:
+        operand = read8(addr_abs());
+        cycles  = metadata->baseCycles;
+        return true;
+
+      case AluOperandMode::AbsX: {
+        bool     pageCrossed = false;
+        uint16_t addr        = addr_absx(pageCrossed);
+        operand              = read8_pageCrossed(addr, pageCrossed);
+        cycles               = static_cast<uint32_t>(metadata->baseCycles +
+                                       ((metadata->hasPageCrossPenalty && pageCrossed) ? 1 : 0));
+        return true;
+      }
+
+      case AluOperandMode::AbsY: {
+        bool     pageCrossed = false;
+        uint16_t addr        = addr_absy(pageCrossed);
+        operand              = read8_pageCrossed(addr, pageCrossed);
+        cycles               = static_cast<uint32_t>(metadata->baseCycles +
+                                       ((metadata->hasPageCrossPenalty && pageCrossed) ? 1 : 0));
+        return true;
+      }
+
+      case AluOperandMode::IndX:
+        operand = read8(addr_indx());
+        cycles  = metadata->baseCycles;
+        return true;
+
+      case AluOperandMode::IndY: {
+        bool     pageCrossed = false;
+        uint16_t addr        = addr_indy(pageCrossed);
+        operand              = read8_pageCrossed(addr, pageCrossed);
+        cycles               = static_cast<uint32_t>(metadata->baseCycles +
+                                       ((metadata->hasPageCrossPenalty && pageCrossed) ? 1 : 0));
+        return true;
+      }
+
+      case AluOperandMode::ZpInd:
+        operand = read8(addr_zpind());
+        cycles  = metadata->baseCycles;
+        return true;
+    }
+
+    return false;
   }
 
   uint32_t CPU65C02::execute_alu_family_opcode(uint8_t op) {
@@ -2107,83 +2244,112 @@ namespace prodos8emu {
       return 0;
     }
 
-    switch (op & 0xE0) {
-      case 0x00:
+    const AluGroupMetadata* groupMetadata =
+        find_alu_group_metadata(static_cast<uint8_t>(op & 0xE0));
+    if (groupMetadata == nullptr) {
+      return 0;
+    }
+
+    switch (groupMetadata->operation) {
+      case AluGroupOperation::Ora:
         m_r.a = static_cast<uint8_t>(m_r.a | operand);
         setNZ(m_r.a);
         return cycles;
-      case 0x20:
+
+      case AluGroupOperation::And:
         m_r.a = static_cast<uint8_t>(m_r.a & operand);
         setNZ(m_r.a);
         return cycles;
-      case 0x40:
+
+      case AluGroupOperation::Eor:
         m_r.a = static_cast<uint8_t>(m_r.a ^ operand);
         setNZ(m_r.a);
         return cycles;
-      case 0x60:
+
+      case AluGroupOperation::Adc:
         m_r.a = adc(m_r.a, operand);
         return cycles;
-      case 0xC0:
+
+      case AluGroupOperation::Cmp:
         (void)cmp(m_r.a, operand);
         return cycles;
-      case 0xE0:
+
+      case AluGroupOperation::Sbc:
         m_r.a = sbc(m_r.a, operand);
         return cycles;
-      default:
-        return 0;
     }
+
+    return 0;
   }
 
   bool CPU65C02::read_rmw_target_for_mode(uint8_t mode, uint16_t& addr, uint32_t& cycles) {
-    switch (mode) {
-      case 0x06:
+    const RmwModeMetadata* metadata = find_rmw_mode_metadata(mode);
+    if (metadata == nullptr) {
+      return false;
+    }
+
+    switch (metadata->targetMode) {
+      case RmwTargetMode::Zp:
         addr   = addr_zp();
-        cycles = 5;
+        cycles = metadata->cycles;
         return true;
-      case 0x16:
+
+      case RmwTargetMode::ZpX:
         addr   = addr_zpx();
-        cycles = 6;
+        cycles = metadata->cycles;
         return true;
-      case 0x0E:
+
+      case RmwTargetMode::Abs:
         addr   = addr_abs();
-        cycles = 6;
+        cycles = metadata->cycles;
         return true;
-      case 0x1E: {
+
+      case RmwTargetMode::AbsX: {
         bool pc = false;
         addr    = addr_absx(pc);
-        cycles  = 7;
+        cycles  = metadata->cycles;
         return true;
       }
-      default:
-        return false;
     }
+
+    return false;
   }
 
-  uint8_t CPU65C02::apply_rmw_family_op(uint8_t op, uint8_t value) {
-    switch (op & 0xE0) {
-      case 0xE0:
+  uint8_t CPU65C02::apply_rmw_family_op(uint8_t group, uint8_t value) {
+    const RmwGroupMetadata* groupMetadata = find_rmw_group_metadata(group);
+    if (groupMetadata == nullptr) {
+      return value;
+    }
+
+    switch (groupMetadata->operation) {
+      case RmwGroupOperation::Inc:
         return static_cast<uint8_t>(value + 1);
-      case 0xC0:
+
+      case RmwGroupOperation::Dec:
         return static_cast<uint8_t>(value - 1);
-      case 0x00:
+
+      case RmwGroupOperation::Asl:
         setFlag(FLAG_C, (value & 0x80) != 0);
         return static_cast<uint8_t>(value << 1);
-      case 0x40:
+
+      case RmwGroupOperation::Lsr:
         setFlag(FLAG_C, (value & 0x01) != 0);
         return static_cast<uint8_t>(value >> 1);
-      case 0x20: {
+
+      case RmwGroupOperation::Rol: {
         bool c = getFlag(FLAG_C);
         setFlag(FLAG_C, (value & 0x80) != 0);
         return static_cast<uint8_t>((value << 1) | (c ? 1 : 0));
       }
-      case 0x60: {
+
+      case RmwGroupOperation::Ror: {
         bool c = getFlag(FLAG_C);
         setFlag(FLAG_C, (value & 0x01) != 0);
         return static_cast<uint8_t>((value >> 1) | (c ? 0x80 : 0));
       }
-      default:
-        return value;
     }
+
+    return value;
   }
 
   uint32_t CPU65C02::execute_rmw_family_opcode(uint8_t op) {
@@ -2194,13 +2360,12 @@ namespace prodos8emu {
     }
 
     uint8_t group = static_cast<uint8_t>(op & 0xE0);
-    if (group != 0x00 && group != 0x20 && group != 0x40 && group != 0x60 && group != 0xC0 &&
-        group != 0xE0) {
+    if (find_rmw_group_metadata(group) == nullptr) {
       return 0;
     }
 
     uint8_t v = read8(addr);
-    v         = apply_rmw_family_op(op, v);
+    v         = apply_rmw_family_op(group, v);
     write8(addr, v);
     setNZ(v);
     return cycles;

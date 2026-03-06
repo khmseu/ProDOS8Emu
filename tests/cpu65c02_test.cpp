@@ -3074,6 +3074,410 @@ __attribute__((noinline)) static void run_rmb_smb_bbr_bbs_full_bit_matrix_contra
   }
 }
 
+__attribute__((noinline)) static void run_alu_decode_table_equivalence_test(int& failures) {
+  std::cout << "Test 65: alu_decode_table_equivalence\n";
+
+  bool testFailed = false;
+
+  enum class AluRoute : uint8_t {
+    None,
+    Ora,
+    And,
+    Eor,
+    Adc,
+    Cmp,
+    Sbc,
+  };
+
+  struct AluModeMetadata {
+    uint8_t mode;
+    uint8_t baseCycles;
+    bool    hasPageCrossPenalty;
+  };
+
+  struct AluGroupMetadata {
+    uint8_t  group;
+    AluRoute route;
+  };
+
+  static const AluModeMetadata modeTable[] = {
+      {0x01, 6, false}, {0x05, 3, false}, {0x09, 2, false}, {0x0D, 4, false}, {0x11, 5, true},
+      {0x12, 5, false}, {0x15, 4, false}, {0x19, 4, true},  {0x1D, 4, true},
+  };
+
+  static const AluGroupMetadata groupTable[] = {
+      {0x00, AluRoute::Ora}, {0x20, AluRoute::And}, {0x40, AluRoute::Eor},
+      {0x60, AluRoute::Adc}, {0xC0, AluRoute::Cmp}, {0xE0, AluRoute::Sbc},
+  };
+
+  const auto classifyLegacyMode = [](uint8_t mode) {
+    switch (mode) {
+      case 0x01:
+      case 0x05:
+      case 0x09:
+      case 0x0D:
+      case 0x11:
+      case 0x12:
+      case 0x15:
+      case 0x19:
+      case 0x1D:
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  const auto classifyLegacyGroup = [](uint8_t group) -> AluRoute {
+    switch (group) {
+      case 0x00:
+        return AluRoute::Ora;
+      case 0x20:
+        return AluRoute::And;
+      case 0x40:
+        return AluRoute::Eor;
+      case 0x60:
+        return AluRoute::Adc;
+      case 0xC0:
+        return AluRoute::Cmp;
+      case 0xE0:
+        return AluRoute::Sbc;
+      default:
+        return AluRoute::None;
+    }
+  };
+
+  const auto findModeMetadata = [](uint8_t mode) -> const AluModeMetadata* {
+    for (const AluModeMetadata& metadata : modeTable) {
+      if (metadata.mode == mode) {
+        return &metadata;
+      }
+    }
+    return nullptr;
+  };
+
+  const auto findGroupMetadata = [](uint8_t group) -> const AluGroupMetadata* {
+    for (const AluGroupMetadata& metadata : groupTable) {
+      if (metadata.group == group) {
+        return &metadata;
+      }
+    }
+    return nullptr;
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t op    = static_cast<uint8_t>(opValue);
+    const uint8_t mode  = static_cast<uint8_t>(op & 0x1F);
+    const uint8_t group = static_cast<uint8_t>(op & 0xE0);
+
+    const AluRoute legacy = classifyLegacyMode(mode) ? classifyLegacyGroup(group) : AluRoute::None;
+
+    const AluModeMetadata*  modeMetadata  = findModeMetadata(mode);
+    const AluGroupMetadata* groupMetadata = findGroupMetadata(group);
+    const AluRoute          tableRoute    = (modeMetadata != nullptr && groupMetadata != nullptr)
+                                                ? groupMetadata->route
+                                                : AluRoute::None;
+
+    if (legacy != tableRoute) {
+      std::cerr << "FAIL: ALU decode-table route mismatch for opcode=0x" << std::hex
+                << static_cast<int>(op) << std::dec << " (legacy=" << static_cast<int>(legacy)
+                << ", table=" << static_cast<int>(tableRoute) << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    const AluModeMetadata* absxMetadata = findModeMetadata(0x1D);
+    const AluModeMetadata* indyMetadata = findModeMetadata(0x11);
+    const AluModeMetadata* immMetadata  = findModeMetadata(0x09);
+    if (absxMetadata == nullptr || absxMetadata->baseCycles != 4 ||
+        !absxMetadata->hasPageCrossPenalty || indyMetadata == nullptr ||
+        indyMetadata->baseCycles != 5 || !indyMetadata->hasPageCrossPenalty ||
+        immMetadata == nullptr || immMetadata->baseCycles != 2 ||
+        immMetadata->hasPageCrossPenalty) {
+      std::cerr << "FAIL: ALU mode metadata cycle/page-cross contracts mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x39A0;
+    writeProgram(*mem, start,
+                 {
+                     0xA9,
+                     0x00,
+                     0x1D,
+                     0xFF,
+                     0x20,
+                     0x11,
+                     0x40,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0x0040, 0x21FF);
+    prodos8emu::write_u8(mem->banks(), 0x2100, 0x11);
+    prodos8emu::write_u8(mem->banks(), 0x2200, 0x22);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x01;
+    cpu.regs().y = 0x01;
+
+    uint32_t ldaCycles  = cpu.step();
+    uint32_t absxCycles = cpu.step();
+    uint32_t indyCycles = cpu.step();
+
+    if (ldaCycles != 2 || absxCycles != 5 || indyCycles != 6 || cpu.regs().a != 0x33 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 7) ||
+        prodos8emu::read_u8(mem->constBanks(), 0x2100) != 0x11 ||
+        prodos8emu::read_u8(mem->constBanks(), 0x2200) != 0x22) {
+      std::cerr << "FAIL: ALU decode-table runtime cycle/page-cross behavior mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: alu_decode_table_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_rmw_decode_table_equivalence_test(int& failures) {
+  std::cout << "Test 66: rmw_decode_table_equivalence\n";
+
+  bool testFailed = false;
+
+  enum class RmwRoute : uint8_t {
+    None,
+    Asl,
+    Rol,
+    Lsr,
+    Ror,
+    Dec,
+    Inc,
+  };
+
+  struct RmwModeMetadata {
+    uint8_t mode;
+    uint8_t cycles;
+  };
+
+  struct RmwGroupMetadata {
+    uint8_t  group;
+    RmwRoute route;
+  };
+
+  static const RmwModeMetadata modeTable[] = {
+      {0x06, 5},
+      {0x16, 6},
+      {0x0E, 6},
+      {0x1E, 7},
+  };
+
+  static const RmwGroupMetadata groupTable[] = {
+      {0x00, RmwRoute::Asl}, {0x20, RmwRoute::Rol}, {0x40, RmwRoute::Lsr},
+      {0x60, RmwRoute::Ror}, {0xC0, RmwRoute::Dec}, {0xE0, RmwRoute::Inc},
+  };
+
+  const auto classifyLegacyMode = [](uint8_t mode) {
+    switch (mode) {
+      case 0x06:
+      case 0x16:
+      case 0x0E:
+      case 0x1E:
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  const auto classifyLegacyGroup = [](uint8_t group) -> RmwRoute {
+    switch (group) {
+      case 0x00:
+        return RmwRoute::Asl;
+      case 0x20:
+        return RmwRoute::Rol;
+      case 0x40:
+        return RmwRoute::Lsr;
+      case 0x60:
+        return RmwRoute::Ror;
+      case 0xC0:
+        return RmwRoute::Dec;
+      case 0xE0:
+        return RmwRoute::Inc;
+      default:
+        return RmwRoute::None;
+    }
+  };
+
+  const auto findModeMetadata = [](uint8_t mode) -> const RmwModeMetadata* {
+    for (const RmwModeMetadata& metadata : modeTable) {
+      if (metadata.mode == mode) {
+        return &metadata;
+      }
+    }
+    return nullptr;
+  };
+
+  const auto findGroupMetadata = [](uint8_t group) -> const RmwGroupMetadata* {
+    for (const RmwGroupMetadata& metadata : groupTable) {
+      if (metadata.group == group) {
+        return &metadata;
+      }
+    }
+    return nullptr;
+  };
+
+  for (uint16_t opValue = 0; opValue <= 0x00FF && !testFailed; ++opValue) {
+    const uint8_t op    = static_cast<uint8_t>(opValue);
+    const uint8_t mode  = static_cast<uint8_t>(op & 0x1F);
+    const uint8_t group = static_cast<uint8_t>(op & 0xE0);
+
+    const RmwRoute legacy = classifyLegacyMode(mode) ? classifyLegacyGroup(group) : RmwRoute::None;
+
+    const RmwModeMetadata*  modeMetadata  = findModeMetadata(mode);
+    const RmwGroupMetadata* groupMetadata = findGroupMetadata(group);
+    const RmwRoute          tableRoute    = (modeMetadata != nullptr && groupMetadata != nullptr)
+                                                ? groupMetadata->route
+                                                : RmwRoute::None;
+
+    if (legacy != tableRoute) {
+      std::cerr << "FAIL: RMW decode-table route mismatch for opcode=0x" << std::hex
+                << static_cast<int>(op) << std::dec << " (legacy=" << static_cast<int>(legacy)
+                << ", table=" << static_cast<int>(tableRoute) << ")\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    const RmwModeMetadata* absxMetadata = findModeMetadata(0x1E);
+    const RmwModeMetadata* zpMetadata   = findModeMetadata(0x06);
+    if (absxMetadata == nullptr || absxMetadata->cycles != 7 || zpMetadata == nullptr ||
+        zpMetadata->cycles != 5) {
+      std::cerr << "FAIL: RMW mode metadata cycle contracts mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x39F0;
+    writeProgram(*mem, start,
+                 {
+                     0x7E,
+                     0xFF,
+                     0x20,
+                     0xC6,
+                     0x10,
+                 });
+    prodos8emu::write_u8(mem->banks(), 0x2100, 0x00);
+    prodos8emu::write_u8(mem->banks(), 0x0010, 0x01);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().x = 0x01;
+    cpu.regs().p = 0x21;
+
+    uint32_t rorCycles = cpu.step();
+    uint8_t  rorValue  = prodos8emu::read_u8(mem->constBanks(), 0x2100);
+    bool     rorC      = (cpu.regs().p & 0x01) != 0;
+    bool     rorZ      = (cpu.regs().p & 0x02) != 0;
+    bool     rorN      = (cpu.regs().p & 0x80) != 0;
+
+    uint32_t decCycles = cpu.step();
+    uint8_t  decValue  = prodos8emu::read_u8(mem->constBanks(), 0x0010);
+    bool     decC      = (cpu.regs().p & 0x01) != 0;
+    bool     decZ      = (cpu.regs().p & 0x02) != 0;
+    bool     decN      = (cpu.regs().p & 0x80) != 0;
+
+    if (rorCycles != 7 || rorValue != 0x80 || rorC || rorZ || !rorN || decCycles != 5 ||
+        decValue != 0x00 || decC || !decZ || decN ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 5)) {
+      std::cerr << "FAIL: RMW decode-table runtime cycle/flag/write behavior mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: rmw_decode_table_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_alu_rmw_route_precedence_nonregression_test(
+    int& failures) {
+  std::cout << "Test 67: alu_rmw_route_precedence_nonregression\n";
+
+  bool testFailed = false;
+
+  {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x3A30;
+    writeProgram(*mem, start,
+                 {
+                     0xE4,
+                     0x12,
+                     0xC9,
+                     0x0F,
+                     0xC6,
+                     0x13,
+                 });
+    prodos8emu::write_u8(mem->banks(), 0x0012, 0x30);
+    prodos8emu::write_u8(mem->banks(), 0x0013, 0x01);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().a = 0xF0;
+    cpu.regs().x = 0x30;
+    cpu.regs().p = 0x61;
+
+    const uint32_t cpxCycles = cpu.step();
+    const bool     cpxC      = (cpu.regs().p & 0x01) != 0;
+    const bool     cpxZ      = (cpu.regs().p & 0x02) != 0;
+    const bool     cpxN      = (cpu.regs().p & 0x80) != 0;
+    const bool     cpxV      = (cpu.regs().p & 0x40) != 0;
+
+    const uint32_t cmpCycles = cpu.step();
+    const bool     cmpC      = (cpu.regs().p & 0x01) != 0;
+    const bool     cmpZ      = (cpu.regs().p & 0x02) != 0;
+    const bool     cmpN      = (cpu.regs().p & 0x80) != 0;
+    const bool     cmpV      = (cpu.regs().p & 0x40) != 0;
+
+    const uint32_t decCycles = cpu.step();
+    const bool     decC      = (cpu.regs().p & 0x01) != 0;
+    const bool     decZ      = (cpu.regs().p & 0x02) != 0;
+    const bool     decN      = (cpu.regs().p & 0x80) != 0;
+
+    if (cpxCycles != 3 || !cpxC || !cpxZ || cpxN || !cpxV || cmpCycles != 2 || !cmpC || cmpZ ||
+        !cmpN || !cmpV || decCycles != 5 || !decC || !decZ || decN || cpu.regs().a != 0xF0 ||
+        cpu.regs().x != 0x30 || prodos8emu::read_u8(mem->constBanks(), 0x0012) != 0x30 ||
+        prodos8emu::read_u8(mem->constBanks(), 0x0013) != 0x00 ||
+        cpu.regs().pc != static_cast<uint16_t>(start + 6)) {
+      std::cerr << "FAIL: ALU/RMW route precedence nonregression mismatch\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: alu_rmw_route_precedence_nonregression\n";
+  }
+}
+
 __attribute__((noinline)) static void run_flag_transfer_stack_helper_dispatch_equivalence_test(
     int& failures) {
   std::cout << "Test 61: flag_transfer_stack_helper_dispatch_equivalence\n";
@@ -8777,6 +9181,9 @@ int main() {
   run_control_flow_refactor_equivalence_contracts_test(failures);
   run_alu_rmw_decode_route_matrix_contracts_test(failures);
   run_rmb_smb_bbr_bbs_full_bit_matrix_contracts_test(failures);
+  run_alu_decode_table_equivalence_test(failures);
+  run_rmw_decode_table_equivalence_test(failures);
+  run_alu_rmw_route_precedence_nonregression_test(failures);
   run_flag_transfer_stack_helper_dispatch_equivalence_test(failures);
   run_accumulator_misc_helper_dispatch_equivalence_test(failures);
   run_bit_family_mode_metadata_equivalence_test(failures);
