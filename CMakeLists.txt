@@ -179,3 +179,14 @@ target_link_libraries(prodos8emu_run
     PRIVATE
         prodos8emu
 )
+
+# Test executable - prodos8emu_run CLI contract tests
+add_executable(prodos8emu_run_cli_tests
+    tests/prodos8emu_run_cli_test.cpp
+)
+
+add_dependencies(prodos8emu_run_cli_tests
+    prodos8emu_run
+)
+
+add_test(NAME prodos8emu_run_cli_tests COMMAND prodos8emu_run_cli_tests)

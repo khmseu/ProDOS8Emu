@@ -3,6 +3,7 @@
 Add an opt-in trace monitor that logs old/new PC transitions for JSR and RTS while preserving existing trace behavior by default. Implementation will hook into existing JSR/RTS control-flow points and keep MLI trap tracing unchanged unless explicitly expanded later.
 
 **Phases 3**
+
 1. **Phase 1: Add Failing Characterization Tests**
     - **Objective:** Define expected JSR/RTS monitor behavior and output format before implementation.
     - **Files/Functions to Modify/Create:** `tests/cpu65c02_test.cpp` (new `run_jsr_rts_trace_monitor_*` tests, `main` registration)
@@ -32,4 +33,5 @@ Add an opt-in trace monitor that logs old/new PC transitions for JSR and RTS whi
         3. Prepare completion artifacts and commit guidance.
 
 **Open Questions 1**
+
 1. None. Resolved choices: option default `off`, MLI trap transitions `excluded`, pre-existing change committed separately (`be1b090`).
