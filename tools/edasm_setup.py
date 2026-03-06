@@ -560,6 +560,7 @@ def run_emulator(
     system_file: str,
     volume_root: str,
     debug: bool = False,
+    jsr_rts_trace: bool = False,
     max_instructions: Optional[int] = None,
 ) -> None:
     """Run the emulator.
@@ -570,6 +571,7 @@ def run_emulator(
         system_file: Path to system file to execute
         volume_root: Volume root directory
         debug: Enable runner debug logs
+        jsr_rts_trace: Enable runner JSR/RTS trace logs
         max_instructions: Optional instruction limit
 
     Raises:
@@ -583,6 +585,9 @@ def run_emulator(
 
     if debug:
         cmd.append("--debug")
+
+    if jsr_rts_trace:
+        cmd.append("--jsr-rts-trace")
 
     if max_instructions is not None:
         cmd.extend(["--max-instructions", str(max_instructions)])
@@ -690,6 +695,11 @@ Examples:
         action="store_true",
         help="Enable prodos8emu_run debug logs",
     )
+    parser.add_argument(
+        "--jsr-rts-trace",
+        action="store_true",
+        help="Enable prodos8emu_run JSR/RTS trace logs",
+    )
 
     return parser.parse_args(args)
 
@@ -777,6 +787,7 @@ def main():
                 system_file,
                 str(volume_root),
                 args.debug,
+                args.jsr_rts_trace,
                 args.max_instructions,
             )
         else:
