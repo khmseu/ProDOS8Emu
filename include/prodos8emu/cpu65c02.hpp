@@ -200,16 +200,14 @@ namespace prodos8emu {
     static constexpr size_t ZP_MONITOR_MAX_EVENTS = 8;
 
     bool           m_stepZpMonitorCaptureActive                 = false;
-    uint8_t        m_stepTraceOpcode                            = 0;
     ZpMonitorEvent m_stepZpMonitorEvents[ZP_MONITOR_MAX_EVENTS] = {};
     size_t         m_stepZpMonitorEventCount                    = 0;
 
     void               log_step_trace_marker(uint16_t pc);
-    static const char* passnbr67_mutator_name(uint8_t opcode);
-    void               begin_step_zp_monitor_capture(uint8_t opcode);
+    void               begin_step_zp_monitor_capture();
     void               end_step_zp_monitor_capture();
     void append_step_zp_monitor_event(uint16_t addr, uint8_t oldValue, uint8_t newValue);
-    void log_step_zp_monitor_events();
+    void               log_step_zp_monitor_events(uint8_t opcode);
 
     // Execute opcode
     uint32_t execute(uint8_t opcode);

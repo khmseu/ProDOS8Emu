@@ -5013,6 +5013,99 @@ __attribute__((noinline)) static void run_zp_monitor_uniform_emission_nonregress
   std::cout << "PASS: zp_monitor_uniform_emission_nonregression\n";
 }
 
+__attribute__((noinline)) static void run_zp_monitor_legacy_path_removal_nonregression_test(
+    int& failures) {
+  std::cout << "Test 81: zp_monitor_legacy_path_removal_nonregression\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x3DE0;
+  writeProgram(mem, start,
+               {
+                   0xA9, 0x2A, 0x85, 0x67, 0xA9, 0x2A, 0x85, 0x67, 0x64,
+                   0x67, 0xE6, 0x67, 0xA9, 0x55, 0x85, 0x20, 0xA9, 0x99,
+                   0x85, 0xBF, 0xEA,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  for (int i = 0; i < 11; ++i) {
+    cpu.step();
+  }
+
+  const std::string expected =
+      "@2 PC=$3DE4 STA PassNbr($67): $00 -> $2A\n"
+      "@5 PC=$3DEA PassNbr($67): $2A -> $00\n"
+      "@6 PC=$3DEC INC PassNbr($67): $00 -> $01\n"
+      "@10 PC=$3DF4 GenF($BF): $00 -> $99\n";
+  const std::string actual = traceLog.str();
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Legacy monitor-path removal changed emitted trace deltas\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: zp_monitor_legacy_path_removal_nonregression\n";
+  }
+}
+
+__attribute__((noinline)) static void run_zp_monitor_trace_delta_format_stability_test(
+    int& failures) {
+  std::cout << "Test 82: zp_monitor_trace_delta_format_stability\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x3E20;
+  writeProgram(mem, start,
+               {
+                   0xA9, 0x1C, 0x85, 0x67, 0xE6, 0x67, 0xA9,
+                   0xAB, 0x85, 0x68, 0xA9, 0x0F, 0x85, 0x90,
+                   0xA9, 0xC3, 0x85, 0xBF, 0xEA,
+               });
+  prodos8emu::write_u8(mem.banks(), 0x0067, 0xA5);
+  prodos8emu::write_u8(mem.banks(), 0x0068, 0x0B);
+  prodos8emu::write_u8(mem.banks(), 0x0090, 0xF0);
+  prodos8emu::write_u8(mem.banks(), 0x00BF, 0x7E);
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  for (int i = 0; i < 10; ++i) {
+    cpu.step();
+  }
+
+  const std::string expected =
+      "@2 PC=$3E24 STA PassNbr($67): $A5 -> $1C\n"
+      "@3 PC=$3E26 INC PassNbr($67): $1C -> $1D\n"
+      "@5 PC=$3E2A ListingF($68): $0B -> $AB\n"
+      "@7 PC=$3E2E DskListF($90): $F0 -> $0F\n"
+      "@9 PC=$3E32 GenF($BF): $7E -> $C3\n";
+  const std::string actual = traceLog.str();
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Zero-page monitor trace delta format drifted\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: zp_monitor_trace_delta_format_stability\n";
+  }
+}
+
 __attribute__((noinline)) static void run_zp_monitor_trigger_matrix_contracts_test(int& failures) {
   std::cout << "Test 76: zp_monitor_trigger_matrix_contracts\n";
 
@@ -10418,6 +10511,8 @@ int main() {
   run_zp_monitor_trace_output_compatibility_baseline_test(failures);
   run_zp_monitor_write8_hook_equivalence_test(failures);
   run_zp_monitor_uniform_emission_nonregression_test(failures);
+  run_zp_monitor_legacy_path_removal_nonregression_test(failures);
+  run_zp_monitor_trace_delta_format_stability_test(failures);
   run_trace_dsklistf_delta_logged_consistently_test(failures);
   run_relative_branch_apply_helper_equivalence_test(failures);
 

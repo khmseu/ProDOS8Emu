@@ -395,6 +395,28 @@ namespace prodos8emu {
       return nullptr;
     }
 
+    const char* passnbr_monitor_mutator_name(uint8_t opcode) {
+      const uint8_t mode  = static_cast<uint8_t>(opcode & 0x1F);
+      const uint8_t group = static_cast<uint8_t>(opcode & 0xE0);
+
+      // Decode-group classification keeps mutator labeling independent from opcode whitelists.
+      if (group == 0x80) {
+        const AluModeMetadata* modeMetadata = find_alu_mode_metadata(mode);
+        if (modeMetadata != nullptr && modeMetadata->operandMode != AluOperandMode::Immediate) {
+          return "STA";
+        }
+      }
+
+      const RmwModeMetadata*  rmwModeMetadata  = find_rmw_mode_metadata(mode);
+      const RmwGroupMetadata* rmwGroupMetadata = find_rmw_group_metadata(group);
+      if (rmwModeMetadata != nullptr && rmwGroupMetadata != nullptr &&
+          rmwGroupMetadata->operation == RmwGroupOperation::Inc) {
+        return "INC";
+      }
+
+      return nullptr;
+    }
+
     const char* mli_call_name(uint8_t callNumber) {
       switch (callNumber) {
         case 0xC0:
@@ -1144,7 +1166,6 @@ namespace prodos8emu {
     recordPCChange(0x0000, resetVector);  // from=0 for reset
     m_instructionCount           = 0;
     m_stepZpMonitorCaptureActive = false;
-    m_stepTraceOpcode            = 0;
     m_stepZpMonitorEventCount    = 0;
   }
 
@@ -2633,45 +2654,13 @@ namespace prodos8emu {
     }
   }
 
-  const char* CPU65C02::passnbr67_mutator_name(uint8_t opcode) {
-    struct PassNbrMutatorMetadata {
-      uint8_t     opcode;
-      const char* mutatorName;
-    };
-
-    static const PassNbrMutatorMetadata kPassNbrMutatorTable[] = {
-        {0x85, "STA"},  // zp
-        {0x95, "STA"},  // zp,X
-        {0x8D, "STA"},  // abs
-        {0x9D, "STA"},  // abs,X
-        {0x99, "STA"},  // abs,Y
-        {0x81, "STA"},  // (zp,X)
-        {0x91, "STA"},  // (zp),Y
-        {0x92, "STA"},  // (zp)
-        {0xE6, "INC"},  // zp
-        {0xF6, "INC"},  // zp,X
-        {0xEE, "INC"},  // abs
-        {0xFE, "INC"},  // abs,X
-    };
-
-    for (const PassNbrMutatorMetadata& metadata : kPassNbrMutatorTable) {
-      if (metadata.opcode == opcode) {
-        return metadata.mutatorName;
-      }
-    }
-
-    return nullptr;
-  }
-
-  void CPU65C02::begin_step_zp_monitor_capture(uint8_t opcode) {
+  void CPU65C02::begin_step_zp_monitor_capture() {
     m_stepZpMonitorCaptureActive = true;
-    m_stepTraceOpcode            = opcode;
     m_stepZpMonitorEventCount    = 0;
   }
 
   void CPU65C02::end_step_zp_monitor_capture() {
     m_stepZpMonitorCaptureActive = false;
-    m_stepTraceOpcode            = 0;
     m_stepZpMonitorEventCount    = 0;
   }
 
@@ -2687,10 +2676,12 @@ namespace prodos8emu {
     m_stepZpMonitorEventCount++;
   }
 
-  void CPU65C02::log_step_zp_monitor_events() {
+  void CPU65C02::log_step_zp_monitor_events(uint8_t opcode) {
     if (m_traceLog == nullptr) {
       return;
     }
+
+    const char* passnbrMutator = passnbr_monitor_mutator_name(opcode);
 
     for (size_t i = 0; i < m_stepZpMonitorEventCount; ++i) {
       const ZpMonitorEvent&       event     = m_stepZpMonitorEvents[i];
@@ -2701,7 +2692,6 @@ namespace prodos8emu {
 
       const bool isPassNbr = (event.address == 0x67);
       if (isPassNbr) {
-        const char* passnbrMutator = passnbr67_mutator_name(m_stepTraceOpcode);
         if (passnbrMutator != nullptr) {
           *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
                       << std::setfill('0') << std::setw(4) << m_r.pc << " " << passnbrMutator << " "
@@ -2739,13 +2729,13 @@ namespace prodos8emu {
     uint8_t op = fetch8();
 
     if (track_trace) {
-      begin_step_zp_monitor_capture(op);
+      begin_step_zp_monitor_capture();
     }
 
     uint32_t cycles = execute(op);
 
     if (track_trace) {
-      log_step_zp_monitor_events();
+      log_step_zp_monitor_events(op);
       end_step_zp_monitor_capture();
     }
 
