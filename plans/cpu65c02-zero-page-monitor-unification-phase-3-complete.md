@@ -3,11 +3,13 @@
 Phase 3 removed legacy zero-page monitor snapshot/whitelist constructs and kept unified `write8`-triggered monitoring as the sole source of monitored zero-page delta events. Added nonregression tests lock legacy-path removal behavior and trace delta format stability.
 
 **Files created/changed:**
+
 - `include/prodos8emu/cpu65c02.hpp`
 - `src/cpu65c02.cpp`
 - `tests/cpu65c02_test.cpp`
 
 **Functions created/changed:**
+
 - `begin_step_zp_monitor_capture()`
 - `log_step_zp_monitor_events(uint8_t opcode)`
 - `passnbr_monitor_mutator_name(uint8_t opcode)`
@@ -16,6 +18,7 @@ Phase 3 removed legacy zero-page monitor snapshot/whitelist constructs and kept 
 - `run_zp_monitor_trace_delta_format_stability_test(int& failures)`
 
 **Tests created/changed:**
+
 - `zp_monitor_legacy_path_removal_nonregression`
 - `zp_monitor_trace_delta_format_stability`
 - Target run: `prodos8emu_cpu65c02_tests` ✅
