@@ -368,6 +368,47 @@ class TestRunEmulator(unittest.TestCase):
         self.assertIn("--max-instructions", called_cmd)
         self.assertIn("1234", called_cmd)
 
+    @mock.patch("subprocess.run")
+    def test_run_emulator_forwards_jsr_rts_trace_flag_when_enabled(self, mock_run):
+        """JSR/RTS trace flag should be forwarded to the runner when enabled."""
+        mock_run.return_value = mock.Mock(returncode=0)
+
+        run_emulator(
+            runner_path="build/prodos8emu_run",
+            rom_path="rom.bin",
+            system_file="EDASM.SYSTEM",
+            volume_root="work/volumes",
+            jsr_rts_trace=True,
+        )
+
+        called_cmd = mock_run.call_args[0][0]
+        self.assertIn("--jsr-rts-trace", called_cmd)
+
+
+class TestArgumentParsing(unittest.TestCase):
+    """Test command-line parsing behavior."""
+
+    def test_parse_args_accepts_jsr_rts_trace_flag(self):
+        """--jsr-rts-trace should parse and set the option to true."""
+        args = parse_args(
+            [
+                "--work-dir",
+                "work",
+                "--rom",
+                "apple2e.rom",
+                "--jsr-rts-trace",
+            ]
+        )
+
+        self.assertTrue(args.jsr_rts_trace)
+
+    def test_parse_args_defaults_jsr_rts_trace_to_false(self):
+        """jsr_rts_trace should default to false when the flag is absent."""
+        args = parse_args(["--work-dir", "work", "--rom", "apple2e.rom"])
+
+        self.assertTrue(hasattr(args, "jsr_rts_trace"))
+        self.assertFalse(args.jsr_rts_trace)
+
 
 class TestEndToEndMocking(unittest.TestCase):
     """Test end-to-end scenarios with mocked external dependencies."""
