@@ -78,6 +78,40 @@ namespace prodos8emu {
       BbrBbs,
     };
 
+    enum class ControlFlowBranchCondition : uint8_t {
+      Always,
+      FlagSet,
+      FlagClear,
+    };
+
+    struct ControlFlowBranchMetadata {
+      uint8_t                    opcode;
+      ControlFlowBranchCondition condition;
+      uint8_t                    flagMask;
+      uint8_t                    cycles;
+    };
+
+    static constexpr ControlFlowBranchMetadata kControlFlowBranchTable[] = {
+        {0x80, ControlFlowBranchCondition::Always, 0x00, 3},
+        {0x10, ControlFlowBranchCondition::FlagClear, 0x80, 2},
+        {0x30, ControlFlowBranchCondition::FlagSet, 0x80, 2},
+        {0x50, ControlFlowBranchCondition::FlagClear, 0x40, 2},
+        {0x70, ControlFlowBranchCondition::FlagSet, 0x40, 2},
+        {0x90, ControlFlowBranchCondition::FlagClear, 0x01, 2},
+        {0xB0, ControlFlowBranchCondition::FlagSet, 0x01, 2},
+        {0xD0, ControlFlowBranchCondition::FlagClear, 0x02, 2},
+        {0xF0, ControlFlowBranchCondition::FlagSet, 0x02, 2},
+    };
+
+    const ControlFlowBranchMetadata* find_control_flow_branch_metadata(uint8_t opcode) {
+      for (const ControlFlowBranchMetadata& metadata : kControlFlowBranchTable) {
+        if (metadata.opcode == opcode) {
+          return &metadata;
+        }
+      }
+      return nullptr;
+    }
+
     BitOpcodeFamily classify_bit_opcode_family(uint8_t opcode) {
       const uint8_t lowNibble = static_cast<uint8_t>(opcode & 0x0F);
       if (lowNibble == 0x07) {
@@ -1429,47 +1463,29 @@ namespace prodos8emu {
   }
 
   bool CPU65C02::execute_control_flow_branch_opcode(uint8_t op, uint32_t& cycles) {
-    switch (op) {
-      case 0x80:  // BRA
-        branch(true);
-        cycles = 3;
-        return true;
-      case 0x10:
-        branch(!getFlag(FLAG_N));
-        cycles = 2;
-        return true;
-      case 0x30:
-        branch(getFlag(FLAG_N));
-        cycles = 2;
-        return true;
-      case 0x50:
-        branch(!getFlag(FLAG_V));
-        cycles = 2;
-        return true;
-      case 0x70:
-        branch(getFlag(FLAG_V));
-        cycles = 2;
-        return true;
-      case 0x90:
-        branch(!getFlag(FLAG_C));
-        cycles = 2;
-        return true;
-      case 0xB0:
-        branch(getFlag(FLAG_C));
-        cycles = 2;
-        return true;
-      case 0xD0:
-        branch(!getFlag(FLAG_Z));
-        cycles = 2;
-        return true;
-      case 0xF0:
-        branch(getFlag(FLAG_Z));
-        cycles = 2;
-        return true;
-
-      default:
-        return false;
+    const ControlFlowBranchMetadata* metadata = find_control_flow_branch_metadata(op);
+    if (metadata == nullptr) {
+      return false;
     }
+
+    bool take = false;
+    switch (metadata->condition) {
+      case ControlFlowBranchCondition::Always:
+        take = true;
+        break;
+
+      case ControlFlowBranchCondition::FlagSet:
+        take = getFlag(metadata->flagMask);
+        break;
+
+      case ControlFlowBranchCondition::FlagClear:
+        take = !getFlag(metadata->flagMask);
+        break;
+    }
+
+    branch(take);
+    cycles = metadata->cycles;
+    return true;
   }
 
   bool CPU65C02::execute_control_flow_opcode(uint8_t op, uint32_t& cycles) {

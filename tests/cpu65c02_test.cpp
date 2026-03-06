@@ -4210,9 +4210,9 @@ __attribute__((noinline)) static void run_bit_opcode_shared_primitive_equivalenc
   }
 }
 
-__attribute__((noinline)) static void run_control_flow_branch_decode_table_equivalence_test(
+__attribute__((noinline)) static void run_control_flow_branch_table_dispatch_equivalence_test(
     int& failures) {
-  std::cout << "Test 68: control_flow_branch_decode_table_equivalence\n";
+  std::cout << "Test 68: control_flow_branch_table_dispatch_equivalence\n";
 
   bool testFailed = false;
 
@@ -4300,12 +4300,132 @@ __attribute__((noinline)) static void run_control_flow_branch_decode_table_equiv
   }
 
   if (!testFailed) {
-    std::cout << "PASS: control_flow_branch_decode_table_equivalence\n";
+    std::cout << "PASS: control_flow_branch_table_dispatch_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_control_flow_branch_precedence_nonregression_test(
+    int& failures) {
+  std::cout << "Test 69: control_flow_branch_precedence_nonregression\n";
+
+  bool testFailed = false;
+
+  const auto makeMem = []() {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+    return mem;
+  };
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start  = 0x3B00;
+    const uint16_t target = 0x3B20;
+    writeProgram(*mem, start,
+                 {
+                     0x4C,
+                     static_cast<uint8_t>(target & 0xFF),
+                     static_cast<uint8_t>((target >> 8) & 0xFF),
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0xA5;
+
+    const uint32_t cycles = cpu.step();
+    if (cycles != 3 || cpu.regs().pc != target || cpu.regs().p != 0xA5) {
+      std::cerr << "FAIL: control-flow branch precedence mismatch for JMP abs routing\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x3B40;
+    writeProgram(*mem, start,
+                 {
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x63;
+
+    const uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 1) || cpu.regs().p != 0x63) {
+      std::cerr << "FAIL: control-flow branch precedence mismatch for NOP routing\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = makeMem();
+
+    const uint16_t start = 0x3B60;
+    writeProgram(*mem, start,
+                 {
+                     0x90,
+                     0x02,
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x20;
+
+    const uint32_t cycles = cpu.step();
+    if (cycles != 2 || cpu.regs().pc != static_cast<uint16_t>(start + 4) || cpu.regs().p != 0x20) {
+      std::cerr << "FAIL: control-flow branch precedence mismatch for BCC routing\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    auto           mem        = makeMem();
+    const uint16_t start      = 0x3B80;
+    const uint16_t irqHandler = 0x3BA0;
+    writeProgram(*mem, start,
+                 {
+                     0x00,
+                     0xEA,
+                 });
+    writeProgram(*mem, irqHandler,
+                 {
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFE, irqHandler);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0x29;
+
+    const uint32_t cycles = cpu.step();
+    if (cycles != 7 || cpu.regs().pc != irqHandler || (cpu.regs().p & 0x04) == 0 ||
+        (cpu.regs().p & 0x08) != 0) {
+      std::cerr << "FAIL: control-flow branch precedence mismatch for BRK routing\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: control_flow_branch_precedence_nonregression\n";
   }
 }
 
 __attribute__((noinline)) static void run_mli_error_path_logging_order_stable_test(int& failures) {
-  std::cout << "Test 69: mli_error_path_logging_order_stable\n";
+  std::cout << "Test 70: mli_error_path_logging_order_stable\n";
 
   const fs::path tempDir = fs::temp_directory_path() / "prodos8emu_cpu65c02_mli_error_order";
   fs::remove_all(tempDir);
@@ -9561,7 +9681,8 @@ int main() {
   run_accumulator_misc_helper_dispatch_equivalence_test(failures);
   run_bit_family_mode_metadata_equivalence_test(failures);
   run_bit_opcode_shared_primitive_equivalence_test(failures);
-  run_control_flow_branch_decode_table_equivalence_test(failures);
+  run_control_flow_branch_table_dispatch_equivalence_test(failures);
+  run_control_flow_branch_precedence_nonregression_test(failures);
   run_mli_error_path_logging_order_stable_test(failures);
   run_trace_dsklistf_delta_logged_consistently_test(failures);
   run_relative_branch_apply_helper_equivalence_test(failures);
