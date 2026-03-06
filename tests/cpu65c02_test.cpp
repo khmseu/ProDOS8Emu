@@ -4210,6 +4210,231 @@ __attribute__((noinline)) static void run_bit_opcode_shared_primitive_equivalenc
   }
 }
 
+__attribute__((noinline)) static void run_control_flow_branch_decode_table_equivalence_test(
+    int& failures) {
+  std::cout << "Test 68: control_flow_branch_decode_table_equivalence\n";
+
+  bool testFailed = false;
+
+  struct BranchCase {
+    const char* name;
+    uint8_t     opcode;
+    uint8_t     flagMask;
+    bool        takenWhenSet;
+  };
+
+  static const BranchCase cases[] = {
+      {"BPL", 0x10, 0x80, false}, {"BMI", 0x30, 0x80, true},  {"BVC", 0x50, 0x40, false},
+      {"BVS", 0x70, 0x40, true},  {"BCC", 0x90, 0x01, false}, {"BCS", 0xB0, 0x01, true},
+      {"BNE", 0xD0, 0x02, false}, {"BEQ", 0xF0, 0x02, true},
+  };
+
+  for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])) && !testFailed; ++i) {
+    const BranchCase& c = cases[i];
+    for (int scenario = 0; scenario < 2 && !testFailed; ++scenario) {
+      const bool expectedTaken = (scenario == 0);
+
+      auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+      mem->setLCReadEnabled(true);
+      mem->setLCWriteEnabled(true);
+
+      const uint16_t start = static_cast<uint16_t>(0x3A00 + (i * 0x10) + (scenario * 0x04));
+      writeProgram(*mem, start,
+                   {
+                       c.opcode,
+                       0x02,
+                       0xEA,
+                       0xEA,
+                   });
+      prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+      prodos8emu::CPU65C02 cpu(*mem);
+      cpu.reset();
+
+      uint8_t startP = 0x20;
+      if (expectedTaken == c.takenWhenSet) {
+        startP = static_cast<uint8_t>(startP | c.flagMask);
+      } else {
+        startP = static_cast<uint8_t>(startP & ~c.flagMask);
+      }
+      cpu.regs().p = startP;
+
+      const uint32_t cycles     = cpu.step();
+      const uint16_t expectedPC = static_cast<uint16_t>(expectedTaken ? (start + 4) : (start + 2));
+      if (cycles != 2 || cpu.regs().pc != expectedPC || cpu.regs().p != startP) {
+        std::cerr << "FAIL: Branch decode parity mismatch for " << c.name << " "
+                  << (expectedTaken ? "taken" : "not-taken") << " (cycles=" << cycles << ", pc=0x"
+                  << std::hex << cpu.regs().pc << ", p=0x" << static_cast<unsigned>(cpu.regs().p)
+                  << std::dec << ")\n";
+        failures++;
+        testFailed = true;
+      }
+    }
+  }
+
+  if (!testFailed) {
+    auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+    mem->setLCReadEnabled(true);
+    mem->setLCWriteEnabled(true);
+
+    const uint16_t start = 0x3A90;
+    writeProgram(*mem, start,
+                 {
+                     0x80,
+                     0x02,
+                     0xEA,
+                     0xEA,
+                 });
+    prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+    prodos8emu::CPU65C02 cpu(*mem);
+    cpu.reset();
+    cpu.regs().p = 0xA5;
+
+    const uint32_t cycles = cpu.step();
+    if (cycles != 3 || cpu.regs().pc != static_cast<uint16_t>(start + 4) || cpu.regs().p != 0xA5) {
+      std::cerr << "FAIL: Branch decode parity mismatch for BRA unconditional mapping\n";
+      failures++;
+      testFailed = true;
+    }
+  }
+
+  if (!testFailed) {
+    std::cout << "PASS: control_flow_branch_decode_table_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_mli_error_path_logging_order_stable_test(int& failures) {
+  std::cout << "Test 69: mli_error_path_logging_order_stable\n";
+
+  const fs::path tempDir = fs::temp_directory_path() / "prodos8emu_cpu65c02_mli_error_order";
+  fs::remove_all(tempDir);
+  fs::create_directories(tempDir / "VOLERR");
+
+  prodos8emu::Apple2Memory mem;
+  prodos8emu::MLIContext   ctx(tempDir);
+
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t    pathnameAddr = 0x04B0;
+  const std::string pathname     = "/VOLERR/MISSING";
+  prodos8emu::write_u8(mem.banks(), pathnameAddr, static_cast<uint8_t>(pathname.length()));
+  for (size_t i = 0; i < pathname.length(); ++i) {
+    prodos8emu::write_u8(mem.banks(), static_cast<uint16_t>(pathnameAddr + 1 + i),
+                         static_cast<uint8_t>(pathname[i]));
+  }
+
+  const uint16_t param = 0x03B0;
+  prodos8emu::write_u8(mem.banks(), param + 0, 3);
+  prodos8emu::write_u16_le(mem.banks(), param + 1, pathnameAddr);
+  prodos8emu::write_u16_le(mem.banks(), param + 3, 0x2900);
+  prodos8emu::write_u8(mem.banks(), param + 5, 0);
+
+  const uint16_t start = 0x03A0;
+  writeProgram(mem, start,
+               {
+                   0x20,
+                   0x00,
+                   0xBF,
+                   0xC8,
+                   static_cast<uint8_t>(param & 0xFF),
+                   static_cast<uint8_t>((param >> 8) & 0xFF),
+                   0xEA,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  cpu.attachMLI(ctx);
+  std::stringstream mliLog;
+  cpu.setDebugLogs(&mliLog, nullptr);
+  cpu.reset();
+
+  cpu.step();
+
+  const std::string logText  = mliLog.str();
+  const size_t      callPos  = logText.find(" MLI call=$C8 (OPEN)");
+  const size_t      paramPos = logText.find(" param=$03B0");
+  const size_t      pathPos  = logText.find(" path='/VOLERR/MISSING'");
+  const size_t      resPos   = logText.find(" result=$46");
+  const size_t      errPos   = logText.find(" ERROR (FILE_NOT_FOUND)");
+
+  if (callPos == std::string::npos || paramPos == std::string::npos ||
+      pathPos == std::string::npos || resPos == std::string::npos || errPos == std::string::npos) {
+    std::cerr << "FAIL: Expected failing OPEN MLI log fields were missing, got:\n"
+              << logText << "\n";
+    failures++;
+  } else if (!(callPos < paramPos && paramPos < pathPos && pathPos < resPos && resPos < errPos)) {
+    std::cerr
+        << "FAIL: Expected failing OPEN log field order call->param->path->result->ERROR, got:\n"
+        << logText << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: mli_error_path_logging_order_stable\n";
+  }
+
+  fs::remove_all(tempDir);
+}
+
+__attribute__((noinline)) static void run_trace_dsklistf_delta_logged_consistently_test(
+    int& failures) {
+  std::cout << "Test 70: trace_dsklistf_delta_logged_consistently\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x3B20;
+  writeProgram(mem, start,
+               {
+                   0xA9,
+                   0x22,
+                   0x85,
+                   0x90,
+                   0xE6,
+                   0x90,
+                   0xEA,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  cpu.step();
+  cpu.step();
+  cpu.step();
+
+  const std::string traceText = traceLog.str();
+  const size_t      staPos    = traceText.find("DskListF($90): $00 -> $22");
+  const size_t      incPos    = traceText.find("DskListF($90): $22 -> $23");
+  const size_t      firstPos  = traceText.find("DskListF($90):");
+  const size_t      secondPos = (firstPos == std::string::npos)
+                                    ? std::string::npos
+                                    : traceText.find("DskListF($90):", firstPos + 1);
+  const size_t      thirdPos  = (secondPos == std::string::npos)
+                                    ? std::string::npos
+                                    : traceText.find("DskListF($90):", secondPos + 1);
+
+  if (staPos == std::string::npos) {
+    std::cerr << "FAIL: Expected STA DskListF delta trace line\n";
+    failures++;
+  } else if (incPos == std::string::npos) {
+    std::cerr << "FAIL: Expected INC DskListF delta trace line\n";
+    failures++;
+  } else if (!(staPos < incPos)) {
+    std::cerr << "FAIL: Expected DskListF delta lines to remain in mutation order\n";
+    failures++;
+  } else if (thirdPos != std::string::npos) {
+    std::cerr << "FAIL: Expected exactly two DskListF delta trace lines, got:\n"
+              << traceText << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: trace_dsklistf_delta_logged_consistently\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -9188,6 +9413,9 @@ int main() {
   run_accumulator_misc_helper_dispatch_equivalence_test(failures);
   run_bit_family_mode_metadata_equivalence_test(failures);
   run_bit_opcode_shared_primitive_equivalence_test(failures);
+  run_control_flow_branch_decode_table_equivalence_test(failures);
+  run_mli_error_path_logging_order_stable_test(failures);
+  run_trace_dsklistf_delta_logged_consistently_test(failures);
 
   fs::remove_all(tempDir);
 
