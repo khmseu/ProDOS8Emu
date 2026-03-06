@@ -4709,6 +4709,148 @@ __attribute__((noinline)) static void run_mli_trap_result_flag_contract_nonregre
   fs::remove_all(tempDir);
 }
 
+__attribute__((noinline)) static void run_trace_marker_table_equivalence_test(int& failures) {
+  std::cout << "Test 74: trace_marker_table_equivalence\n";
+
+  enum class MarkerPayload : uint8_t {
+    None,
+    PassNbrAndGenF,
+    GenFOnly,
+  };
+
+  struct MarkerCase {
+    uint16_t      pc;
+    const char*   pcText;
+    const char*   label;
+    MarkerPayload payload;
+  };
+
+  static const MarkerCase kMarkerCases[] = {
+      {0x7800, "7800", ">>> ENTER EdAsm.Asm", MarkerPayload::None},
+      {0x7816, "7816", ">>> ENTER ExecAsm", MarkerPayload::PassNbrAndGenF},
+      {0x7E30, "7E30", ">>> ENTER DoPass1", MarkerPayload::PassNbrAndGenF},
+      {0x7F0F, "7F0F", ">>> ENTER DoPass2", MarkerPayload::PassNbrAndGenF},
+      {0xD000, "D000", ">>> ENTER DoPass3", MarkerPayload::PassNbrAndGenF},
+      {0x7E45, "7E45", ">>> FlushObj", MarkerPayload::GenFOnly},
+      {0x99DF, "99DF", ">>> L99DF (flush obj code)", MarkerPayload::GenFOnly},
+      {0x8A82, "8A82", ">>> ORG directive", MarkerPayload::PassNbrAndGenF},
+      {0x8A9A, "8A9A", ">>> ORG GenF check", MarkerPayload::GenFOnly},
+      {0x8AAE, "8AAE", ">>> ORG open file path", MarkerPayload::GenFOnly},
+      {0x9918, "9918", ">>> Open4RW", MarkerPayload::None},
+      {0x7C98, "7C98", ">>> PrtSetup", MarkerPayload::None},
+      {0x7D07, "7D07", ">>> ParseDCS", MarkerPayload::None},
+      {0x7D2E, "7D2E", ">>> IsFileLst", MarkerPayload::None},
+      {0x7D3A, "7D3A", ">>> Lst2File", MarkerPayload::None},
+      {0xA70B, "A70B", ">>> XA70B (get user cmd)", MarkerPayload::None},
+      {0xB6E6, "B6E6", ">>> DoAsmbly (prep for ASM)", MarkerPayload::None},
+  };
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  for (size_t i = 0; i < (sizeof(kMarkerCases) / sizeof(kMarkerCases[0])); ++i) {
+    prodos8emu::write_u8(mem.banks(), kMarkerCases[i].pc, 0xEA);
+  }
+  prodos8emu::write_u8(mem.banks(), 0x1234, 0xEA);
+  prodos8emu::write_u8(mem.banks(), 0x0067, 0x12);
+  prodos8emu::write_u8(mem.banks(), 0x00BF, 0x34);
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, kMarkerCases[0].pc);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  for (size_t i = 0; i < (sizeof(kMarkerCases) / sizeof(kMarkerCases[0])); ++i) {
+    if (i != 0) {
+      cpu.regs().pc = kMarkerCases[i].pc;
+    }
+    cpu.step();
+  }
+
+  std::ostringstream expected;
+  for (size_t i = 0; i < (sizeof(kMarkerCases) / sizeof(kMarkerCases[0])); ++i) {
+    const MarkerCase& marker = kMarkerCases[i];
+    expected << "@" << (i + 1) << " PC=$" << marker.pcText << " " << marker.label;
+    switch (marker.payload) {
+      case MarkerPayload::None:
+        expected << "\n";
+        break;
+      case MarkerPayload::PassNbrAndGenF:
+        expected << " PassNbr(ZP$67)=$12 GenF(ZP$BF)=$34\n";
+        break;
+      case MarkerPayload::GenFOnly:
+        expected << " GenF(ZP$BF)=$34\n";
+        break;
+    }
+  }
+
+  const std::string beforeUnknown = traceLog.str();
+  cpu.regs().pc                   = 0x1234;
+  cpu.step();
+  const std::string afterUnknown = traceLog.str();
+
+  if (beforeUnknown != expected.str()) {
+    std::cerr << "FAIL: Trace marker output mismatch against expected baseline\n"
+              << "Expected:\n"
+              << expected.str() << "Actual:\n"
+              << beforeUnknown << "\n";
+    failures++;
+  } else if (afterUnknown != beforeUnknown) {
+    std::cerr << "FAIL: Unexpected trace marker output for unmapped PC\n";
+    failures++;
+  } else {
+    std::cout << "PASS: trace_marker_table_equivalence\n";
+  }
+}
+
+__attribute__((noinline)) static void run_trace_flag_delta_output_equivalence_test(int& failures) {
+  std::cout << "Test 75: trace_flag_delta_output_equivalence\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x3B40;
+  writeProgram(mem, start,
+               {
+                   0xA9, 0x05, 0x85, 0x67, 0x64, 0x67, 0xE6, 0x67, 0xA9, 0xAA, 0x85,
+                   0xBF, 0xA9, 0x01, 0x85, 0x68, 0xA9, 0x22, 0x85, 0x90, 0xEA,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  cpu.reset();
+
+  for (int i = 0; i < 11; ++i) {
+    cpu.step();
+  }
+
+  const std::string traceText = traceLog.str();
+  const std::string expected =
+      "@2 PC=$3B44 STA PassNbr($67): $00 -> $05\n"
+      "@4 PC=$3B48 INC PassNbr($67): $00 -> $01\n"
+      "@6 PC=$3B4C GenF($BF): $00 -> $AA\n"
+      "@8 PC=$3B50 ListingF($68): $00 -> $01\n"
+      "@10 PC=$3B54 DskListF($90): $00 -> $22\n";
+
+  if (traceText != expected) {
+    std::cerr << "FAIL: Trace flag delta output changed from expected baseline\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << traceText << "\n";
+    failures++;
+  } else if (traceText.find("PassNbr($67): $05 -> $00") != std::string::npos) {
+    std::cerr << "FAIL: Unexpected PassNbr delta emitted for STZ opcode\n";
+    failures++;
+  } else {
+    std::cout << "PASS: trace_flag_delta_output_equivalence\n";
+  }
+}
+
 __attribute__((noinline)) static void run_trace_dsklistf_delta_logged_consistently_test(
     int& failures) {
   std::cout << "Test 70: trace_dsklistf_delta_logged_consistently\n";
@@ -9899,6 +10041,8 @@ int main() {
   run_mli_error_path_logging_order_stable_test(failures);
   run_mli_trap_log_builder_equivalence_test(failures);
   run_mli_trap_result_flag_contract_nonregression_test(failures);
+  run_trace_marker_table_equivalence_test(failures);
+  run_trace_flag_delta_output_equivalence_test(failures);
   run_trace_dsklistf_delta_logged_consistently_test(failures);
   run_relative_branch_apply_helper_equivalence_test(failures);
 

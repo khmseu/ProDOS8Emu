@@ -2525,80 +2525,67 @@ namespace prodos8emu {
       return;
     }
 
-    switch (pc) {
-      case 0x7800:  // EdAsm.Asm entry point
-        *m_traceLog << "@" << m_instructionCount << " PC=$7800 >>> ENTER EdAsm.Asm\n";
+    enum class MarkerPayload : uint8_t {
+      None,
+      PassNbrAndGenF,
+      GenFOnly,
+    };
+
+    struct MarkerMetadata {
+      uint16_t      pc;
+      const char*   label;
+      MarkerPayload payload;
+    };
+
+    static const MarkerMetadata kMarkerTable[] = {
+        {0x7800, ">>> ENTER EdAsm.Asm", MarkerPayload::None},
+        {0x7816, ">>> ENTER ExecAsm", MarkerPayload::PassNbrAndGenF},
+        {0x7E30, ">>> ENTER DoPass1", MarkerPayload::PassNbrAndGenF},
+        {0x7F0F, ">>> ENTER DoPass2", MarkerPayload::PassNbrAndGenF},
+        {0xD000, ">>> ENTER DoPass3", MarkerPayload::PassNbrAndGenF},
+        {0x7E45, ">>> FlushObj", MarkerPayload::GenFOnly},
+        {0x99DF, ">>> L99DF (flush obj code)", MarkerPayload::GenFOnly},
+        {0x8A82, ">>> ORG directive", MarkerPayload::PassNbrAndGenF},
+        {0x8A9A, ">>> ORG GenF check", MarkerPayload::GenFOnly},
+        {0x8AAE, ">>> ORG open file path", MarkerPayload::GenFOnly},
+        {0x9918, ">>> Open4RW", MarkerPayload::None},
+        {0x7C98, ">>> PrtSetup", MarkerPayload::None},
+        {0x7D07, ">>> ParseDCS", MarkerPayload::None},
+        {0x7D2E, ">>> IsFileLst", MarkerPayload::None},
+        {0x7D3A, ">>> Lst2File", MarkerPayload::None},
+        {0xA70B, ">>> XA70B (get user cmd)", MarkerPayload::None},
+        {0xB6E6, ">>> DoAsmbly (prep for ASM)", MarkerPayload::None},
+    };
+
+    const MarkerMetadata* marker = nullptr;
+    for (const MarkerMetadata& entry : kMarkerTable) {
+      if (entry.pc == pc) {
+        marker = &entry;
         break;
-      case 0x7816:  // ExecAsm (Asm2.S line 17)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7816 >>> ENTER ExecAsm";
+      }
+    }
+    if (marker == nullptr) {
+      return;
+    }
+
+    *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                << std::setfill('0') << std::setw(4) << marker->pc << std::dec << " "
+                << marker->label;
+
+    switch (marker->payload) {
+      case MarkerPayload::None:
+        *m_traceLog << "\n";
+        break;
+
+      case MarkerPayload::PassNbrAndGenF:
         *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
                     << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
                     << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
         break;
-      case 0x7E30:  // DoPass1 (Asm2.S line 1015)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7E30 >>> ENTER DoPass1";
-        *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0x7F0F:  // DoPass2 (Asm2.S line 1164)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7F0F >>> ENTER DoPass2";
-        *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0xD000:  // DoPass3 (Asm1.S line 25)
-        *m_traceLog << "@" << m_instructionCount << " PC=$D000 >>> ENTER DoPass3";
-        *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0x7E45:  // FlushObj (Asm2.S line 46)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7E45 >>> FlushObj";
+
+      case MarkerPayload::GenFOnly:
         *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
                     << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0x99DF:  // L99DF - actual flush routine (ASM3.S line 2640)
-        *m_traceLog << "@" << m_instructionCount << " PC=$99DF >>> L99DF (flush obj code)";
-        *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0x8A82:  // L8A82 - ORG directive entry (ASM3.S line 62)
-        *m_traceLog << "@" << m_instructionCount << " PC=$8A82 >>> ORG directive";
-        *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0x8A9A:  // L8A9A - ORG checks GenF for disk write (ASM3.S line ~72)
-        *m_traceLog << "@" << m_instructionCount << " PC=$8A9A >>> ORG GenF check";
-        *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0x8AAE:  // L8AAE - ORG opens file and clears suppression (ASM3.S line ~81)
-        *m_traceLog << "@" << m_instructionCount << " PC=$8AAE >>> ORG open file path";
-        *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
-        break;
-      case 0x9918:  // Open4RW (ASM3.S line 2478)
-        *m_traceLog << "@" << m_instructionCount << " PC=$9918 >>> Open4RW\n";
-        break;
-      case 0x7C98:  // PrtSetup (Asm2.S line 840)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7C98 >>> PrtSetup\n";
-        break;
-      case 0x7D07:  // ParseDCS (Asm2.S line 907)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7D07 >>> ParseDCS\n";
-        break;
-      case 0x7D2E:  // IsFileLst (Asm2.S line 926)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7D2E >>> IsFileLst\n";
-        break;
-      case 0x7D3A:  // Lst2File (Asm2.S line 938)
-        *m_traceLog << "@" << m_instructionCount << " PC=$7D3A >>> Lst2File\n";
-        break;
-      case 0xA70B:  // XA70B - command line input (EI)
-        *m_traceLog << "@" << m_instructionCount << " PC=$A70B >>> XA70B (get user cmd)\n";
-        break;
-      case 0xB6E6:  // DoAsmbly - prepare for assembly (EI line 759)
-        *m_traceLog << "@" << m_instructionCount << " PC=$B6E6 >>> DoAsmbly (prep for ASM)\n";
         break;
     }
   }
@@ -2613,24 +2600,33 @@ namespace prodos8emu {
   }
 
   const char* CPU65C02::passnbr67_mutator_name(uint8_t opcode) {
-    switch (opcode) {
-      case 0x85:  // STA zp
-      case 0x95:  // STA zp,X
-      case 0x8D:  // STA abs
-      case 0x9D:  // STA abs,X
-      case 0x99:  // STA abs,Y
-      case 0x81:  // STA (zp,X)
-      case 0x91:  // STA (zp),Y
-      case 0x92:  // STA (zp)
-        return "STA";
-      case 0xE6:  // INC zp
-      case 0xF6:  // INC zp,X
-      case 0xEE:  // INC abs
-      case 0xFE:  // INC abs,X
-        return "INC";
-      default:
-        return nullptr;
+    struct PassNbrMutatorMetadata {
+      uint8_t     opcode;
+      const char* mutatorName;
+    };
+
+    static const PassNbrMutatorMetadata kPassNbrMutatorTable[] = {
+        {0x85, "STA"},  // zp
+        {0x95, "STA"},  // zp,X
+        {0x8D, "STA"},  // abs
+        {0x9D, "STA"},  // abs,X
+        {0x99, "STA"},  // abs,Y
+        {0x81, "STA"},  // (zp,X)
+        {0x91, "STA"},  // (zp),Y
+        {0x92, "STA"},  // (zp)
+        {0xE6, "INC"},  // zp
+        {0xF6, "INC"},  // zp,X
+        {0xEE, "INC"},  // abs
+        {0xFE, "INC"},  // abs,X
+    };
+
+    for (const PassNbrMutatorMetadata& metadata : kPassNbrMutatorTable) {
+      if (metadata.opcode == opcode) {
+        return metadata.mutatorName;
+      }
     }
+
+    return nullptr;
   }
 
   void CPU65C02::log_step_trace_flag_deltas(uint8_t opcode, const TraceFlagSnapshot& oldFlags,
@@ -2648,25 +2644,27 @@ namespace prodos8emu {
                   << "\n";
     }
 
-    if (newFlags.genf != oldFlags.genf) {
-      *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                  << std::setfill('0') << std::setw(4) << m_r.pc << " GenF($BF): $" << std::setw(2)
-                  << static_cast<unsigned>(oldFlags.genf) << " -> $" << std::setw(2)
-                  << static_cast<unsigned>(newFlags.genf) << std::dec << "\n";
-    }
+    struct TraceDeltaField {
+      const char* label;
+      uint16_t    address;
+      uint8_t     oldValue;
+      uint8_t     newValue;
+    };
 
-    if (newFlags.listingf != oldFlags.listingf) {
-      *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                  << std::setfill('0') << std::setw(4) << m_r.pc << " ListingF($68): $"
-                  << std::setw(2) << static_cast<unsigned>(oldFlags.listingf) << " -> $"
-                  << std::setw(2) << static_cast<unsigned>(newFlags.listingf) << std::dec << "\n";
-    }
+    const TraceDeltaField deltaFields[] = {
+        {"GenF", 0xBF, oldFlags.genf, newFlags.genf},
+        {"ListingF", 0x68, oldFlags.listingf, newFlags.listingf},
+        {"DskListF", 0x90, oldFlags.dsklistf, newFlags.dsklistf},
+    };
 
-    if (newFlags.dsklistf != oldFlags.dsklistf) {
-      *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                  << std::setfill('0') << std::setw(4) << m_r.pc << " DskListF($90): $"
-                  << std::setw(2) << static_cast<unsigned>(oldFlags.dsklistf) << " -> $"
-                  << std::setw(2) << static_cast<unsigned>(newFlags.dsklistf) << std::dec << "\n";
+    for (const TraceDeltaField& field : deltaFields) {
+      if (field.newValue != field.oldValue) {
+        *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                    << std::setfill('0') << std::setw(4) << m_r.pc << " " << field.label << "($"
+                    << std::setw(2) << field.address << "): $" << std::setw(2)
+                    << static_cast<unsigned>(field.oldValue) << " -> $" << std::setw(2)
+                    << static_cast<unsigned>(field.newValue) << std::dec << "\n";
+      }
     }
   }
 
