@@ -19,6 +19,7 @@ struct CliOptions {
   std::string system_file_path;
   std::string volume_root;
   bool        debug            = false;
+  bool        jsr_rts_trace    = false;
   uint64_t    max_instructions = 1000000;  // Default: 1 million instructions
 };
 
@@ -32,6 +33,7 @@ void print_usage(const char* program_name) {
             << "  -h, --help                Show this help message\n"
             << "  --debug                   Enable debug logs (prodos8emu_mli.log, "
                "prodos8emu_cout.log, prodos8emu_trace.log)\n"
+            << "  --jsr-rts-trace           Enable JSR/RTS transition monitor\n"
             << "  --max-instructions N      Stop execution after N instructions\n"
             << "  --volume-root PATH        Root directory for volume mappings\n";
 }
@@ -51,6 +53,8 @@ ParseResult parse_args(int argc, char* argv[], CliOptions& opts) {
       return ParseResult::Help;
     } else if (arg == "--debug") {
       opts.debug = true;
+    } else if (arg == "--jsr-rts-trace") {
+      opts.jsr_rts_trace = true;
     } else if (arg == "--max-instructions") {
       if (i + 1 >= argc) {
         std::cerr << "Error: --max-instructions requires an argument\n";
@@ -123,6 +127,7 @@ int main(int argc, char* argv[]) {
             << "  sys=" << opts.system_file_path << "\n"
             << "  max=" << opts.max_instructions << "\n"
             << "  debug=" << (opts.debug ? "yes" : "no") << "\n"
+            << "  jsr_rts_trace=" << (opts.jsr_rts_trace ? "yes" : "no") << "\n"
             << "  volroot=" << opts.volume_root << "\n\n";
 
   try {
@@ -165,6 +170,7 @@ int main(int argc, char* argv[]) {
     cpu.attachMLI(ctx);
     cpu.setDebugLogs(opts.debug ? &mliLogFile : nullptr, opts.debug ? &coutLogFile : nullptr);
     cpu.setTraceLog(opts.debug ? &traceLogFile : nullptr);
+    cpu.setJsrRtsTraceMonitorEnabled(opts.jsr_rts_trace);
 
     std::cout << "Loading ROM from " << opts.rom_path << "...\n";
     mem.loadROM(opts.rom_path);
