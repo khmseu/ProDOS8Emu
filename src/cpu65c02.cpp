@@ -368,57 +368,87 @@ namespace prodos8emu {
       return static_cast<uint16_t>(static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8));
     }
 
-    struct ZpMonitoredFieldSpec {
-      uint8_t     address;
-      const char* label;
+    enum class MarkerPayload : uint8_t {
+      None,
+      PassNbrAndGenF,
+      GenFOnly,
     };
 
-    static const ZpMonitoredFieldSpec kZpMonitoredFieldSpecs[] = {
-        {0x67, "PassNbr"},
-        {0x68, "ListingF"},
-        {0x69, "SubTtlF"},
-        {0x6A, "LineCnt"},
-        {0x6B, "PageNbr"},
-        {0x6D, "FileNbr"},
-        {0x6E, "LogPL"},
-        {0x6F, "PhyPL"},
-        {0x70, "ByteCnt"},
-        // {0x71, "PrtCol"},
-        {0x74, "NbrErrs"},
-        {0x76, "PrSlot"},
-        {0x90, "DskListF"},
-        {0x91, "LstDBIdx"},
-        {0x92, "WinLeft"},
-        {0x93, "WinRight"},
-        {0x99, "LstCodeF"},
-        {0x9B, "NumCols"},
-        {0xA7, "SavLstF"},
-        {0xAE, "EndianF"},
-        {0xBF, "GenF"},
-        {0xD0, "RLDEnd"},
-        {0xD1, "RLDEnd+1"},
-        {0xE0, "LstCyc"},
-        {0xE1, "LstUnAsm"},
-        {0xE2, "LstExpMac"},
-        {0xE3, "LstWarns"},
-        {0xE4, "LstGCode"},
-        {0xE5, "LstASym"},
-        {0xE6, "LstVSym"},
-        {0xE7, "Lst6Cols"},
+    enum MonitorSymbolFlag : uint8_t {
+      MonitorSymbolRead  = 1 << 0,
+      MonitorSymbolWrite = 1 << 1,
+      MonitorSymbolPc    = 1 << 2,
     };
 
-    const ZpMonitoredFieldSpec* find_zp_monitored_field_spec(uint16_t addr) {
-      if (addr > 0x00FF) {
-        return nullptr;
-      }
+    struct MonitorSymbol {
+      uint16_t      address;
+      const char*   name;
+      uint8_t       flags;
+      MarkerPayload markerPayload;
+    };
 
-      const uint8_t zpAddr = static_cast<uint8_t>(addr);
-      for (const ZpMonitoredFieldSpec& spec : kZpMonitoredFieldSpecs) {
-        if (spec.address == zpAddr) {
-          return &spec;
+    static const MonitorSymbol kMonitorSymbols[] = {
+        // Zero-page write-monitor symbols.
+        {0x0067, "PassNbr", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0068, "ListingF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0069, "SubTtlF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x006A, "LineCnt", MonitorSymbolWrite, MarkerPayload::None},
+        {0x006B, "PageNbr", MonitorSymbolWrite, MarkerPayload::None},
+        {0x006D, "FileNbr", MonitorSymbolWrite, MarkerPayload::None},
+        {0x006E, "LogPL", MonitorSymbolWrite, MarkerPayload::None},
+        {0x006F, "PhyPL", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0070, "ByteCnt", MonitorSymbolWrite, MarkerPayload::None},
+        // {0x0071, "PrtCol"},
+        {0x0074, "NbrErrs", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0076, "PrSlot", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0090, "DskListF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0091, "LstDBIdx", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0092, "WinLeft", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0093, "WinRight", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0099, "LstCodeF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x009B, "NumCols", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00A7, "SavLstF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00AE, "EndianF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00BF, "GenF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00D0, "RLDEnd", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00D1, "RLDEnd+1", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E0, "LstCyc", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E1, "LstUnAsm", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E2, "LstExpMac", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E3, "LstWarns", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E4, "LstGCode", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E5, "LstASym", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E6, "LstVSym", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00E7, "Lst6Cols", MonitorSymbolWrite, MarkerPayload::None},
+
+        // PC marker symbols.
+        {0x7800, ">>> ENTER EdAsm.Asm", MonitorSymbolPc, MarkerPayload::None},
+        {0x7816, ">>> ENTER ExecAsm", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
+        {0x7B13, ">>> InitASM", MonitorSymbolPc, MarkerPayload::None},
+        {0x7C98, ">>> PrtSetup", MonitorSymbolPc, MarkerPayload::None},
+        {0x7D07, ">>> ParseDCS", MonitorSymbolPc, MarkerPayload::None},
+        {0x7D29, ">>> PrtSetup", MonitorSymbolPc, MarkerPayload::None},
+        {0x7D2E, ">>> IsFileLst", MonitorSymbolPc, MarkerPayload::None},
+        {0x7D3A, ">>> Lst2File", MonitorSymbolPc, MarkerPayload::None},
+        {0x7E30, ">>> ENTER DoPass1", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
+        {0x7E45, ">>> FlushObj", MonitorSymbolPc, MarkerPayload::GenFOnly},
+        {0x7F0F, ">>> ENTER DoPass2", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
+        {0x8A82, ">>> ORG directive", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
+        {0x8A9A, ">>> ORG GenF check", MonitorSymbolPc, MarkerPayload::GenFOnly},
+        {0x8AAE, ">>> ORG open file path", MonitorSymbolPc, MarkerPayload::GenFOnly},
+        {0x9918, ">>> Open4RW", MonitorSymbolPc, MarkerPayload::None},
+        {0x99DF, ">>> L99DF (flush obj code)", MonitorSymbolPc, MarkerPayload::GenFOnly},
+        {0xA70B, ">>> XA70B (get user cmd)", MonitorSymbolPc, MarkerPayload::None},
+        {0xB6E6, ">>> DoAsmbly (prep for ASM)", MonitorSymbolPc, MarkerPayload::None},
+        {0xD000, ">>> ENTER DoPass3", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
+    };
+
+    const MonitorSymbol* find_monitor_symbol(uint16_t addr, uint8_t requiredFlag) {
+      for (const MonitorSymbol& symbol : kMonitorSymbols) {
+        if (symbol.address == addr && (symbol.flags & requiredFlag) != 0) {
+          return &symbol;
         }
       }
-
       return nullptr;
     }
 
@@ -1093,19 +1123,19 @@ namespace prodos8emu {
       return;
     }
 
-    const ZpMonitoredFieldSpec* monitoredField = nullptr;
-    uint8_t                     oldValue       = 0;
+    const MonitorSymbol* monitoredField = nullptr;
+    uint8_t              oldValue       = 0;
     if (m_stepZpMonitorCaptureActive) {
-      monitoredField = find_zp_monitored_field_spec(addr);
+      monitoredField = find_monitor_symbol(addr, MonitorSymbolWrite);
       if (monitoredField != nullptr) {
-        oldValue = read_u8(m_mem.constBanks(), static_cast<uint16_t>(monitoredField->address));
+        oldValue = read_u8(m_mem.constBanks(), monitoredField->address);
       }
     }
 
     write_u8(m_mem.banks(), addr, value);
 
     if (monitoredField != nullptr && oldValue != value) {
-      append_step_zp_monitor_event(static_cast<uint16_t>(monitoredField->address), oldValue, value);
+      append_step_zp_monitor_event(monitoredField->address, oldValue, value);
     }
   }
 
@@ -2622,45 +2652,12 @@ namespace prodos8emu {
       return;
     }
 
-    enum class MarkerPayload : uint8_t {
-      None,
-      PassNbrAndGenF,
-      GenFOnly,
-    };
-
-    struct MarkerMetadata {
-      uint16_t      pc;
-      const char*   label;
-      MarkerPayload payload;
-    };
-
-    static const MarkerMetadata kMarkerTable[] = {
-        {0x7800, ">>> ENTER EdAsm.Asm", MarkerPayload::None},
-        {0x7816, ">>> ENTER ExecAsm", MarkerPayload::PassNbrAndGenF},
-        {0x7C98, ">>> PrtSetup", MarkerPayload::None},
-        {0x7D07, ">>> ParseDCS", MarkerPayload::None},
-        {0x7D2E, ">>> IsFileLst", MarkerPayload::None},
-        {0x7D3A, ">>> Lst2File", MarkerPayload::None},
-        {0x7E30, ">>> ENTER DoPass1", MarkerPayload::PassNbrAndGenF},
-        {0x7E45, ">>> FlushObj", MarkerPayload::GenFOnly},
-        {0x7F0F, ">>> ENTER DoPass2", MarkerPayload::PassNbrAndGenF},
-        {0x8A82, ">>> ORG directive", MarkerPayload::PassNbrAndGenF},
-        {0x8A9A, ">>> ORG GenF check", MarkerPayload::GenFOnly},
-        {0x8AAE, ">>> ORG open file path", MarkerPayload::GenFOnly},
-        {0x9918, ">>> Open4RW", MarkerPayload::None},
-        {0x99DF, ">>> L99DF (flush obj code)", MarkerPayload::GenFOnly},
-        {0xA70B, ">>> XA70B (get user cmd)", MarkerPayload::None},
-        {0xB6E6, ">>> DoAsmbly (prep for ASM)", MarkerPayload::None},
-        {0xD000, ">>> ENTER DoPass3", MarkerPayload::PassNbrAndGenF},
-    };
-
-    const MarkerMetadata* marker = nullptr;
-    for (const MarkerMetadata& entry : kMarkerTable) {
-      if (entry.pc == pc) {
-        marker = &entry;
-        break;
-      }
+    // JSR/RTS monitor mode owns transition logging and symbol annotation.
+    if (m_jsrRtsTraceMonitorEnabled) {
+      return;
     }
+
+    const MonitorSymbol* marker = find_monitor_symbol(pc, MonitorSymbolPc);
     // MarkerMetadata vicinityMarker = {};
     // if (marker == nullptr) {
     //   if (pc > 0x7C98 - 0x100 && pc < 0x7C98 + 0x100) {
@@ -2673,10 +2670,10 @@ namespace prodos8emu {
     }
 
     *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                << std::setfill('0') << std::setw(4) << marker->pc << std::dec << " "
-                << marker->label;
+                << std::setfill('0') << std::setw(4) << marker->address << std::dec << " "
+                << marker->name;
 
-    switch (marker->payload) {
+    switch (marker->markerPayload) {
       case MarkerPayload::None:
         *m_traceLog << "\n";
         break;
@@ -2705,6 +2702,12 @@ namespace prodos8emu {
     write_hex(*m_traceLog, fromPC, 4);
     *m_traceLog << " -> $";
     write_hex(*m_traceLog, toPC, 4);
+
+    const MonitorSymbol* symbol = find_monitor_symbol(toPC, MonitorSymbolPc);
+    if (symbol != nullptr) {
+      *m_traceLog << " " << symbol->name;
+    }
+
     *m_traceLog << "\n";
   }
 
@@ -2738,9 +2741,9 @@ namespace prodos8emu {
     const char* passnbrMutator = passnbr_monitor_mutator_name(opcode);
 
     for (size_t i = 0; i < m_stepZpMonitorEventCount; ++i) {
-      const ZpMonitorEvent&       event     = m_stepZpMonitorEvents[i];
-      const ZpMonitoredFieldSpec* fieldSpec = find_zp_monitored_field_spec(event.address);
-      if (fieldSpec == nullptr) {
+      const ZpMonitorEvent& event       = m_stepZpMonitorEvents[i];
+      const MonitorSymbol*  fieldSymbol = find_monitor_symbol(event.address, MonitorSymbolWrite);
+      if (fieldSymbol == nullptr) {
         continue;
       }
 
@@ -2749,7 +2752,7 @@ namespace prodos8emu {
         if (passnbrMutator != nullptr) {
           *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
                       << std::setfill('0') << std::setw(4) << m_r.pc << " " << passnbrMutator << " "
-                      << fieldSpec->label << "($" << std::setw(2)
+                      << fieldSymbol->name << "($" << std::setw(2)
                       << static_cast<unsigned>(event.address) << "): $" << std::setw(2)
                       << static_cast<unsigned>(event.oldValue) << " -> $" << std::setw(2)
                       << static_cast<unsigned>(event.newValue) << std::dec << "\n";
@@ -2758,7 +2761,7 @@ namespace prodos8emu {
       }
 
       *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                  << std::setfill('0') << std::setw(4) << m_r.pc << " " << fieldSpec->label << "($"
+                  << std::setfill('0') << std::setw(4) << m_r.pc << " " << fieldSymbol->name << "($"
                   << std::setw(2) << static_cast<unsigned>(event.address) << "): $" << std::setw(2)
                   << static_cast<unsigned>(event.oldValue) << " -> $" << std::setw(2)
                   << static_cast<unsigned>(event.newValue) << std::dec << "\n";
