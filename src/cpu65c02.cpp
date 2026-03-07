@@ -368,88 +368,72 @@ namespace prodos8emu {
       return static_cast<uint16_t>(static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8));
     }
 
-    enum class MarkerPayload : uint8_t {
-      None,
-      PassNbrAndGenF,
-      GenFOnly,
-    };
-
     enum MonitorSymbolFlag : uint8_t {
       MonitorSymbolRead  = 1 << 0,
       MonitorSymbolWrite = 1 << 1,
       MonitorSymbolPc    = 1 << 2,
     };
 
-    enum class MonitorSymbolKey : uint8_t {
-      None,
-      PassNbr,
-      GenF,
-    };
-
     struct MonitorSymbol {
-      uint16_t         address;
-      const char*      name;
-      uint8_t          flags;
-      MarkerPayload    markerPayload;
-      MonitorSymbolKey key = MonitorSymbolKey::None;
+      uint16_t    address;
+      const char* name;
+      uint8_t     flags;
     };
 
     static const MonitorSymbol kMonitorSymbols[] = {
         // Zero-page write-monitor symbols.
-        {0x0067, "PassNbr", MonitorSymbolRead | MonitorSymbolWrite, MarkerPayload::None,
-         MonitorSymbolKey::PassNbr},
-        {0x0068, "ListingF", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0069, "SubTtlF", MonitorSymbolWrite, MarkerPayload::None},
-        {0x006A, "LineCnt", MonitorSymbolWrite, MarkerPayload::None},
-        {0x006B, "PageNbr", MonitorSymbolWrite, MarkerPayload::None},
-        {0x006D, "FileNbr", MonitorSymbolWrite, MarkerPayload::None},
-        {0x006E, "LogPL", MonitorSymbolWrite, MarkerPayload::None},
-        {0x006F, "PhyPL", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0070, "ByteCnt", MonitorSymbolWrite, MarkerPayload::None},
-        // {0x0071, "PrtCol"},
-        {0x0074, "NbrErrs", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0076, "PrSlot", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0090, "DskListF", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0091, "LstDBIdx", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0092, "WinLeft", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0093, "WinRight", MonitorSymbolWrite, MarkerPayload::None},
-        {0x0099, "LstCodeF", MonitorSymbolWrite, MarkerPayload::None},
-        {0x009B, "NumCols", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00A7, "SavLstF", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00AE, "EndianF", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00BF, "GenF", MonitorSymbolRead | MonitorSymbolWrite, MarkerPayload::None,
-         MonitorSymbolKey::GenF},
-        {0x00D0, "RLDEnd", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00D1, "RLDEnd+1", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E0, "LstCyc", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E1, "LstUnAsm", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E2, "LstExpMac", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E3, "LstWarns", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E4, "LstGCode", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E5, "LstASym", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E6, "LstVSym", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00E7, "Lst6Cols", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0067, "PassNbr", MonitorSymbolRead | MonitorSymbolWrite},
+        {0x0068, "ListingF", MonitorSymbolWrite},
+        {0x0069, "SubTtlF", MonitorSymbolWrite},
+        {0x006A, "LineCnt", MonitorSymbolWrite},
+        {0x006B, "PageNbr", MonitorSymbolWrite},
+        {0x006D, "FileNbr", MonitorSymbolWrite},
+        {0x006E, "LogPL", MonitorSymbolWrite},
+        {0x006F, "PhyPL", MonitorSymbolWrite},
+        {0x0070, "ByteCnt", MonitorSymbolWrite},
+        {0x0071, "PrtCol", 0},
+        {0x0074, "NbrErrs", MonitorSymbolWrite},
+        {0x0076, "PrSlot", MonitorSymbolWrite},
+        {0x0090, "DskListF", MonitorSymbolWrite},
+        {0x0091, "LstDBIdx", MonitorSymbolWrite},
+        {0x0092, "WinLeft", MonitorSymbolWrite},
+        {0x0093, "WinRight", MonitorSymbolWrite},
+        {0x0099, "LstCodeF", MonitorSymbolWrite},
+        {0x009B, "NumCols", MonitorSymbolWrite},
+        {0x00A7, "SavLstF", MonitorSymbolWrite},
+        {0x00AE, "EndianF", MonitorSymbolWrite},
+        {0x00BF, "GenF", MonitorSymbolRead | MonitorSymbolWrite},
+        {0x00D0, "RLDEnd", MonitorSymbolWrite},
+        {0x00D1, "RLDEnd+1", MonitorSymbolWrite},
+        {0x00E0, "LstCyc", MonitorSymbolWrite},
+        {0x00E1, "LstUnAsm", MonitorSymbolWrite},
+        {0x00E2, "LstExpMac", MonitorSymbolWrite},
+        {0x00E3, "LstWarns", MonitorSymbolWrite},
+        {0x00E4, "LstGCode", MonitorSymbolWrite},
+        {0x00E5, "LstASym", MonitorSymbolWrite},
+        {0x00E6, "LstVSym", MonitorSymbolWrite},
+        {0x00E7, "Lst6Cols", MonitorSymbolWrite},
 
         // PC marker symbols.
-        {0x7800, ">>> ENTER EdAsm.Asm", MonitorSymbolPc, MarkerPayload::None},
-        {0x7816, ">>> ENTER ExecAsm", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
-        {0x7B13, ">>> InitASM", MonitorSymbolPc, MarkerPayload::None},
-        {0x7C98, ">>> PrtSetup", MonitorSymbolPc, MarkerPayload::None},
-        {0x7D07, ">>> ParseDCS", MonitorSymbolPc, MarkerPayload::None},
-        {0x7D29, ">>> PrtSetup", MonitorSymbolPc, MarkerPayload::None},
-        {0x7D2E, ">>> IsFileLst", MonitorSymbolPc, MarkerPayload::None},
-        {0x7D3A, ">>> Lst2File", MonitorSymbolPc, MarkerPayload::None},
-        {0x7E30, ">>> ENTER DoPass1", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
-        {0x7E45, ">>> FlushObj", MonitorSymbolPc, MarkerPayload::GenFOnly},
-        {0x7F0F, ">>> ENTER DoPass2", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
-        {0x8A82, ">>> ORG directive", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
-        {0x8A9A, ">>> ORG GenF check", MonitorSymbolPc, MarkerPayload::GenFOnly},
-        {0x8AAE, ">>> ORG open file path", MonitorSymbolPc, MarkerPayload::GenFOnly},
-        {0x9918, ">>> Open4RW", MonitorSymbolPc, MarkerPayload::None},
-        {0x99DF, ">>> L99DF (flush obj code)", MonitorSymbolPc, MarkerPayload::GenFOnly},
-        {0xA70B, ">>> XA70B (get user cmd)", MonitorSymbolPc, MarkerPayload::None},
-        {0xB6E6, ">>> DoAsmbly (prep for ASM)", MonitorSymbolPc, MarkerPayload::None},
-        {0xD000, ">>> ENTER DoPass3", MonitorSymbolPc, MarkerPayload::PassNbrAndGenF},
+        {0x7800, ">>> ENTER EdAsm.Asm", MonitorSymbolPc},
+        {0x7816, ">>> ENTER ExecAsm", MonitorSymbolPc},
+        {0x7B13, ">>> InitASM", MonitorSymbolPc},
+        {0x7C98, ">>> PrtSetup", MonitorSymbolPc},
+        {0x7D07, ">>> ParseDCS", MonitorSymbolPc},
+        {0x7D29, ">>> PrtSetup", MonitorSymbolPc},
+        {0x7D2E, ">>> IsFileLst", MonitorSymbolPc},
+        {0x7D3A, ">>> Lst2File", MonitorSymbolPc},
+        {0x7E30, ">>> ENTER DoPass1", MonitorSymbolPc},
+        {0x7E45, ">>> FlushObj", MonitorSymbolPc},
+        {0x7F0F, ">>> ENTER DoPass2", MonitorSymbolPc},
+        {0x8A82, ">>> ORG directive", MonitorSymbolPc},
+        {0x8A9A, ">>> ORG GenF check", MonitorSymbolPc},
+        {0x8AAE, ">>> ORG open file path", MonitorSymbolPc},
+        {0x9918, ">>> Open4RW", MonitorSymbolPc},
+        {0x99DF, ">>> L99DF (flush obj code)", MonitorSymbolPc},
+        {0xA70B, ">>> XA70B (get user cmd)", MonitorSymbolPc},
+        {0xB6E6, ">>> DoAsmbly (prep for ASM)", MonitorSymbolPc},
+        {0xD000, ">>> ENTER DoPass3", MonitorSymbolPc},
     };
 
     const MonitorSymbol* find_monitor_symbol(uint16_t addr, uint8_t requiredFlag) {
@@ -461,29 +445,7 @@ namespace prodos8emu {
       return nullptr;
     }
 
-    const MonitorSymbol* find_monitor_symbol_by_key(MonitorSymbolKey key, uint8_t requiredFlag) {
-      for (const MonitorSymbol& symbol : kMonitorSymbols) {
-        if (symbol.key == key && (symbol.flags & requiredFlag) != 0) {
-          return &symbol;
-        }
-      }
-      return nullptr;
-    }
-
-    bool append_marker_payload_field(std::ostream& os, const ConstMemoryBanks& banks,
-                                     MonitorSymbolKey key) {
-      const MonitorSymbol* symbol = find_monitor_symbol_by_key(key, MonitorSymbolRead);
-      if (symbol == nullptr) {
-        return false;
-      }
-
-      os << " " << symbol->name << "(ZP$" << std::hex << std::uppercase << std::setfill('0')
-         << std::setw(2) << static_cast<unsigned>(symbol->address & 0x00FF) << ")=$" << std::setw(2)
-         << static_cast<unsigned>(read_u8(banks, symbol->address));
-      return true;
-    }
-
-    const char* passnbr_monitor_mutator_name(uint8_t opcode) {
+    const char* zp_monitor_mutator_name(uint8_t opcode) {
       const uint8_t mode  = static_cast<uint8_t>(opcode & 0x1F);
       const uint8_t group = static_cast<uint8_t>(opcode & 0xE0);
 
@@ -495,11 +457,43 @@ namespace prodos8emu {
         }
       }
 
+      switch (opcode) {
+        case 0x64:
+        case 0x74:
+        case 0x9C:
+        case 0x9E:
+          return "STZ";
+
+        case 0x04:
+        case 0x0C:
+          return "TSB";
+
+        case 0x14:
+        case 0x1C:
+          return "TRB";
+      }
+
+      if ((opcode & 0x0F) == 0x07) {
+        return ((opcode & 0x80) == 0) ? "RMB" : "SMB";
+      }
+
       const RmwModeMetadata*  rmwModeMetadata  = find_rmw_mode_metadata(mode);
       const RmwGroupMetadata* rmwGroupMetadata = find_rmw_group_metadata(group);
-      if (rmwModeMetadata != nullptr && rmwGroupMetadata != nullptr &&
-          rmwGroupMetadata->operation == RmwGroupOperation::Inc) {
-        return "INC";
+      if (rmwModeMetadata != nullptr && rmwGroupMetadata != nullptr) {
+        switch (rmwGroupMetadata->operation) {
+          case RmwGroupOperation::Asl:
+            return "ASL";
+          case RmwGroupOperation::Rol:
+            return "ROL";
+          case RmwGroupOperation::Lsr:
+            return "LSR";
+          case RmwGroupOperation::Ror:
+            return "ROR";
+          case RmwGroupOperation::Dec:
+            return "DEC";
+          case RmwGroupOperation::Inc:
+            return "INC";
+        }
       }
 
       return nullptr;
@@ -2689,10 +2683,10 @@ namespace prodos8emu {
     }
 
     const MonitorSymbol* marker = find_monitor_symbol(pc, MonitorSymbolPc);
-    // MarkerMetadata vicinityMarker = {};
+    // MonitorSymbol vicinityMarker = {};
     // if (marker == nullptr) {
     //   if (pc > 0x7C98 - 0x100 && pc < 0x7C98 + 0x100) {
-    //     vicinityMarker = MarkerMetadata{pc, ">>> PrtSetup vicinity", MarkerPayload::None};
+    //     vicinityMarker = MonitorSymbol{pc, ">>> PrtSetup vicinity", MonitorSymbolPc};
     //     marker         = &vicinityMarker;
     //   }
     // }
@@ -2704,22 +2698,7 @@ namespace prodos8emu {
                 << std::setfill('0') << std::setw(4) << marker->address << std::dec << " "
                 << marker->name;
 
-    switch (marker->markerPayload) {
-      case MarkerPayload::None:
-        *m_traceLog << "\n";
-        break;
-
-      case MarkerPayload::PassNbrAndGenF:
-        append_marker_payload_field(*m_traceLog, m_mem.constBanks(), MonitorSymbolKey::PassNbr);
-        append_marker_payload_field(*m_traceLog, m_mem.constBanks(), MonitorSymbolKey::GenF);
-        *m_traceLog << std::dec << "\n";
-        break;
-
-      case MarkerPayload::GenFOnly:
-        append_marker_payload_field(*m_traceLog, m_mem.constBanks(), MonitorSymbolKey::GenF);
-        *m_traceLog << std::dec << "\n";
-        break;
-    }
+    *m_traceLog << "\n";
   }
 
   void CPU65C02::log_jsr_rts_transition(const char* opcodeName, uint16_t fromPC, uint16_t toPC) {
@@ -2769,9 +2748,7 @@ namespace prodos8emu {
       return;
     }
 
-    const char*          passnbrMutator = passnbr_monitor_mutator_name(opcode);
-    const MonitorSymbol* passNbrSymbol =
-        find_monitor_symbol_by_key(MonitorSymbolKey::PassNbr, MonitorSymbolWrite);
+    const char* mutator = zp_monitor_mutator_name(opcode);
 
     for (size_t i = 0; i < m_stepZpMonitorEventCount; ++i) {
       const ZpMonitorEvent& event       = m_stepZpMonitorEvents[i];
@@ -2780,22 +2757,13 @@ namespace prodos8emu {
         continue;
       }
 
-      const bool isPassNbr = (passNbrSymbol != nullptr && event.address == passNbrSymbol->address);
-      if (isPassNbr) {
-        if (passnbrMutator != nullptr) {
-          *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                      << std::setfill('0') << std::setw(4) << m_r.pc << " " << passnbrMutator << " "
-                      << fieldSymbol->name << "($" << std::setw(2)
-                      << static_cast<unsigned>(event.address) << "): $" << std::setw(2)
-                      << static_cast<unsigned>(event.oldValue) << " -> $" << std::setw(2)
-                      << static_cast<unsigned>(event.newValue) << std::dec << "\n";
-          continue;
-        }
-      }
-
       *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                  << std::setfill('0') << std::setw(4) << m_r.pc << " " << fieldSymbol->name << "($"
-                  << std::setw(2) << static_cast<unsigned>(event.address) << "): $" << std::setw(2)
+                  << std::setfill('0') << std::setw(4) << m_r.pc << " ";
+      if (mutator != nullptr) {
+        *m_traceLog << mutator << " ";
+      }
+      *m_traceLog << fieldSymbol->name << "($" << std::setw(2)
+                  << static_cast<unsigned>(event.address) << "): $" << std::setw(2)
                   << static_cast<unsigned>(event.oldValue) << " -> $" << std::setw(2)
                   << static_cast<unsigned>(event.newValue) << std::dec << "\n";
     }

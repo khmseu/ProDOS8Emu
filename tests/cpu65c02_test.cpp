@@ -4727,38 +4727,31 @@ __attribute__((noinline)) static void run_mli_trap_result_flag_contract_nonregre
 __attribute__((noinline)) static void run_trace_marker_table_equivalence_test(int& failures) {
   std::cout << "Test 74: trace_marker_table_equivalence\n";
 
-  enum class MarkerPayload : uint8_t {
-    None,
-    PassNbrAndGenF,
-    GenFOnly,
-  };
-
   struct MarkerCase {
-    uint16_t      pc;
-    const char*   pcText;
-    const char*   label;
-    MarkerPayload payload;
+    uint16_t    pc;
+    const char* pcText;
+    const char* label;
   };
 
   static const MarkerCase kMarkerCases[] = {
-      {0x7800, "7800", ">>> ENTER EdAsm.Asm", MarkerPayload::None},
-      {0x7816, "7816", ">>> ENTER ExecAsm", MarkerPayload::PassNbrAndGenF},
-      {0x7E30, "7E30", ">>> ENTER DoPass1", MarkerPayload::PassNbrAndGenF},
-      {0x7F0F, "7F0F", ">>> ENTER DoPass2", MarkerPayload::PassNbrAndGenF},
-      {0xD000, "D000", ">>> ENTER DoPass3", MarkerPayload::PassNbrAndGenF},
-      {0x7E45, "7E45", ">>> FlushObj", MarkerPayload::GenFOnly},
-      {0x99DF, "99DF", ">>> L99DF (flush obj code)", MarkerPayload::GenFOnly},
-      {0x8A82, "8A82", ">>> ORG directive", MarkerPayload::PassNbrAndGenF},
-      {0x8A9A, "8A9A", ">>> ORG GenF check", MarkerPayload::GenFOnly},
-      {0x8AAE, "8AAE", ">>> ORG open file path", MarkerPayload::GenFOnly},
-      {0x9918, "9918", ">>> Open4RW", MarkerPayload::None},
-      {0x7B13, "7B13", ">>> InitASM", MarkerPayload::None},
-      {0x7D29, "7D29", ">>> PrtSetup", MarkerPayload::None},
-      {0x7D07, "7D07", ">>> ParseDCS", MarkerPayload::None},
-      {0x7D2E, "7D2E", ">>> IsFileLst", MarkerPayload::None},
-      {0x7D3A, "7D3A", ">>> Lst2File", MarkerPayload::None},
-      {0xA70B, "A70B", ">>> XA70B (get user cmd)", MarkerPayload::None},
-      {0xB6E6, "B6E6", ">>> DoAsmbly (prep for ASM)", MarkerPayload::None},
+      {0x7800, "7800", ">>> ENTER EdAsm.Asm"},
+      {0x7816, "7816", ">>> ENTER ExecAsm"},
+      {0x7E30, "7E30", ">>> ENTER DoPass1"},
+      {0x7F0F, "7F0F", ">>> ENTER DoPass2"},
+      {0xD000, "D000", ">>> ENTER DoPass3"},
+      {0x7E45, "7E45", ">>> FlushObj"},
+      {0x99DF, "99DF", ">>> L99DF (flush obj code)"},
+      {0x8A82, "8A82", ">>> ORG directive"},
+      {0x8A9A, "8A9A", ">>> ORG GenF check"},
+      {0x8AAE, "8AAE", ">>> ORG open file path"},
+      {0x9918, "9918", ">>> Open4RW"},
+      {0x7B13, "7B13", ">>> InitASM"},
+      {0x7D29, "7D29", ">>> PrtSetup"},
+      {0x7D07, "7D07", ">>> ParseDCS"},
+      {0x7D2E, "7D2E", ">>> IsFileLst"},
+      {0x7D3A, "7D3A", ">>> Lst2File"},
+      {0xA70B, "A70B", ">>> XA70B (get user cmd)"},
+      {0xB6E6, "B6E6", ">>> DoAsmbly (prep for ASM)"},
   };
 
   prodos8emu::Apple2Memory mem;
@@ -4788,18 +4781,7 @@ __attribute__((noinline)) static void run_trace_marker_table_equivalence_test(in
   std::ostringstream expected;
   for (size_t i = 0; i < (sizeof(kMarkerCases) / sizeof(kMarkerCases[0])); ++i) {
     const MarkerCase& marker = kMarkerCases[i];
-    expected << "@" << (i + 1) << " PC=$" << marker.pcText << " " << marker.label;
-    switch (marker.payload) {
-      case MarkerPayload::None:
-        expected << "\n";
-        break;
-      case MarkerPayload::PassNbrAndGenF:
-        expected << " PassNbr(ZP$67)=$12 GenF(ZP$BF)=$34\n";
-        break;
-      case MarkerPayload::GenFOnly:
-        expected << " GenF(ZP$BF)=$34\n";
-        break;
-    }
+    expected << "@" << (i + 1) << " PC=$" << marker.pcText << " " << marker.label << "\n";
   }
 
   const std::string beforeUnknown = traceLog.str();
@@ -4848,11 +4830,11 @@ __attribute__((noinline)) static void run_trace_flag_delta_output_equivalence_te
   const std::string traceText = traceLog.str();
   const std::string expected =
       "@2 PC=$3B44 STA PassNbr($67): $00 -> $05\n"
-      "@3 PC=$3B46 PassNbr($67): $05 -> $00\n"
+      "@3 PC=$3B46 STZ PassNbr($67): $05 -> $00\n"
       "@4 PC=$3B48 INC PassNbr($67): $00 -> $01\n"
-      "@6 PC=$3B4C GenF($BF): $00 -> $AA\n"
-      "@8 PC=$3B50 ListingF($68): $00 -> $01\n"
-      "@10 PC=$3B54 DskListF($90): $00 -> $22\n";
+      "@6 PC=$3B4C STA GenF($BF): $00 -> $AA\n"
+      "@8 PC=$3B50 STA ListingF($68): $00 -> $01\n"
+      "@10 PC=$3B54 STA DskListF($90): $00 -> $22\n";
 
   if (traceText != expected) {
     std::cerr << "FAIL: Trace flag delta output changed from expected baseline\n"
@@ -5056,9 +5038,9 @@ __attribute__((noinline)) static void run_zp_monitor_legacy_path_removal_nonregr
 
   const std::string expected =
       "@2 PC=$3DE4 STA PassNbr($67): $00 -> $2A\n"
-      "@5 PC=$3DEA PassNbr($67): $2A -> $00\n"
+      "@5 PC=$3DEA STZ PassNbr($67): $2A -> $00\n"
       "@6 PC=$3DEC INC PassNbr($67): $00 -> $01\n"
-      "@10 PC=$3DF4 GenF($BF): $00 -> $99\n";
+      "@10 PC=$3DF4 STA GenF($BF): $00 -> $99\n";
   const std::string actual = traceLog.str();
 
   if (actual != expected) {
@@ -5104,9 +5086,9 @@ __attribute__((noinline)) static void run_zp_monitor_trace_delta_format_stabilit
   const std::string expected =
       "@2 PC=$3E24 STA PassNbr($67): $A5 -> $1C\n"
       "@3 PC=$3E26 INC PassNbr($67): $1C -> $1D\n"
-      "@5 PC=$3E2A ListingF($68): $0B -> $AB\n"
-      "@7 PC=$3E2E DskListF($90): $F0 -> $0F\n"
-      "@9 PC=$3E32 GenF($BF): $7E -> $C3\n";
+      "@5 PC=$3E2A STA ListingF($68): $0B -> $AB\n"
+      "@7 PC=$3E2E STA DskListF($90): $F0 -> $0F\n"
+      "@9 PC=$3E32 STA GenF($BF): $7E -> $C3\n";
   const std::string actual = traceLog.str();
 
   if (actual != expected) {
@@ -5305,13 +5287,13 @@ __attribute__((noinline)) static void run_zp_monitor_trace_output_compatibility_
   }
 
   const std::string expected =
-      "@2 PC=$3D04 GenF($BF): $5A -> $12\n"
-      "@3 PC=$3D06 GenF($BF): $12 -> $00\n"
-      "@4 PC=$3D08 GenF($BF): $00 -> $01\n"
-      "@5 PC=$3D0A GenF($BF): $01 -> $00\n"
-      "@6 PC=$3D0C GenF($BF): $00 -> $80\n"
-      "@8 PC=$3D10 GenF($BF): $80 -> $C0\n"
-      "@10 PC=$3D14 GenF($BF): $C0 -> $40\n";
+      "@2 PC=$3D04 STA GenF($BF): $5A -> $12\n"
+      "@3 PC=$3D06 STZ GenF($BF): $12 -> $00\n"
+      "@4 PC=$3D08 INC GenF($BF): $00 -> $01\n"
+      "@5 PC=$3D0A RMB GenF($BF): $01 -> $00\n"
+      "@6 PC=$3D0C SMB GenF($BF): $00 -> $80\n"
+      "@8 PC=$3D10 TSB GenF($BF): $80 -> $C0\n"
+      "@10 PC=$3D14 TRB GenF($BF): $C0 -> $40\n";
   const std::string actual = traceLog.str();
 
   if (actual != expected) {
@@ -7381,9 +7363,8 @@ int main() {
     if (traceText.find("PC=$7800 >>> ENTER EdAsm.Asm") == std::string::npos) {
       std::cerr << "FAIL: Expected trace marker for PC=$7800 entry point\n";
       failures++;
-    } else if (traceText.find("PC=$7816 >>> ENTER ExecAsm PassNbr(ZP$67)=$12 GenF(ZP$BF)=$34") ==
-               std::string::npos) {
-      std::cerr << "FAIL: Expected trace marker with PassNbr/GenF for PC=$7816\n";
+    } else if (traceText.find("PC=$7816 >>> ENTER ExecAsm") == std::string::npos) {
+      std::cerr << "FAIL: Expected trace marker for PC=$7816\n";
       failures++;
     } else if (traceText.find("PC=$7C98 >>> PrtSetup") == std::string::npos) {
       std::cerr << "FAIL: Expected trace marker for PC=$7C98\n";
