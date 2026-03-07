@@ -384,6 +384,22 @@ class TestRunEmulator(unittest.TestCase):
         called_cmd = mock_run.call_args[0][0]
         self.assertIn("--jsr-rts-trace", called_cmd)
 
+    @mock.patch("subprocess.run")
+    def test_run_emulator_forwards_disassembly_trace_flag_when_enabled(self, mock_run):
+        """Disassembly trace flag should be forwarded to the runner when enabled."""
+        mock_run.return_value = mock.Mock(returncode=0)
+
+        run_emulator(
+            runner_path="build/prodos8emu_run",
+            rom_path="rom.bin",
+            system_file="EDASM.SYSTEM",
+            volume_root="work/volumes",
+            disassembly_trace=True,
+        )
+
+        called_cmd = mock_run.call_args[0][0]
+        self.assertIn("--disassembly-trace", called_cmd)
+
 
 class TestArgumentParsing(unittest.TestCase):
     """Test command-line parsing behavior."""
@@ -408,6 +424,60 @@ class TestArgumentParsing(unittest.TestCase):
 
         self.assertTrue(hasattr(args, "jsr_rts_trace"))
         self.assertFalse(args.jsr_rts_trace)
+
+    def test_parse_args_accepts_disassembly_trace_flag(self):
+        """--disassembly-trace should parse and set the option to true."""
+        args = parse_args(
+            [
+                "--work-dir",
+                "work",
+                "--rom",
+                "apple2e.rom",
+                "--disassembly-trace",
+            ]
+        )
+
+        self.assertTrue(args.disassembly_trace)
+
+    def test_parse_args_defaults_disassembly_trace_to_false(self):
+        """disassembly_trace should default to false when the flag is absent."""
+        args = parse_args(["--work-dir", "work", "--rom", "apple2e.rom"])
+
+        self.assertTrue(hasattr(args, "disassembly_trace"))
+        self.assertFalse(args.disassembly_trace)
+
+
+class TestMainForwarding(unittest.TestCase):
+    """Test that main() forwards runner flags correctly."""
+
+    @mock.patch("edasm_setup.run_emulator")
+    def test_main_forwards_disassembly_trace_flag_to_run_emulator(self, mock_run):
+        """main() should forward --disassembly-trace to run_emulator()."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            volume_dir = Path(tmpdir) / "volumes" / "EDASM"
+            volume_dir.mkdir(parents=True, exist_ok=True)
+            system_file = volume_dir / "EDASM.SYSTEM"
+            system_file.write_bytes(b"\x4c\x00\x20")
+
+            with mock.patch(
+                "sys.argv",
+                [
+                    "edasm_setup.py",
+                    "--work-dir",
+                    tmpdir,
+                    "--rom",
+                    "apple2e.rom",
+                    "--skip-extract",
+                    "--system-file",
+                    "EDASM.SYSTEM",
+                    "--disassembly-trace",
+                ],
+            ):
+                result = main()
+
+            self.assertEqual(result, 0)
+            self.assertTrue(mock_run.called)
+            self.assertTrue(mock_run.call_args[0][6])
 
 
 class TestEndToEndMocking(unittest.TestCase):

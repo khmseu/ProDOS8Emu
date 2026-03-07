@@ -1,3 +1,5 @@
+#include <sys/wait.h>
+
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -5,8 +7,6 @@
 #include <iostream>
 #include <string>
 #include <vector>
-
-#include <sys/wait.h>
 
 namespace fs = std::filesystem;
 
@@ -28,7 +28,7 @@ static std::string shell_quote(const std::string& text) {
   return quoted;
 }
 
-static CommandResult run_command_capture(const fs::path& executable,
+static CommandResult run_command_capture(const fs::path&                 executable,
                                          const std::vector<std::string>& args) {
   CommandResult result;
 
@@ -94,8 +94,7 @@ static void runner_help_lists_jsr_rts_trace_flag(const fs::path& runner_path, in
 
   bool ok = result.exit_code == 0 && contains(result.output, "--jsr-rts-trace");
   if (!ok) {
-    std::cerr << "FAIL: Help output must list --jsr-rts-trace (exit=" << result.exit_code
-              << ")\n";
+    std::cerr << "FAIL: Help output must list --jsr-rts-trace (exit=" << result.exit_code << ")\n";
     std::cerr << "Output:\n" << result.output << "\n";
     failures++;
   } else {
@@ -103,9 +102,25 @@ static void runner_help_lists_jsr_rts_trace_flag(const fs::path& runner_path, in
   }
 }
 
+static void runner_help_lists_disassembly_trace_flag(const fs::path& runner_path, int& failures) {
+  std::cout << "Test 2: runner_help_lists_disassembly_trace_flag\n";
+
+  CommandResult result = run_command_capture(runner_path, {"--help"});
+
+  bool ok = result.exit_code == 0 && contains(result.output, "--disassembly-trace");
+  if (!ok) {
+    std::cerr << "FAIL: Help output must list --disassembly-trace (exit=" << result.exit_code
+              << ")\n";
+    std::cerr << "Output:\n" << result.output << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: runner_help_lists_disassembly_trace_flag\n";
+  }
+}
+
 static void runner_rejects_unknown_option_contract_stable(const fs::path& runner_path,
-                                                           int& failures) {
-  std::cout << "Test 2: runner_rejects_unknown_option_contract_stable\n";
+                                                          int&            failures) {
+  std::cout << "Test 3: runner_rejects_unknown_option_contract_stable\n";
 
   const std::string unknown_option = "--not-a-real-runner-option";
   CommandResult     result         = run_command_capture(runner_path, {unknown_option});
@@ -124,7 +139,7 @@ static void runner_rejects_unknown_option_contract_stable(const fs::path& runner
 }
 
 static void runner_accepts_jsr_rts_trace_flag(const fs::path& runner_path, int& failures) {
-  std::cout << "Test 3: runner_accepts_jsr_rts_trace_flag\n";
+  std::cout << "Test 4: runner_accepts_jsr_rts_trace_flag\n";
 
   CommandResult result = run_command_capture(runner_path, {"--jsr-rts-trace", "--help"});
 
@@ -132,12 +147,30 @@ static void runner_accepts_jsr_rts_trace_flag(const fs::path& runner_path, int& 
             !contains(result.output, "Unknown option");
 
   if (!ok) {
-    std::cerr << "FAIL: --jsr-rts-trace should be accepted by the runner (exit="
-              << result.exit_code << ")\n";
+    std::cerr << "FAIL: --jsr-rts-trace should be accepted by the runner (exit=" << result.exit_code
+              << ")\n";
     std::cerr << "Output:\n" << result.output << "\n";
     failures++;
   } else {
     std::cout << "PASS: runner_accepts_jsr_rts_trace_flag\n";
+  }
+}
+
+static void runner_accepts_disassembly_trace_flag(const fs::path& runner_path, int& failures) {
+  std::cout << "Test 5: runner_accepts_disassembly_trace_flag\n";
+
+  CommandResult result = run_command_capture(runner_path, {"--disassembly-trace", "--help"});
+
+  bool ok = result.exit_code == 0 && contains(result.output, "--disassembly-trace") &&
+            !contains(result.output, "Unknown option");
+
+  if (!ok) {
+    std::cerr << "FAIL: --disassembly-trace should be accepted by the runner (exit="
+              << result.exit_code << ")\n";
+    std::cerr << "Output:\n" << result.output << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: runner_accepts_disassembly_trace_flag\n";
   }
 }
 
@@ -156,8 +189,10 @@ int main(int argc, char* argv[]) {
   }
 
   runner_help_lists_jsr_rts_trace_flag(runner_path, failures);
+  runner_help_lists_disassembly_trace_flag(runner_path, failures);
   runner_rejects_unknown_option_contract_stable(runner_path, failures);
   runner_accepts_jsr_rts_trace_flag(runner_path, failures);
+  runner_accepts_disassembly_trace_flag(runner_path, failures);
 
   if (failures == 0) {
     std::cout << "\nAll tests passed!\n";
