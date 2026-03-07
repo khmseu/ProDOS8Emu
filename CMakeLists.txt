@@ -146,6 +146,19 @@ target_link_libraries(prodos8emu_cpu65c02_tests
 
 add_test(NAME prodos8emu_cpu65c02_tests COMMAND prodos8emu_cpu65c02_tests)
 
+# Test executable - focused CPU disassembly core tests
+add_executable(prodos8emu_cpu65c02_disassembly_core_tests
+    tests/cpu65c02_disassembly_core_test.cpp
+)
+
+target_link_libraries(prodos8emu_cpu65c02_disassembly_core_tests
+    PRIVATE
+        prodos8emu
+)
+
+add_test(NAME prodos8emu_cpu65c02_disassembly_core_tests
+    COMMAND prodos8emu_cpu65c02_disassembly_core_tests)
+
 # Test executable - Emulator startup tests
 add_executable(prodos8emu_emulator_startup_tests
     tests/emulator_startup_test.cpp

@@ -2873,6 +2873,15 @@ namespace prodos8emu {
     }
   }
 
+  static void emit_disassembly_trace_line(std::ostream& os, uint64_t instructionCount, uint16_t pc,
+                                          uint8_t opcode) {
+    os << "@" << instructionCount << " PC=$";
+    write_hex(os, pc, 4);
+    os << " OP=$";
+    write_hex(os, opcode, 2);
+    os << "\n";
+  }
+
   uint32_t CPU65C02::step() {
     if (m_stopped) {
       return 0;
@@ -2888,7 +2897,12 @@ namespace prodos8emu {
       log_step_trace_marker(m_r.pc);
     }
 
-    uint8_t op = fetch8();
+    const uint16_t instructionPC = m_r.pc;
+    const uint8_t  op            = fetch8();
+
+    if (m_disassemblyTraceLog != nullptr) {
+      emit_disassembly_trace_line(*m_disassemblyTraceLog, m_instructionCount, instructionPC, op);
+    }
 
     if (track_trace) {
       begin_step_zp_monitor_capture();
