@@ -182,6 +182,43 @@ python3 tools/edasm_setup.py \
 
 Run `python3 tools/edasm_setup.py --help` for full documentation.
 
+### `disassembly_log_analyzer.py` (Python)
+
+Script path: `tools/disassembly_log_analyzer.py`
+
+Purpose:
+
+- Align `prodos8emu_disassembly_trace.log` with EDASM source instruction streams.
+- Discover new PC labels and emit `kMonitorSymbols`-ready entries.
+- Write an annotated trace up to the first unresolved sync point.
+- Prompt for user help when continuation is ambiguous or mnemonics diverge.
+
+Typical usage (interactive):
+
+```bash
+python3 tools/disassembly_log_analyzer.py
+```
+
+Helpful options:
+
+- `--dry-run` — parse-only summary (log/source/symbol counts + samples)
+- `--non-interactive` — stop at first unresolved sync point without prompting
+- `--max-lines N` — cap processed trace instructions
+- `--annotated-log PATH` — annotated trace output path
+- `--new-labels PATH` — output file with insertion-ready `kMonitorSymbols` entries
+
+Interactive help prompt actions:
+
+- `s` — skip one trace instruction and retry
+- `j <index>` — jump source pointer to absolute parsed source instruction index
+- `l <label>` — jump source pointer to first parsed source instruction with that label
+- `q` — quit and finalize partial outputs
+
+Output files (defaults):
+
+- `prodos8emu_disassembly_trace.annotated.log`
+- `new_labels_kMonitorSymbols.txt`
+
 ## File Rearrangement
 
 The `--rearrange-config` option allows you to reorganize extracted disk image files before metadata conversion. This is useful for:
