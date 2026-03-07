@@ -43,9 +43,12 @@ static void disassembly_emits_mnemonic_and_operand_text_with_stable_order(int& f
   const uint32_t c3 = cpu.step();
 
   const std::string expected =
-      "@1 PC=$2000 OP=$A9 LDA #$01\n"
-      "@2 PC=$2002 OP=$AA TAX\n"
-      "@3 PC=$2003 OP=$EA NOP\n";
+      "@1 PC=$2000 OP=$A9 LDA #$01 ; PRE PC=$2000 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
+      "PC=$2002 A=$01 X=$00 Y=$00 SP=$FF P=$24\n"
+      "@2 PC=$2002 OP=$AA TAX ; PRE PC=$2002 A=$01 X=$00 Y=$00 SP=$FF P=$24 POST "
+      "PC=$2003 A=$01 X=$01 Y=$00 SP=$FF P=$24\n"
+      "@3 PC=$2003 OP=$EA NOP ; PRE PC=$2003 A=$01 X=$01 Y=$00 SP=$FF P=$24 POST "
+      "PC=$2004 A=$01 X=$01 Y=$00 SP=$FF P=$24\n";
   const std::string actual = disassemblyLog.str();
 
   if (c1 != 2 || c2 != 2 || c3 != 2) {
@@ -88,7 +91,9 @@ static void disassembly_resolves_known_symbol_for_absolute_operand(int& failures
 
   cpu.step();
 
-  const std::string expected = "@1 PC=$2200 OP=$8D STA $0060 (BCDNbr)\n";
+  const std::string expected =
+      "@1 PC=$2200 OP=$8D STA $0060 (BCDNbr) ; PRE PC=$2200 A=$00 X=$00 Y=$00 SP=$FF P=$24 "
+      "POST PC=$2203 A=$00 X=$00 Y=$00 SP=$FF P=$24\n";
   const std::string actual   = disassemblyLog.str();
 
   if (actual != expected) {
@@ -125,7 +130,9 @@ static void disassembly_falls_back_to_hex_for_unmapped_absolute_operand(int& fai
 
   cpu.step();
 
-  const std::string expected = "@1 PC=$2210 OP=$8D STA $1234\n";
+  const std::string expected =
+      "@1 PC=$2210 OP=$8D STA $1234 ; PRE PC=$2210 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
+      "PC=$2213 A=$00 X=$00 Y=$00 SP=$FF P=$24\n";
   const std::string actual   = disassemblyLog.str();
 
   if (actual != expected) {
@@ -166,7 +173,9 @@ static void disassembly_formats_mli_pseudo_instruction_for_jsr_bf00(int& failure
 
   const uint32_t cycles = cpu.step();
 
-  const std::string expected = "@1 PC=$2300 OP=$20 MLI .byte $C8 .word $03B0 (OPEN)\n";
+  const std::string expected =
+      "@1 PC=$2300 OP=$20 MLI .byte $C8 .word $03B0 (OPEN) ; PRE PC=$2300 A=$00 X=$00 Y=$00 "
+      "SP=$FF P=$24 POST PC=$BF00 A=$00 X=$00 Y=$00 SP=$FD P=$24\n";
   const std::string actual   = disassemblyLog.str();
 
   if (cycles != 6) {
@@ -209,7 +218,9 @@ static void disassembly_only_emits_while_sink_is_non_null(int& failures) {
   cpu.step();
   cpu.step();
 
-  const std::string expected = "@1 PC=$2100 OP=$EA NOP\n";
+  const std::string expected =
+      "@1 PC=$2100 OP=$EA NOP ; PRE PC=$2100 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
+      "PC=$2101 A=$00 X=$00 Y=$00 SP=$FF P=$24\n";
   const std::string actual   = disassemblyLog.str();
 
   if (actual != expected) {
@@ -223,6 +234,52 @@ static void disassembly_only_emits_while_sink_is_non_null(int& failures) {
   }
 }
 
+static void disassembly_register_comment_shows_p_and_sp_transitions(int& failures) {
+  std::cout << "Test 6: disassembly_register_comment_shows_p_and_sp_transitions\n";
+
+  auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+  mem->setLCReadEnabled(true);
+  mem->setLCWriteEnabled(true);
+
+  const uint16_t start = 0x2400;
+  writeProgram(*mem, start,
+               {
+                   0xA9,
+                   0x00,
+                   0x48,
+                   0xC8,
+               });
+  prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(*mem);
+  std::stringstream    disassemblyLog;
+  cpu.setDisassemblyTraceLog(&disassemblyLog);
+  cpu.reset();
+
+  cpu.step();
+  cpu.step();
+  cpu.step();
+
+  const std::string expected =
+      "@1 PC=$2400 OP=$A9 LDA #$00 ; PRE PC=$2400 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
+      "PC=$2402 A=$00 X=$00 Y=$00 SP=$FF P=$26\n"
+      "@2 PC=$2402 OP=$48 PHA ; PRE PC=$2402 A=$00 X=$00 Y=$00 SP=$FF P=$26 POST "
+      "PC=$2403 A=$00 X=$00 Y=$00 SP=$FE P=$26\n"
+      "@3 PC=$2403 OP=$C8 INY ; PRE PC=$2403 A=$00 X=$00 Y=$00 SP=$FE P=$26 POST "
+      "PC=$2404 A=$00 X=$00 Y=$01 SP=$FE P=$24\n";
+  const std::string actual = disassemblyLog.str();
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Register comment should include PRE/POST snapshots for all registers\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: disassembly_register_comment_shows_p_and_sp_transitions\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -231,6 +288,7 @@ int main() {
   disassembly_falls_back_to_hex_for_unmapped_absolute_operand(failures);
   disassembly_formats_mli_pseudo_instruction_for_jsr_bf00(failures);
   disassembly_only_emits_while_sink_is_non_null(failures);
+  disassembly_register_comment_shows_p_and_sp_transitions(failures);
 
   if (failures > 0) {
     std::cerr << "\nFAILED with " << failures << " failure(s).\n";

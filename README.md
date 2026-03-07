@@ -64,9 +64,20 @@ Purpose:
 
 Options:
 
+- `--debug` enable debug logs (`prodos8emu_mli.log`, `prodos8emu_cout.log`, `prodos8emu_trace.log`)
+- `--jsr-rts-trace` enable JSR/RTS transition monitor (requires `--debug` trace sink)
+- `--disassembly-trace` write per-instruction disassembly to `prodos8emu_disassembly_trace.log`
 - `--max-instructions N` stop after N instructions
 - `--volume-root PATH` set root for volume mappings
 - `-h`, `--help` show usage
+
+Disassembly trace behavior:
+
+- One line is emitted per executed instruction
+- Mnemonic/operand rendering includes symbolized operands and one-line MLI pseudo-op formatting for `JSR $BF00`
+- Each line ends with a register comment containing both snapshots:
+  `; PRE PC=$.... A=$.. X=$.. Y=$.. SP=$.. P=$.. POST PC=$.... A=$.. X=$.. Y=$.. SP=$.. P=$..`
+- `--disassembly-trace` is independent from `--debug` and writes only `prodos8emu_disassembly_trace.log`
 
 ### `linux_to_prodos_text.py` (Python)
 
@@ -165,6 +176,9 @@ python3 tools/edasm_setup.py \
 - `--volume-name NAME` — volume name (default: `EDASM`)
 - `--volume-root DIR` — volume root directory (default: `<work-dir>/volumes`)
 - `--max-instructions N` — instruction limit passed to emulator
+- `--debug` — forward debug log option to `prodos8emu_run`
+- `--jsr-rts-trace` — forward JSR/RTS transition monitor option to `prodos8emu_run`
+- `--disassembly-trace` — forward disassembly trace option to `prodos8emu_run` (writes `prodos8emu_disassembly_trace.log`)
 
 Run `python3 tools/edasm_setup.py --help` for full documentation.
 

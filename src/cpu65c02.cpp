@@ -3478,14 +3478,37 @@ namespace prodos8emu {
     return os.str();
   }
 
-  static void emit_disassembly_trace_line(std::ostream& os, const ConstMemoryBanks& banks,
-                                          uint64_t instructionCount, uint16_t pc, uint8_t opcode) {
+  static void append_disassembly_register_snapshot(std::ostream& os, const char* label,
+                                                   const CPU65C02Regs& regs) {
+    os << label << " PC=$";
+    write_hex(os, regs.pc, 4);
+    os << " A=$";
+    write_hex(os, regs.a, 2);
+    os << " X=$";
+    write_hex(os, regs.x, 2);
+    os << " Y=$";
+    write_hex(os, regs.y, 2);
+    os << " SP=$";
+    write_hex(os, regs.sp, 2);
+    os << " P=$";
+    write_hex(os, regs.p, 2);
+  }
+
+  static void emit_disassembly_trace_line(std::ostream& os, uint64_t instructionCount,
+                                          uint16_t pc, uint8_t opcode,
+                                          const std::string& disassemblyText,
+                                          const CPU65C02Regs& preRegs,
+                                          const CPU65C02Regs& postRegs) {
     os << "@" << instructionCount << " PC=$";
     write_hex(os, pc, 4);
     os << " OP=$";
     write_hex(os, opcode, 2);
     os << " ";
-    os << disassembly_text_for_opcode(banks, pc, opcode);
+    os << disassemblyText;
+    os << " ; ";
+    append_disassembly_register_snapshot(os, "PRE", preRegs);
+    os << " ";
+    append_disassembly_register_snapshot(os, "POST", postRegs);
     os << "\n";
   }
 
@@ -3504,12 +3527,13 @@ namespace prodos8emu {
       log_step_trace_marker(m_r.pc);
     }
 
-    const uint16_t instructionPC = m_r.pc;
-    const uint8_t  op            = fetch8();
+    const CPU65C02Regs preRegs       = m_r;
+    const uint16_t     instructionPC = m_r.pc;
+    const uint8_t      op            = fetch8();
 
+    std::string disassemblyText;
     if (m_disassemblyTraceLog != nullptr) {
-      emit_disassembly_trace_line(*m_disassemblyTraceLog, m_mem.constBanks(), m_instructionCount,
-                                  instructionPC, op);
+      disassemblyText = disassembly_text_for_opcode(m_mem.constBanks(), instructionPC, op);
     }
 
     if (track_trace) {
@@ -3517,6 +3541,11 @@ namespace prodos8emu {
     }
 
     uint32_t cycles = execute(op);
+
+    if (m_disassemblyTraceLog != nullptr) {
+      emit_disassembly_trace_line(*m_disassemblyTraceLog, m_instructionCount, instructionPC, op,
+                                  disassemblyText, preRegs, m_r);
+    }
 
     if (track_trace) {
       log_step_zp_monitor_events(op);
