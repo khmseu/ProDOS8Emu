@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <ostream>
 #include <sstream>
+#include <string>
 
 #include "prodos8emu/errors.hpp"
 #include "prodos8emu/memory.hpp"
@@ -539,6 +540,15 @@ namespace prodos8emu {
     const MonitorSymbol* find_monitor_symbol(uint16_t addr, uint8_t requiredFlag) {
       for (const MonitorSymbol& symbol : kMonitorSymbols) {
         if (symbol.address == addr && (symbol.flags & requiredFlag) != 0) {
+          return &symbol;
+        }
+      }
+      return nullptr;
+    }
+
+    const MonitorSymbol* find_any_monitor_symbol(uint16_t addr) {
+      for (const MonitorSymbol& symbol : kMonitorSymbols) {
+        if (symbol.address == addr) {
           return &symbol;
         }
       }
@@ -2873,12 +2883,609 @@ namespace prodos8emu {
     }
   }
 
-  static void emit_disassembly_trace_line(std::ostream& os, uint64_t instructionCount, uint16_t pc,
-                                          uint8_t opcode) {
+  static const char* control_flow_branch_mnemonic(uint8_t opcode) {
+    switch (opcode) {
+      case 0x80:
+        return "BRA";
+      case 0x10:
+        return "BPL";
+      case 0x30:
+        return "BMI";
+      case 0x50:
+        return "BVC";
+      case 0x70:
+        return "BVS";
+      case 0x90:
+        return "BCC";
+      case 0xB0:
+        return "BCS";
+      case 0xD0:
+        return "BNE";
+      case 0xF0:
+        return "BEQ";
+      default:
+        return nullptr;
+    }
+  }
+
+  static const char* alu_group_mnemonic(uint8_t group) {
+    const RmwGroupMetadata* groupMetadata = find_rmw_group_metadata(group);
+    if (groupMetadata == nullptr) {
+      return nullptr;
+    }
+    switch (groupMetadata->operation) {
+      case RmwGroupOperation::Asl:
+        return "ASL";
+      case RmwGroupOperation::Rol:
+        return "ROL";
+      case RmwGroupOperation::Lsr:
+        return "LSR";
+      case RmwGroupOperation::Ror:
+        return "ROR";
+      case RmwGroupOperation::Dec:
+        return "DEC";
+      case RmwGroupOperation::Inc:
+        return "INC";
+    }
+    return nullptr;
+  }
+
+  static const char* alu_mnemonic(uint8_t group) {
+    const AluGroupMetadata* groupMetadata = find_alu_group_metadata(group);
+    if (groupMetadata == nullptr) {
+      return nullptr;
+    }
+    switch (groupMetadata->operation) {
+      case AluGroupOperation::Ora:
+        return "ORA";
+      case AluGroupOperation::And:
+        return "AND";
+      case AluGroupOperation::Eor:
+        return "EOR";
+      case AluGroupOperation::Adc:
+        return "ADC";
+      case AluGroupOperation::Cmp:
+        return "CMP";
+      case AluGroupOperation::Sbc:
+        return "SBC";
+    }
+    return nullptr;
+  }
+
+  static void append_symbol_suffix_for_address(std::ostream& os, uint16_t addr) {
+    const MonitorSymbol* symbol = find_any_monitor_symbol(addr);
+    if (symbol == nullptr) {
+      return;
+    }
+    os << " (" << symbol->name << ")";
+  }
+
+  static void append_abs_operand(std::ostream& os, uint16_t addr, const char* trailing = "") {
+    os << "$";
+    write_hex(os, addr, 4);
+    os << trailing;
+    append_symbol_suffix_for_address(os, addr);
+  }
+
+  static void append_zp_operand(std::ostream& os, uint8_t addr, const char* trailing = "") {
+    os << "$";
+    write_hex(os, addr, 2);
+    os << trailing;
+    append_symbol_suffix_for_address(os, addr);
+  }
+
+  static std::string disassembly_text_for_opcode(const ConstMemoryBanks& banks, uint16_t pc,
+                                                 uint8_t opcode) {
+    const uint8_t  b1       = read_u8(banks, static_cast<uint16_t>(pc + 1));
+    const uint8_t  b2       = read_u8(banks, static_cast<uint16_t>(pc + 2));
+    const uint16_t absValue = make_u16(b1, b2);
+
+    std::ostringstream os;
+
+    switch (opcode) {
+      case 0x00:
+        return "BRK";
+      case 0x40:
+        return "RTI";
+      case 0x60:
+        return "RTS";
+      case 0xEA:
+        return "NOP";
+      case 0xDB:
+        return "STP";
+      case 0xCB:
+        return "WAI";
+
+      case 0x18:
+        return "CLC";
+      case 0x38:
+        return "SEC";
+      case 0x58:
+        return "CLI";
+      case 0x78:
+        return "SEI";
+      case 0xD8:
+        return "CLD";
+      case 0xF8:
+        return "SED";
+      case 0xB8:
+        return "CLV";
+
+      case 0xAA:
+        return "TAX";
+      case 0x8A:
+        return "TXA";
+      case 0xA8:
+        return "TAY";
+      case 0x98:
+        return "TYA";
+      case 0xBA:
+        return "TSX";
+      case 0x9A:
+        return "TXS";
+
+      case 0x48:
+        return "PHA";
+      case 0x68:
+        return "PLA";
+      case 0x08:
+        return "PHP";
+      case 0x28:
+        return "PLP";
+      case 0xDA:
+        return "PHX";
+      case 0xFA:
+        return "PLX";
+      case 0x5A:
+        return "PHY";
+      case 0x7A:
+        return "PLY";
+
+      case 0xE8:
+        return "INX";
+      case 0xCA:
+        return "DEX";
+      case 0xC8:
+        return "INY";
+      case 0x88:
+        return "DEY";
+
+      case 0x1A:
+        return "INC A";
+      case 0x3A:
+        return "DEC A";
+      case 0x0A:
+        return "ASL A";
+      case 0x4A:
+        return "LSR A";
+      case 0x2A:
+        return "ROL A";
+      case 0x6A:
+        return "ROR A";
+
+      case 0x20: {
+        if (absValue == 0xBF00) {
+          const uint8_t  callNumber = read_u8(banks, static_cast<uint16_t>(pc + 3));
+          const uint16_t paramBlock = read_u16_le(banks, static_cast<uint16_t>(pc + 4));
+          os << "MLI .byte $";
+          write_hex(os, callNumber, 2);
+          os << " .word $";
+          write_hex(os, paramBlock, 4);
+          os << " (" << mli_call_name(callNumber) << ")";
+          return os.str();
+        }
+        os << "JSR ";
+        append_abs_operand(os, absValue);
+        return os.str();
+      }
+
+      case 0x4C:
+        os << "JMP ";
+        append_abs_operand(os, absValue);
+        return os.str();
+      case 0x6C:
+        os << "JMP (";
+        write_hex(os, absValue, 4);
+        os << ")";
+        append_symbol_suffix_for_address(os, absValue);
+        return os.str();
+      case 0x7C:
+        os << "JMP (";
+        write_hex(os, absValue, 4);
+        os << ",X)";
+        append_symbol_suffix_for_address(os, absValue);
+        return os.str();
+
+      case 0xA9:
+      case 0xA2:
+      case 0xA0: {
+        const char* mnemonic = (opcode == 0xA9) ? "LDA" : ((opcode == 0xA2) ? "LDX" : "LDY");
+        os << mnemonic << " #$";
+        write_hex(os, b1, 2);
+        return os.str();
+      }
+
+      case 0xA5:
+      case 0xA6:
+      case 0xA4:
+      case 0x85:
+      case 0x86:
+      case 0x84:
+      case 0x64:
+      case 0xC4:
+      case 0xE4: {
+        const char* mnemonic = nullptr;
+        switch (opcode) {
+          case 0xA5:
+            mnemonic = "LDA";
+            break;
+          case 0xA6:
+            mnemonic = "LDX";
+            break;
+          case 0xA4:
+            mnemonic = "LDY";
+            break;
+          case 0x85:
+            mnemonic = "STA";
+            break;
+          case 0x86:
+            mnemonic = "STX";
+            break;
+          case 0x84:
+            mnemonic = "STY";
+            break;
+          case 0x64:
+            mnemonic = "STZ";
+            break;
+          case 0xC4:
+            mnemonic = "CPY";
+            break;
+          case 0xE4:
+            mnemonic = "CPX";
+            break;
+        }
+        os << mnemonic << " ";
+        append_zp_operand(os, b1);
+        return os.str();
+      }
+
+      case 0xB5:
+      case 0xB4:
+      case 0x95:
+      case 0x94:
+      case 0x74: {
+        const char* mnemonic = nullptr;
+        switch (opcode) {
+          case 0xB5:
+            mnemonic = "LDA";
+            break;
+          case 0xB4:
+            mnemonic = "LDY";
+            break;
+          case 0x95:
+            mnemonic = "STA";
+            break;
+          case 0x94:
+            mnemonic = "STY";
+            break;
+          case 0x74:
+            mnemonic = "STZ";
+            break;
+        }
+        os << mnemonic << " ";
+        append_zp_operand(os, b1, ",X");
+        return os.str();
+      }
+
+      case 0xB6:
+      case 0x96: {
+        const char* mnemonic = (opcode == 0xB6) ? "LDX" : "STX";
+        os << mnemonic << " ";
+        append_zp_operand(os, b1, ",Y");
+        return os.str();
+      }
+
+      case 0xAD:
+      case 0xAE:
+      case 0xAC:
+      case 0x8D:
+      case 0x8E:
+      case 0x8C:
+      case 0x9C:
+      case 0xCC:
+      case 0xEC: {
+        const char* mnemonic = nullptr;
+        switch (opcode) {
+          case 0xAD:
+            mnemonic = "LDA";
+            break;
+          case 0xAE:
+            mnemonic = "LDX";
+            break;
+          case 0xAC:
+            mnemonic = "LDY";
+            break;
+          case 0x8D:
+            mnemonic = "STA";
+            break;
+          case 0x8E:
+            mnemonic = "STX";
+            break;
+          case 0x8C:
+            mnemonic = "STY";
+            break;
+          case 0x9C:
+            mnemonic = "STZ";
+            break;
+          case 0xCC:
+            mnemonic = "CPY";
+            break;
+          case 0xEC:
+            mnemonic = "CPX";
+            break;
+        }
+        os << mnemonic << " ";
+        append_abs_operand(os, absValue);
+        return os.str();
+      }
+
+      case 0xBD:
+      case 0xBC:
+      case 0x9D:
+      case 0x9E: {
+        const char* mnemonic = nullptr;
+        switch (opcode) {
+          case 0xBD:
+            mnemonic = "LDA";
+            break;
+          case 0xBC:
+            mnemonic = "LDY";
+            break;
+          case 0x9D:
+            mnemonic = "STA";
+            break;
+          case 0x9E:
+            mnemonic = "STZ";
+            break;
+        }
+        os << mnemonic << " ";
+        append_abs_operand(os, absValue, ",X");
+        return os.str();
+      }
+
+      case 0xB9:
+      case 0xBE:
+      case 0x99: {
+        const char* mnemonic = nullptr;
+        switch (opcode) {
+          case 0xB9:
+            mnemonic = "LDA";
+            break;
+          case 0xBE:
+            mnemonic = "LDX";
+            break;
+          case 0x99:
+            mnemonic = "STA";
+            break;
+        }
+        os << mnemonic << " ";
+        append_abs_operand(os, absValue, ",Y");
+        return os.str();
+      }
+
+      case 0xA1:
+      case 0x81: {
+        const char* mnemonic = (opcode == 0xA1) ? "LDA" : "STA";
+        os << mnemonic << " ($";
+        write_hex(os, b1, 2);
+        os << ",X)";
+        append_symbol_suffix_for_address(os, b1);
+        return os.str();
+      }
+
+      case 0xB1:
+      case 0x91: {
+        const char* mnemonic = (opcode == 0xB1) ? "LDA" : "STA";
+        os << mnemonic << " ($";
+        write_hex(os, b1, 2);
+        os << "),Y";
+        append_symbol_suffix_for_address(os, b1);
+        return os.str();
+      }
+
+      case 0xB2:
+      case 0x92: {
+        const char* mnemonic = (opcode == 0xB2) ? "LDA" : "STA";
+        os << mnemonic << " ($";
+        write_hex(os, b1, 2);
+        os << ")";
+        append_symbol_suffix_for_address(os, b1);
+        return os.str();
+      }
+
+      case 0xC0:
+      case 0xE0: {
+        const char* mnemonic = (opcode == 0xC0) ? "CPY" : "CPX";
+        os << mnemonic << " #$";
+        write_hex(os, b1, 2);
+        return os.str();
+      }
+
+      default:
+        break;
+    }
+
+    if ((opcode & 0x1F) == 0x07) {
+      const uint8_t bit = static_cast<uint8_t>((opcode >> 4) & 0x07);
+      os << (((opcode & 0x80) == 0) ? "RMB" : "SMB") << static_cast<unsigned>(bit) << " ";
+      append_zp_operand(os, b1);
+      return os.str();
+    }
+
+    if ((opcode & 0x1F) == 0x0F) {
+      const uint8_t  bit    = static_cast<uint8_t>((opcode >> 4) & 0x07);
+      const uint16_t target = static_cast<uint16_t>(pc + 3 + static_cast<int8_t>(b2));
+      os << (((opcode & 0x80) == 0) ? "BBR" : "BBS") << static_cast<unsigned>(bit) << " ";
+      append_zp_operand(os, b1);
+      os << ",";
+      append_abs_operand(os, target);
+      return os.str();
+    }
+
+    const BitFamilyMetadata* bitMetadata = find_bit_family_metadata(opcode);
+    if (bitMetadata != nullptr) {
+      const char* mnemonic = nullptr;
+      switch (bitMetadata->kind) {
+        case BitFamilyKind::Bit:
+          mnemonic = "BIT";
+          break;
+        case BitFamilyKind::Tsb:
+          mnemonic = "TSB";
+          break;
+        case BitFamilyKind::Trb:
+          mnemonic = "TRB";
+          break;
+      }
+      os << mnemonic << " ";
+      switch (bitMetadata->mode) {
+        case BitFamilyModeMeta::Immediate:
+          os << "#$";
+          write_hex(os, b1, 2);
+          break;
+        case BitFamilyModeMeta::Zp:
+          append_zp_operand(os, b1);
+          break;
+        case BitFamilyModeMeta::Abs:
+          append_abs_operand(os, absValue);
+          break;
+        case BitFamilyModeMeta::Zpx:
+          append_zp_operand(os, b1, ",X");
+          break;
+        case BitFamilyModeMeta::Absx:
+          append_abs_operand(os, absValue, ",X");
+          break;
+      }
+      return os.str();
+    }
+
+    const char* branchMnemonic = control_flow_branch_mnemonic(opcode);
+    if (branchMnemonic != nullptr) {
+      const uint16_t target = static_cast<uint16_t>(pc + 2 + static_cast<int8_t>(b1));
+      os << branchMnemonic << " ";
+      append_abs_operand(os, target);
+      return os.str();
+    }
+
+    const uint8_t mode  = static_cast<uint8_t>(opcode & 0x1F);
+    const uint8_t group = static_cast<uint8_t>(opcode & 0xE0);
+
+    const char*               aluName      = alu_mnemonic(group);
+    const AluModeMetadata*    aluMode      = find_alu_mode_metadata(mode);
+    const RmwModeMetadata*    rmwMode      = find_rmw_mode_metadata(mode);
+    const RmwGroupMetadata*   rmwGroup     = find_rmw_group_metadata(group);
+    const NopVariantMetadata* nopVariant   = find_nop_variant_metadata(opcode);
+    const char*               rmwGroupName = alu_group_mnemonic(group);
+
+    if (aluName != nullptr && aluMode != nullptr) {
+      os << aluName << " ";
+      switch (aluMode->operandMode) {
+        case AluOperandMode::Immediate:
+          os << "#$";
+          write_hex(os, b1, 2);
+          break;
+        case AluOperandMode::Zp:
+          append_zp_operand(os, b1);
+          break;
+        case AluOperandMode::ZpX:
+          append_zp_operand(os, b1, ",X");
+          break;
+        case AluOperandMode::Abs:
+          append_abs_operand(os, absValue);
+          break;
+        case AluOperandMode::AbsX:
+          append_abs_operand(os, absValue, ",X");
+          break;
+        case AluOperandMode::AbsY:
+          append_abs_operand(os, absValue, ",Y");
+          break;
+        case AluOperandMode::IndX:
+          os << "($";
+          write_hex(os, b1, 2);
+          os << ",X)";
+          append_symbol_suffix_for_address(os, b1);
+          break;
+        case AluOperandMode::IndY:
+          os << "($";
+          write_hex(os, b1, 2);
+          os << "),Y";
+          append_symbol_suffix_for_address(os, b1);
+          break;
+        case AluOperandMode::ZpInd:
+          os << "($";
+          write_hex(os, b1, 2);
+          os << ")";
+          append_symbol_suffix_for_address(os, b1);
+          break;
+      }
+      return os.str();
+    }
+
+    if (rmwMode != nullptr && rmwGroup != nullptr && rmwGroupName != nullptr) {
+      os << rmwGroupName << " ";
+      switch (rmwMode->targetMode) {
+        case RmwTargetMode::Zp:
+          append_zp_operand(os, b1);
+          break;
+        case RmwTargetMode::ZpX:
+          append_zp_operand(os, b1, ",X");
+          break;
+        case RmwTargetMode::Abs:
+          append_abs_operand(os, absValue);
+          break;
+        case RmwTargetMode::AbsX:
+          append_abs_operand(os, absValue, ",X");
+          break;
+      }
+      return os.str();
+    }
+
+    if (nopVariant != nullptr) {
+      os << "NOP";
+      switch (nopVariant->mode) {
+        case NopVariantMode::Implied:
+          break;
+        case NopVariantMode::ImmediateDiscard:
+          os << " #$";
+          write_hex(os, b1, 2);
+          break;
+        case NopVariantMode::ZpRead:
+          os << " ";
+          append_zp_operand(os, b1);
+          break;
+        case NopVariantMode::ZpXRead:
+          os << " ";
+          append_zp_operand(os, b1, ",X");
+          break;
+        case NopVariantMode::AbsRead:
+          os << " ";
+          append_abs_operand(os, absValue);
+          break;
+      }
+      return os.str();
+    }
+
+    os << "???";
+    return os.str();
+  }
+
+  static void emit_disassembly_trace_line(std::ostream& os, const ConstMemoryBanks& banks,
+                                          uint64_t instructionCount, uint16_t pc, uint8_t opcode) {
     os << "@" << instructionCount << " PC=$";
     write_hex(os, pc, 4);
     os << " OP=$";
     write_hex(os, opcode, 2);
+    os << " ";
+    os << disassembly_text_for_opcode(banks, pc, opcode);
     os << "\n";
   }
 
@@ -2901,7 +3508,8 @@ namespace prodos8emu {
     const uint8_t  op            = fetch8();
 
     if (m_disassemblyTraceLog != nullptr) {
-      emit_disassembly_trace_line(*m_disassemblyTraceLog, m_instructionCount, instructionPC, op);
+      emit_disassembly_trace_line(*m_disassemblyTraceLog, m_mem.constBanks(), m_instructionCount,
+                                  instructionPC, op);
     }
 
     if (track_trace) {
