@@ -1197,6 +1197,10 @@ namespace prodos8emu {
     m_traceLog = traceLog;
   }
 
+  void CPU65C02::setDisassemblyTraceLog(std::ostream* disassemblyTraceLog) {
+    m_disassemblyTraceLog = disassemblyTraceLog;
+  }
+
   void CPU65C02::setJsrRtsTraceMonitorEnabled(bool enabled) {
     m_jsrRtsTraceMonitorEnabled = enabled;
   }

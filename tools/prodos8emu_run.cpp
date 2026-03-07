@@ -139,6 +139,18 @@ int main(int argc, char* argv[]) {
     std::ofstream mliLogFile;
     std::ofstream coutLogFile;
     std::ofstream traceLogFile;
+    std::ofstream disassemblyTraceLogFile;
+
+    if (opts.disassembly_trace) {
+      const std::string disassemblyTraceLogPath = "prodos8emu_disassembly_trace.log";
+      disassemblyTraceLogFile.open(disassemblyTraceLogPath);
+      if (!disassemblyTraceLogFile.is_open()) {
+        std::cerr << "Error: Could not open disassembly trace log file: " << disassemblyTraceLogPath
+                  << "\n";
+        return 1;
+      }
+    }
+
     if (opts.debug) {
       const std::string mliLogPath   = "prodos8emu_mli.log";
       const std::string coutLogPath  = "prodos8emu_cout.log";
@@ -175,6 +187,7 @@ int main(int argc, char* argv[]) {
     cpu.attachMLI(ctx);
     cpu.setDebugLogs(opts.debug ? &mliLogFile : nullptr, opts.debug ? &coutLogFile : nullptr);
     cpu.setTraceLog(opts.debug ? &traceLogFile : nullptr);
+    cpu.setDisassemblyTraceLog(opts.disassembly_trace ? &disassemblyTraceLogFile : nullptr);
     cpu.setJsrRtsTraceMonitorEnabled(opts.jsr_rts_trace);
 
     std::cout << "Loading ROM from " << opts.rom_path << "...\n";

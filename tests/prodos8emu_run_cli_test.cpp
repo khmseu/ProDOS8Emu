@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -63,6 +64,61 @@ static CommandResult run_command_capture(const fs::path&                 executa
   }
 
   return result;
+}
+
+static CommandResult run_command_capture_in_dir(const fs::path&                 working_dir,
+                                                const fs::path&                 executable,
+                                                const std::vector<std::string>& args) {
+  CommandResult result;
+
+  std::string command = "cd ";
+  command += shell_quote(working_dir.string());
+  command += " && ";
+  command += shell_quote(executable.string());
+  for (const std::string& arg : args) {
+    command += " ";
+    command += shell_quote(arg);
+  }
+  command += " 2>&1";
+
+  FILE* pipe = popen(command.c_str(), "r");
+  if (!pipe) {
+    result.output = "Failed to spawn subprocess";
+    return result;
+  }
+
+  std::array<char, 256> buffer{};
+  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+    result.output += buffer.data();
+  }
+
+  int status = pclose(pipe);
+  if (status == -1) {
+    result.output += "\nFailed to read subprocess exit status";
+    return result;
+  }
+
+  if (WIFEXITED(status)) {
+    result.exit_code = WEXITSTATUS(status);
+  } else if (WIFSIGNALED(status)) {
+    result.exit_code = 128 + WTERMSIG(status);
+  }
+
+  return result;
+}
+
+static fs::path create_test_temp_dir() {
+  fs::path          base    = fs::temp_directory_path();
+  std::string       pattern = (base / "prodos8emu_run_cli_test_XXXXXX").string();
+  std::vector<char> writable(pattern.begin(), pattern.end());
+  writable.push_back('\0');
+
+  char* created = mkdtemp(writable.data());
+  if (created == nullptr) {
+    return {};
+  }
+
+  return fs::path(created);
 }
 
 static bool contains(const std::string& haystack, const std::string& needle) {
@@ -174,6 +230,46 @@ static void runner_accepts_disassembly_trace_flag(const fs::path& runner_path, i
   }
 }
 
+static void runner_disassembly_trace_creates_dedicated_log_without_debug(
+    const fs::path& runner_path, int& failures) {
+  std::cout << "Test 6: runner_disassembly_trace_creates_dedicated_log_without_debug\n";
+
+  const fs::path temp_dir = create_test_temp_dir();
+  if (temp_dir.empty()) {
+    std::cerr << "FAIL: could not create temp directory for disassembly trace test\n";
+    failures++;
+    return;
+  }
+
+  CommandResult result = run_command_capture_in_dir(
+      temp_dir, runner_path, {"--disassembly-trace", "missing.rom", "missing.system"});
+
+  const bool disassembly_log_exists = fs::exists(temp_dir / "prodos8emu_disassembly_trace.log");
+  const bool mli_log_exists         = fs::exists(temp_dir / "prodos8emu_mli.log");
+  const bool cout_log_exists        = fs::exists(temp_dir / "prodos8emu_cout.log");
+  const bool trace_log_exists       = fs::exists(temp_dir / "prodos8emu_trace.log");
+
+  const bool ok = result.exit_code != 0 && disassembly_log_exists && !mli_log_exists &&
+                  !cout_log_exists && !trace_log_exists;
+
+  if (!ok) {
+    std::cerr << "FAIL: --disassembly-trace must create prodos8emu_disassembly_trace.log "
+                 "without creating debug logs (exit="
+              << result.exit_code << ")\n";
+    std::cerr << "  disassembly_log_exists=" << (disassembly_log_exists ? "yes" : "no") << "\n";
+    std::cerr << "  mli_log_exists=" << (mli_log_exists ? "yes" : "no") << "\n";
+    std::cerr << "  cout_log_exists=" << (cout_log_exists ? "yes" : "no") << "\n";
+    std::cerr << "  trace_log_exists=" << (trace_log_exists ? "yes" : "no") << "\n";
+    std::cerr << "Output:\n" << result.output << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: runner_disassembly_trace_creates_dedicated_log_without_debug\n";
+  }
+
+  std::error_code remove_ec;
+  fs::remove_all(temp_dir, remove_ec);
+}
+
 int main(int argc, char* argv[]) {
   int failures = 0;
 
@@ -193,6 +289,7 @@ int main(int argc, char* argv[]) {
   runner_rejects_unknown_option_contract_stable(runner_path, failures);
   runner_accepts_jsr_rts_trace_flag(runner_path, failures);
   runner_accepts_disassembly_trace_flag(runner_path, failures);
+  runner_disassembly_trace_creates_dedicated_log_without_debug(runner_path, failures);
 
   if (failures == 0) {
     std::cout << "\nAll tests passed!\n";

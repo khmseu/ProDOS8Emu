@@ -25,6 +25,7 @@ namespace prodos8emu {
     void detachMLI();
     void setDebugLogs(std::ostream* mliLog, std::ostream* coutLog);
     void setTraceLog(std::ostream* traceLog);
+    void setDisassemblyTraceLog(std::ostream* disassemblyTraceLog);
     void setJsrRtsTraceMonitorEnabled(bool enabled);
 
     // Reset vectors are read from $FFFC/$FFFD.
@@ -57,16 +58,17 @@ namespace prodos8emu {
 
    private:
     Apple2Memory& m_mem;
-    MLIContext*   m_mli      = nullptr;
-    std::ostream* m_mliLog   = nullptr;
-    std::ostream* m_coutLog  = nullptr;
-    std::ostream* m_traceLog = nullptr;
+    MLIContext*   m_mli                 = nullptr;
+    std::ostream* m_mliLog              = nullptr;
+    std::ostream* m_coutLog             = nullptr;
+    std::ostream* m_traceLog            = nullptr;
+    std::ostream* m_disassemblyTraceLog = nullptr;
 
     CPU65C02Regs m_r;
 
-    bool     m_waiting          = false;  // WAI
-    bool     m_stopped          = false;  // STP
-    uint64_t m_instructionCount = 0;      // Total instructions executed
+    bool     m_waiting                   = false;  // WAI
+    bool     m_stopped                   = false;  // STP
+    uint64_t m_instructionCount          = 0;      // Total instructions executed
     bool     m_jsrRtsTraceMonitorEnabled = false;
 
     // PC ring buffer for tracking explicit PC changes (JMP, JSR, RTS, branches, etc.)
