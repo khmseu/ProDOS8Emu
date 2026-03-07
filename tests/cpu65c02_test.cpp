@@ -5598,8 +5598,8 @@ __attribute__((noinline)) static void run_jsr_rts_trace_monitor_excludes_mli_tra
   }
 }
 
-__attribute__((noinline)) static void
-run_jsr_rts_trace_monitor_symbol_lookup_hit_contract_test(int& failures) {
+__attribute__((noinline)) static void run_jsr_rts_trace_monitor_symbol_lookup_hit_contract_test(
+    int& failures) {
   std::cout << "Test 87: jsr_rts_trace_monitor_symbol_lookup_hit_contract\n";
 
   prodos8emu::Apple2Memory mem;
@@ -5636,10 +5636,11 @@ run_jsr_rts_trace_monitor_symbol_lookup_hit_contract_test(int& failures) {
   const std::string actual = traceLog.str();
 
   if (actual != expected) {
-    std::cerr << "FAIL: Expected JSR/RTS monitor symbol lookup hit contract to append marker labels\n"
-              << "Expected:\n"
-              << expected << "Actual:\n"
-              << actual << "\n";
+    std::cerr
+        << "FAIL: Expected JSR/RTS monitor symbol lookup hit contract to append marker labels\n"
+        << "Expected:\n"
+        << expected << "Actual:\n"
+        << actual << "\n";
     failures++;
   } else {
     std::cout << "PASS: jsr_rts_trace_monitor_symbol_lookup_hit_contract\n";
@@ -5684,11 +5685,11 @@ run_jsr_rts_trace_monitor_symbol_lookup_miss_fallback_contract_test(int& failure
   const std::string actual = traceLog.str();
 
   if (actual != expected) {
-    std::cerr
-        << "FAIL: Expected JSR/RTS monitor symbol lookup miss fallback to retain existing formatting\n"
-        << "Expected:\n"
-        << expected << "Actual:\n"
-        << actual << "\n";
+    std::cerr << "FAIL: Expected JSR/RTS monitor symbol lookup miss fallback to retain existing "
+                 "formatting\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
     failures++;
   } else {
     std::cout << "PASS: jsr_rts_trace_monitor_symbol_lookup_miss_fallback_contract\n";

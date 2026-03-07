@@ -380,16 +380,24 @@ namespace prodos8emu {
       MonitorSymbolPc    = 1 << 2,
     };
 
+    enum class MonitorSymbolKey : uint8_t {
+      None,
+      PassNbr,
+      GenF,
+    };
+
     struct MonitorSymbol {
-      uint16_t      address;
-      const char*   name;
-      uint8_t       flags;
-      MarkerPayload markerPayload;
+      uint16_t         address;
+      const char*      name;
+      uint8_t          flags;
+      MarkerPayload    markerPayload;
+      MonitorSymbolKey key = MonitorSymbolKey::None;
     };
 
     static const MonitorSymbol kMonitorSymbols[] = {
         // Zero-page write-monitor symbols.
-        {0x0067, "PassNbr", MonitorSymbolWrite, MarkerPayload::None},
+        {0x0067, "PassNbr", MonitorSymbolRead | MonitorSymbolWrite, MarkerPayload::None,
+         MonitorSymbolKey::PassNbr},
         {0x0068, "ListingF", MonitorSymbolWrite, MarkerPayload::None},
         {0x0069, "SubTtlF", MonitorSymbolWrite, MarkerPayload::None},
         {0x006A, "LineCnt", MonitorSymbolWrite, MarkerPayload::None},
@@ -409,7 +417,8 @@ namespace prodos8emu {
         {0x009B, "NumCols", MonitorSymbolWrite, MarkerPayload::None},
         {0x00A7, "SavLstF", MonitorSymbolWrite, MarkerPayload::None},
         {0x00AE, "EndianF", MonitorSymbolWrite, MarkerPayload::None},
-        {0x00BF, "GenF", MonitorSymbolWrite, MarkerPayload::None},
+        {0x00BF, "GenF", MonitorSymbolRead | MonitorSymbolWrite, MarkerPayload::None,
+         MonitorSymbolKey::GenF},
         {0x00D0, "RLDEnd", MonitorSymbolWrite, MarkerPayload::None},
         {0x00D1, "RLDEnd+1", MonitorSymbolWrite, MarkerPayload::None},
         {0x00E0, "LstCyc", MonitorSymbolWrite, MarkerPayload::None},
@@ -450,6 +459,28 @@ namespace prodos8emu {
         }
       }
       return nullptr;
+    }
+
+    const MonitorSymbol* find_monitor_symbol_by_key(MonitorSymbolKey key, uint8_t requiredFlag) {
+      for (const MonitorSymbol& symbol : kMonitorSymbols) {
+        if (symbol.key == key && (symbol.flags & requiredFlag) != 0) {
+          return &symbol;
+        }
+      }
+      return nullptr;
+    }
+
+    bool append_marker_payload_field(std::ostream& os, const ConstMemoryBanks& banks,
+                                     MonitorSymbolKey key) {
+      const MonitorSymbol* symbol = find_monitor_symbol_by_key(key, MonitorSymbolRead);
+      if (symbol == nullptr) {
+        return false;
+      }
+
+      os << " " << symbol->name << "(ZP$" << std::hex << std::uppercase << std::setfill('0')
+         << std::setw(2) << static_cast<unsigned>(symbol->address & 0x00FF) << ")=$" << std::setw(2)
+         << static_cast<unsigned>(read_u8(banks, symbol->address));
+      return true;
     }
 
     const char* passnbr_monitor_mutator_name(uint8_t opcode) {
@@ -2679,14 +2710,14 @@ namespace prodos8emu {
         break;
 
       case MarkerPayload::PassNbrAndGenF:
-        *m_traceLog << " PassNbr(ZP$67)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0x67)) << " GenF(ZP$BF)=$"
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+        append_marker_payload_field(*m_traceLog, m_mem.constBanks(), MonitorSymbolKey::PassNbr);
+        append_marker_payload_field(*m_traceLog, m_mem.constBanks(), MonitorSymbolKey::GenF);
+        *m_traceLog << std::dec << "\n";
         break;
 
       case MarkerPayload::GenFOnly:
-        *m_traceLog << " GenF(ZP$BF)=$" << std::hex << std::uppercase << std::setfill('0')
-                    << std::setw(2) << static_cast<unsigned>(read8(0xBF)) << std::dec << "\n";
+        append_marker_payload_field(*m_traceLog, m_mem.constBanks(), MonitorSymbolKey::GenF);
+        *m_traceLog << std::dec << "\n";
         break;
     }
   }
@@ -2738,7 +2769,9 @@ namespace prodos8emu {
       return;
     }
 
-    const char* passnbrMutator = passnbr_monitor_mutator_name(opcode);
+    const char*          passnbrMutator = passnbr_monitor_mutator_name(opcode);
+    const MonitorSymbol* passNbrSymbol =
+        find_monitor_symbol_by_key(MonitorSymbolKey::PassNbr, MonitorSymbolWrite);
 
     for (size_t i = 0; i < m_stepZpMonitorEventCount; ++i) {
       const ZpMonitorEvent& event       = m_stepZpMonitorEvents[i];
@@ -2747,7 +2780,7 @@ namespace prodos8emu {
         continue;
       }
 
-      const bool isPassNbr = (event.address == 0x67);
+      const bool isPassNbr = (passNbrSymbol != nullptr && event.address == passNbrSymbol->address);
       if (isPassNbr) {
         if (passnbrMutator != nullptr) {
           *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
