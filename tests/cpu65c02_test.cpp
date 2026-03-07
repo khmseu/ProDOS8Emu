@@ -4752,7 +4752,8 @@ __attribute__((noinline)) static void run_trace_marker_table_equivalence_test(in
       {0x8A9A, "8A9A", ">>> ORG GenF check", MarkerPayload::GenFOnly},
       {0x8AAE, "8AAE", ">>> ORG open file path", MarkerPayload::GenFOnly},
       {0x9918, "9918", ">>> Open4RW", MarkerPayload::None},
-      {0x7C98, "7C98", ">>> PrtSetup", MarkerPayload::None},
+      {0x7B13, "7B13", ">>> InitASM", MarkerPayload::None},
+      {0x7D29, "7D29", ">>> PrtSetup", MarkerPayload::None},
       {0x7D07, "7D07", ">>> ParseDCS", MarkerPayload::None},
       {0x7D2E, "7D2E", ">>> IsFileLst", MarkerPayload::None},
       {0x7D3A, "7D3A", ">>> Lst2File", MarkerPayload::None},
@@ -5515,11 +5516,10 @@ __attribute__((noinline)) static void run_jsr_rts_trace_monitor_enabled_dcb8_red
   const std::string actual = traceLog.str();
 
   if (actual != expected) {
-    std::cerr
-        << "FAIL: Expected enabled monitor to log JSR $DCB8 redirect and RTS PC transitions\n"
-        << "Expected:\n"
-        << expected << "Actual:\n"
-        << actual << "\n";
+    std::cerr << "FAIL: Expected enabled monitor to log JSR $DCB8 redirect and RTS PC transitions\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
     failures++;
   } else if (cpu.regs().a != 0xA0) {
     std::cerr << "FAIL: Expected JSR $DCB8 redirect behavior to set A=$A0\n";
@@ -5595,6 +5595,103 @@ __attribute__((noinline)) static void run_jsr_rts_trace_monitor_excludes_mli_tra
     failures++;
   } else {
     std::cout << "PASS: jsr_rts_trace_monitor_excludes_mli_trap\n";
+  }
+}
+
+__attribute__((noinline)) static void
+run_jsr_rts_trace_monitor_symbol_lookup_hit_contract_test(int& failures) {
+  std::cout << "Test 87: jsr_rts_trace_monitor_symbol_lookup_hit_contract\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x7D04;
+  const uint16_t sub   = 0x7D2E;
+  writeProgram(mem, start,
+               {
+                   0x20,
+                   static_cast<uint8_t>(sub & 0xFF),
+                   static_cast<uint8_t>((sub >> 8) & 0xFF),
+                   0xEA,
+               });
+  writeProgram(mem, sub,
+               {
+                   0x60,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  enable_jsr_rts_trace_monitor(cpu);
+  cpu.reset();
+
+  cpu.step();
+  cpu.step();
+
+  const std::string expected =
+      "@1 PC=$7D2E JSR: $7D04 -> $7D2E >>> IsFileLst\n"
+      "@2 PC=$7D07 RTS: $7D2E -> $7D07 >>> ParseDCS\n";
+  const std::string actual = traceLog.str();
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Expected JSR/RTS monitor symbol lookup hit contract to append marker labels\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: jsr_rts_trace_monitor_symbol_lookup_hit_contract\n";
+  }
+}
+
+__attribute__((noinline)) static void
+run_jsr_rts_trace_monitor_symbol_lookup_miss_fallback_contract_test(int& failures) {
+  std::cout << "Test 88: jsr_rts_trace_monitor_symbol_lookup_miss_fallback_contract\n";
+
+  prodos8emu::Apple2Memory mem;
+  mem.setLCReadEnabled(true);
+  mem.setLCWriteEnabled(true);
+
+  const uint16_t start = 0x2A00;
+  const uint16_t sub   = 0x2A30;
+  writeProgram(mem, start,
+               {
+                   0x20,
+                   static_cast<uint8_t>(sub & 0xFF),
+                   static_cast<uint8_t>((sub >> 8) & 0xFF),
+                   0xEA,
+               });
+  writeProgram(mem, sub,
+               {
+                   0x60,
+               });
+  prodos8emu::write_u16_le(mem.banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(mem);
+  std::stringstream    traceLog;
+  cpu.setTraceLog(&traceLog);
+  enable_jsr_rts_trace_monitor(cpu);
+  cpu.reset();
+
+  cpu.step();
+  cpu.step();
+
+  const std::string expected =
+      "@1 PC=$2A30 JSR: $2A00 -> $2A30\n"
+      "@2 PC=$2A03 RTS: $2A30 -> $2A03\n";
+  const std::string actual = traceLog.str();
+
+  if (actual != expected) {
+    std::cerr
+        << "FAIL: Expected JSR/RTS monitor symbol lookup miss fallback to retain existing formatting\n"
+        << "Expected:\n"
+        << expected << "Actual:\n"
+        << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: jsr_rts_trace_monitor_symbol_lookup_miss_fallback_contract\n";
   }
 }
 
@@ -10735,6 +10832,8 @@ int main() {
   run_jsr_rts_trace_monitor_enabled_normal_jsr_rts_logs_old_new_pc_test(failures);
   run_jsr_rts_trace_monitor_enabled_dcb8_redirect_behavior_test(failures);
   run_jsr_rts_trace_monitor_excludes_mli_trap_test(failures);
+  run_jsr_rts_trace_monitor_symbol_lookup_hit_contract_test(failures);
+  run_jsr_rts_trace_monitor_symbol_lookup_miss_fallback_contract_test(failures);
   run_zp_monitor_trigger_matrix_contracts_test(failures);
   run_zp_monitor_all_writes_uniform_policy_contracts_test(failures);
   run_zp_monitor_trace_output_compatibility_baseline_test(failures);

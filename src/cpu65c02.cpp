@@ -395,8 +395,8 @@ namespace prodos8emu {
         {0xA7, "SavLstF"},
         {0xAE, "EndianF"},
         {0xBF, "GenF"},
-  {0xD0, "RLDEnd"},
-  {0xD1, "RLDEnd+1"},
+        {0xD0, "RLDEnd"},
+        {0xD1, "RLDEnd+1"},
         {0xE0, "LstCyc"},
         {0xE1, "LstUnAsm"},
         {0xE2, "LstExpMac"},
@@ -2661,10 +2661,10 @@ namespace prodos8emu {
         break;
       }
     }
-    // MarkerMetadata        vicinityMarker = {};
+    // MarkerMetadata vicinityMarker = {};
     // if (marker == nullptr) {
-    //   if (pc > 0x7D2E - 0x100 && pc < 0x7D2E + 0x100) {
-    //     vicinityMarker = MarkerMetadata{pc, ">>> IsFileLst vicinity", MarkerPayload::None};
+    //   if (pc > 0x7C98 - 0x100 && pc < 0x7C98 + 0x100) {
+    //     vicinityMarker = MarkerMetadata{pc, ">>> PrtSetup vicinity", MarkerPayload::None};
     //     marker         = &vicinityMarker;
     //   }
     // }
