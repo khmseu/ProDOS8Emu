@@ -3494,9 +3494,8 @@ namespace prodos8emu {
     write_hex(os, regs.p, 2);
   }
 
-  static void emit_disassembly_trace_line(std::ostream& os, uint64_t instructionCount,
-                                          uint16_t pc, uint8_t opcode,
-                                          const std::string& disassemblyText,
+  static void emit_disassembly_trace_line(std::ostream& os, uint64_t instructionCount, uint16_t pc,
+                                          uint8_t opcode, const std::string& disassemblyText,
                                           const CPU65C02Regs& preRegs,
                                           const CPU65C02Regs& postRegs) {
     os << "@" << instructionCount << " PC=$";

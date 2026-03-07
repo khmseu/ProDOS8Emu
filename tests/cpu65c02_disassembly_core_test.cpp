@@ -94,7 +94,7 @@ static void disassembly_resolves_known_symbol_for_absolute_operand(int& failures
   const std::string expected =
       "@1 PC=$2200 OP=$8D STA $0060 (BCDNbr) ; PRE PC=$2200 A=$00 X=$00 Y=$00 SP=$FF P=$24 "
       "POST PC=$2203 A=$00 X=$00 Y=$00 SP=$FF P=$24\n";
-  const std::string actual   = disassemblyLog.str();
+  const std::string actual = disassemblyLog.str();
 
   if (actual != expected) {
     std::cerr << "FAIL: Known absolute operand symbol should be appended\n"
@@ -133,7 +133,7 @@ static void disassembly_falls_back_to_hex_for_unmapped_absolute_operand(int& fai
   const std::string expected =
       "@1 PC=$2210 OP=$8D STA $1234 ; PRE PC=$2210 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
       "PC=$2213 A=$00 X=$00 Y=$00 SP=$FF P=$24\n";
-  const std::string actual   = disassemblyLog.str();
+  const std::string actual = disassemblyLog.str();
 
   if (actual != expected) {
     std::cerr << "FAIL: Unmapped absolute operand should remain raw hex\n"
@@ -176,7 +176,7 @@ static void disassembly_formats_mli_pseudo_instruction_for_jsr_bf00(int& failure
   const std::string expected =
       "@1 PC=$2300 OP=$20 MLI .byte $C8 .word $03B0 (OPEN) ; PRE PC=$2300 A=$00 X=$00 Y=$00 "
       "SP=$FF P=$24 POST PC=$BF00 A=$00 X=$00 Y=$00 SP=$FD P=$24\n";
-  const std::string actual   = disassemblyLog.str();
+  const std::string actual = disassemblyLog.str();
 
   if (cycles != 6) {
     std::cerr << "FAIL: JSR should retain original cycle count\n";
@@ -221,7 +221,7 @@ static void disassembly_only_emits_while_sink_is_non_null(int& failures) {
   const std::string expected =
       "@1 PC=$2100 OP=$EA NOP ; PRE PC=$2100 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
       "PC=$2101 A=$00 X=$00 Y=$00 SP=$FF P=$24\n";
-  const std::string actual   = disassemblyLog.str();
+  const std::string actual = disassemblyLog.str();
 
   if (actual != expected) {
     std::cerr << "FAIL: Disassembly should emit only while sink is configured\n"
