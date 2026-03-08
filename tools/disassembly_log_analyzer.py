@@ -19,7 +19,9 @@ import tempfile
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Deque, Iterable, Iterator
+from typing import Deque, Iterable, Iterator, TypeVar
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,8 @@ class TraceEntry:
     mnemonic: str
     operand: str
     full_line: str
+    pre_pc: int | None
+    post_pc: int | None
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,12 @@ TRACE_LINE_RE = re.compile(
     r"^@(?P<index>\d+)\s+PC=\$(?P<pc>[0-9A-Fa-f]{4})\s+"
     r"OP=\$(?P<op>[0-9A-Fa-f]{2})\s+(?P<mnemonic>[A-Za-z0-9]{3,4})\b(?P<tail>.*)$"
 )
+
+TRACE_PRE_POST_PC_RE = re.compile(
+    r";\s*PRE\s+PC=\$(?P<pre>[0-9A-Fa-f]{4}).*?POST\s+PC=\$(?P<post>[0-9A-Fa-f]{4})"
+)
+
+OPERAND_ADDR16_RE = re.compile(r"\$([0-9A-Fa-f]{4})")
 
 MONITOR_SYMBOL_RE = re.compile(
     r"\{\s*0x(?P<addr>[0-9A-Fa-f]+)\s*,\s*\"(?P<name>[^\"]+)\""
@@ -131,10 +141,31 @@ CPU_MNEMONICS = {
     "WAI",
 }
 
+BRANCH_MNEMONICS = {
+    "BCC",
+    "BCS",
+    "BEQ",
+    "BMI",
+    "BNE",
+    "BPL",
+    "BRA",
+    "BVC",
+    "BVS",
+    "BBR",
+    "BBS",
+}
+
+MIN_CONFIDENCE_SCORE_BASE = 4
+MIN_CONFIDENCE_SCORE_PER_ENTRY = 2
+
 
 def normalize_mnemonic(token: str) -> str:
     text = token.upper().rstrip(":")
-    if text.startswith(("BBR", "BBS", "RMB", "SMB")) and len(text) >= 4 and text[3:].isdigit():
+    if (
+        text.startswith(("BBR", "BBS", "RMB", "SMB"))
+        and len(text) >= 4
+        and text[3:].isdigit()
+    ):
         return text[:3]
     return text
 
@@ -148,6 +179,13 @@ def parse_log_line(line: str) -> TraceEntry | None:
     tail = match.group("tail")
     operand = tail.split(";", 1)[0].strip()
 
+    pre_pc: int | None = None
+    post_pc: int | None = None
+    pre_post = TRACE_PRE_POST_PC_RE.search(stripped)
+    if pre_post is not None:
+        pre_pc = int(pre_post.group("pre"), 16)
+        post_pc = int(pre_post.group("post"), 16)
+
     return TraceEntry(
         index=int(match.group("index")),
         pc=int(match.group("pc"), 16),
@@ -155,6 +193,8 @@ def parse_log_line(line: str) -> TraceEntry | None:
         mnemonic=normalize_mnemonic(match.group("mnemonic")),
         operand=operand,
         full_line=stripped,
+        pre_pc=pre_pc,
+        post_pc=post_pc,
     )
 
 
@@ -255,7 +295,9 @@ def parse_existing_monitor_symbols(symbols_file: Path) -> dict[int, list[str]]:
     return dict(symbols)
 
 
-def parse_trace_log(log_path: Path, sample_limit: int = 5) -> tuple[int, int, list[TraceEntry]]:
+def parse_trace_log(
+    log_path: Path, sample_limit: int = 5
+) -> tuple[int, int, list[TraceEntry]]:
     valid_count = 0
     invalid_count = 0
     samples: list[TraceEntry] = []
@@ -274,8 +316,8 @@ def parse_trace_log(log_path: Path, sample_limit: int = 5) -> tuple[int, int, li
     return valid_count, invalid_count, samples
 
 
-def _preview(entries: Iterable[object], limit: int = 3) -> list[object]:
-    out: list[object] = []
+def _preview(entries: Iterable[T], limit: int = 3) -> list[T]:
+    out: list[T] = []
     for entry in entries:
         out.append(entry)
         if len(out) >= limit:
@@ -283,7 +325,9 @@ def _preview(entries: Iterable[object], limit: int = 3) -> list[object]:
     return out
 
 
-def build_ngram_index(source: list[SourceInstruction], window: int) -> dict[tuple[str, ...], list[int]]:
+def build_ngram_index(
+    source: list[SourceInstruction], window: int
+) -> dict[tuple[str, ...], list[int]]:
     out: dict[tuple[str, ...], list[int]] = defaultdict(list)
     if window <= 0 or len(source) < window:
         return out
@@ -303,20 +347,290 @@ def mnemonics_match(trace_mnemonic: str, source_mnemonic: str) -> bool:
     return False
 
 
+def branch_target_from_trace(entry: TraceEntry) -> int | None:
+    if entry.mnemonic not in BRANCH_MNEMONICS:
+        return None
+    # Trace disassembly prints branch destination as $HHHH. For BBR/BBS there can be two
+    # addresses in the operand; the destination is the last one.
+    all_targets = re.findall(r"\$([0-9A-Fa-f]{4})", entry.operand)
+    if not all_targets:
+        return None
+    return int(all_targets[-1], 16)
+
+
+def branch_label_from_source(inst: SourceInstruction) -> str | None:
+    if inst.mnemonic not in BRANCH_MNEMONICS:
+        return None
+
+    pieces = [part.strip() for part in inst.operand.split(",") if part.strip()]
+    if not pieces:
+        return None
+
+    # For BBR/BBS branch label is usually the last operand; for other branches it is first.
+    token = pieces[-1] if inst.mnemonic in {"BBR", "BBS"} else pieces[0]
+    if token.startswith("$") or token.startswith("#"):
+        return None
+    return token.rstrip(":")
+
+
+def call_label_from_source(inst: SourceInstruction) -> str | None:
+    if inst.mnemonic != "JSR":
+        return None
+
+    token = inst.operand.split(",", 1)[0].strip().split(" ", 1)[0]
+    if not token:
+        return None
+    if token.startswith("$") or token.startswith("#") or token[0].isdigit():
+        return None
+    return token.rstrip(":")
+
+
+def normalize_operand_text(operand: str) -> str:
+    return re.sub(r"\s+", "", operand.upper())
+
+
+def operand_shape_hint(operand: str) -> str:
+    text = normalize_operand_text(operand)
+    if not text:
+        return "implied"
+    if text.startswith("#"):
+        return "immediate"
+    if text.startswith("("):
+        if "),Y" in text:
+            return "indirect-y"
+        if ",X)" in text:
+            return "x-indirect"
+        return "indirect"
+    if text.endswith(",X"):
+        base = text[:-2]
+        if base.startswith("$") and len(base) == 3:
+            return "zeropage-x"
+        if base.startswith("$") and len(base) == 5:
+            return "absolute-x"
+        return "indexed-x"
+    if text.endswith(",Y"):
+        base = text[:-2]
+        if base.startswith("$") and len(base) == 3:
+            return "zeropage-y"
+        if base.startswith("$") and len(base) == 5:
+            return "absolute-y"
+        return "indexed-y"
+    if text.startswith("$") and len(text) == 3:
+        return "zeropage"
+    if text.startswith("$") and len(text) == 5:
+        return "absolute"
+    return "symbolic"
+
+
+def operand_addresses_16(operand: str) -> set[int]:
+    return {int(token, 16) for token in OPERAND_ADDR16_RE.findall(operand)}
+
+
+def is_confident_sync_metric(metric: tuple[int, int, int, int], window: int) -> bool:
+    score, exact_operands, addr_overlap_hits, branch_compat_hits = metric
+    min_score = max(MIN_CONFIDENCE_SCORE_BASE, window * MIN_CONFIDENCE_SCORE_PER_ENTRY)
+    strong_signal_hits = exact_operands + addr_overlap_hits + branch_compat_hits
+    return score >= min_score and strong_signal_hits > 0
+
+
+def score_trace_source_pair(
+    trace_entry: TraceEntry,
+    source_inst: SourceInstruction,
+    source_index: int,
+    source: list[SourceInstruction],
+    label_to_source_indexes: dict[str, list[int]],
+) -> tuple[int, int, int, int]:
+    score = 0
+    exact_operands = 0
+    addr_overlap_hits = 0
+    branch_compat_hits = 0
+
+    trace_operand = normalize_operand_text(trace_entry.operand)
+    source_operand = normalize_operand_text(source_inst.operand)
+    if trace_operand == source_operand:
+        score += 8
+        exact_operands += 1
+    else:
+        trace_shape = operand_shape_hint(trace_entry.operand)
+        source_shape = operand_shape_hint(source_inst.operand)
+        if trace_shape == source_shape:
+            score += 2
+        else:
+            score -= 1
+
+        trace_addrs = operand_addresses_16(trace_entry.operand)
+        source_addrs = operand_addresses_16(source_inst.operand)
+        if trace_addrs and source_addrs:
+            overlap = trace_addrs & source_addrs
+            if overlap:
+                score += 6
+                addr_overlap_hits += 1
+            else:
+                score -= 4
+        elif trace_addrs and not source_addrs:
+            score -= 2
+
+    if (
+        trace_entry.mnemonic in BRANCH_MNEMONICS
+        and source_inst.mnemonic in BRANCH_MNEMONICS
+    ):
+        trace_target = branch_target_from_trace(trace_entry)
+        source_label = branch_label_from_source(source_inst)
+        if trace_target is not None and source_label is not None:
+            target_idx = choose_source_label_target(
+                source_label,
+                source_index,
+                source,
+                label_to_source_indexes,
+            )
+            if target_idx is not None:
+                trace_backwards = trace_target <= trace_entry.pc
+                source_backwards = target_idx <= source_index
+                if trace_backwards == source_backwards:
+                    # Branch direction compatibility is only a soft bonus.
+                    score += 1
+                    branch_compat_hits += 1
+
+    return score, exact_operands, addr_overlap_hits, branch_compat_hits
+
+
+def score_sync_candidate(
+    pending_window: list[TraceEntry],
+    source_start: int,
+    source: list[SourceInstruction],
+    label_to_source_indexes: dict[str, list[int]],
+) -> tuple[int, int, int, int]:
+    total_score = 0
+    exact_operands = 0
+    addr_overlap_hits = 0
+    branch_compat_hits = 0
+
+    if source_start < 0 or source_start + len(pending_window) > len(source):
+        return (-10_000, 0, 0, 0)
+
+    for offset, trace_entry in enumerate(pending_window):
+        source_inst = source[source_start + offset]
+        if not mnemonics_match(trace_entry.mnemonic, source_inst.mnemonic):
+            return (-10_000, 0, 0, 0)
+
+        pair_score, pair_exact, pair_overlap, pair_branch = score_trace_source_pair(
+            trace_entry,
+            source_inst,
+            source_start + offset,
+            source,
+            label_to_source_indexes,
+        )
+        total_score += pair_score
+        exact_operands += pair_exact
+        addr_overlap_hits += pair_overlap
+        branch_compat_hits += pair_branch
+
+    return (total_score, exact_operands, addr_overlap_hits, branch_compat_hits)
+
+
+def choose_source_label_target(
+    label: str,
+    current_source_index: int,
+    source: list[SourceInstruction],
+    label_to_source_indexes: dict[str, list[int]],
+) -> int | None:
+    candidates = label_to_source_indexes.get(label.upper(), [])
+    if not candidates:
+        return None
+
+    current_file = source[current_source_index].file_path
+    same_file = [idx for idx in candidates if source[idx].file_path == current_file]
+    pool = same_file if same_file else candidates
+    return min(pool, key=lambda idx: abs(idx - current_source_index))
+
+
+def advance_source_position(
+    trace_entry: TraceEntry,
+    source_pos: int,
+    source: list[SourceInstruction],
+    label_to_source_indexes: dict[str, list[int]],
+    return_stack: list[tuple[int, int | None]],
+    observed_next_pc: int | None = None,
+) -> int:
+    source_inst = source[source_pos]
+    next_source_pos = source_pos + 1
+    observed_post_pc = (
+        trace_entry.post_pc if trace_entry.post_pc is not None else observed_next_pc
+    )
+
+    if trace_entry.mnemonic in BRANCH_MNEMONICS:
+        branch_target = branch_target_from_trace(trace_entry)
+        if branch_target is not None and observed_post_pc == branch_target:
+            branch_label = branch_label_from_source(source_inst)
+            if branch_label is not None:
+                target_idx = choose_source_label_target(
+                    branch_label,
+                    source_pos,
+                    source,
+                    label_to_source_indexes,
+                )
+                if target_idx is not None:
+                    next_source_pos = target_idx
+
+    if source_inst.mnemonic == "JSR":
+        return_pc = (trace_entry.pc + 3) & 0xFFFF
+        call_label = call_label_from_source(source_inst)
+        stepped_into_callee = False
+        if call_label is not None and (
+            observed_post_pc is None or observed_post_pc != return_pc
+        ):
+            target_idx = choose_source_label_target(
+                call_label,
+                source_pos,
+                source,
+                label_to_source_indexes,
+            )
+            if target_idx is not None:
+                next_source_pos = target_idx
+                stepped_into_callee = True
+
+        if stepped_into_callee:
+            return_stack.append((source_pos + 1, return_pc))
+
+    if source_inst.mnemonic == "RTS" and return_stack:
+        if observed_post_pc is not None:
+            for i in range(len(return_stack) - 1, -1, -1):
+                return_index, return_pc = return_stack[i]
+                if return_pc == observed_post_pc:
+                    del return_stack[i:]
+                    return return_index
+
+            # No reliable return target; keep alignment linear and let mismatch logic recover.
+            return next_source_pos
+
+        return_index, _ = return_stack.pop()
+        return return_index
+
+    return next_source_pos
+
+
 def prompt_for_help(
     issue: SyncIssue,
     pending_trace: list[TraceEntry],
     source: list[SourceInstruction],
     current_source_index: int | None,
     label_to_source_indexes: dict[str, list[int]],
+    recent_trace: list[TraceEntry] | None = None,
 ) -> tuple[str, int | None]:
     print("\n=== Alignment Needs Help ===")
     print(f"Reason: {issue.reason}")
     print(issue.detail)
 
     print("\nPending trace entries:")
+    if recent_trace:
+        for entry in recent_trace[-2:]:
+            print(
+                f"  (prev) @{entry.index} PC=${entry.pc:04X} OP=${entry.opcode:02X} {entry.mnemonic} {entry.operand}".rstrip()
+            )
     for entry in pending_trace[:5]:
-        print(f"  @{entry.index} PC=${entry.pc:04X} OP=${entry.opcode:02X} {entry.mnemonic} {entry.operand}".rstrip())
+        print(
+            f"  @{entry.index} PC=${entry.pc:04X} OP=${entry.opcode:02X} {entry.mnemonic} {entry.operand}".rstrip()
+        )
 
     if current_source_index is not None:
         lo = max(0, current_source_index - 2)
@@ -364,7 +678,9 @@ def prompt_for_help(
                 print("Label not found in parsed source instructions.")
                 continue
             if len(matches) > 1:
-                print(f"Label has {len(matches)} matches, using first index {matches[0]}.")
+                print(
+                    f"Label has {len(matches)} matches, using first index {matches[0]}."
+                )
             return "jump", matches[0]
 
         print("Unknown action. Use s, j <index>, l <label>, or q.")
@@ -372,19 +688,130 @@ def prompt_for_help(
 
 def acquire_sync_window(
     pending: Deque[TraceEntry],
+    source: list[SourceInstruction],
     ngram_index: dict[tuple[str, ...], list[int]],
+    label_to_source_indexes: dict[str, list[int]],
     window: int,
 ) -> tuple[int | None, SyncIssue | None]:
     if len(pending) < window:
-        return None, SyncIssue("insufficient-window", f"Need {window} trace entries, have {len(pending)}")
+        return None, SyncIssue(
+            "insufficient-window", f"Need {window} trace entries, have {len(pending)}"
+        )
 
     key = tuple(entry.mnemonic for entry in list(pending)[:window])
     candidates = ngram_index.get(key, [])
-    if len(candidates) == 1:
-        return candidates[0], None
     if len(candidates) == 0:
-        return None, SyncIssue("no-sync-candidate", f"No source window matches mnemonic key: {' '.join(key)}")
-    return None, SyncIssue("ambiguous-sync-candidate", f"{len(candidates)} source windows match key: {' '.join(key)}")
+        return None, SyncIssue(
+            "no-sync-candidate",
+            f"No source window matches mnemonic key: {' '.join(key)}",
+        )
+
+    pending_window = list(pending)[:window]
+    scored: list[tuple[tuple[int, int, int, int], int]] = []
+    for candidate in candidates:
+        scored.append(
+            (
+                score_sync_candidate(
+                    pending_window,
+                    candidate,
+                    source,
+                    label_to_source_indexes,
+                ),
+                candidate,
+            )
+        )
+
+    if len(candidates) == 1:
+        only_metric, only_idx = scored[0]
+        if is_confident_sync_metric(only_metric, window):
+            return only_idx, None
+        return None, SyncIssue(
+            "low-confidence-sync-candidate",
+            (
+                f"Unique source window for key {' '.join(key)} was rejected "
+                f"(score {only_metric[0]}, exact {only_metric[1]}, "
+                f"overlap {only_metric[2]}, branch {only_metric[3]})."
+            ),
+        )
+
+    best_metric = max(metric for metric, _ in scored)
+    best_candidates = [idx for metric, idx in scored if metric == best_metric]
+    if len(best_candidates) == 1:
+        best_idx = best_candidates[0]
+        if is_confident_sync_metric(best_metric, window):
+            return best_idx, None
+        return None, SyncIssue(
+            "low-confidence-sync-candidate",
+            (
+                f"Best source window for key {' '.join(key)} was unique but weak "
+                f"(score {best_metric[0]}, exact {best_metric[1]}, "
+                f"overlap {best_metric[2]}, branch {best_metric[3]})."
+            ),
+        )
+
+    return None, SyncIssue(
+        "ambiguous-sync-candidate",
+        (
+            f"{len(candidates)} source windows match key: {' '.join(key)} "
+            f"(best score {best_metric[0]}, exact {best_metric[1]}, "
+            f"overlap {best_metric[2]}, branch {best_metric[3]})."
+        ),
+    )
+
+
+def attempt_local_auto_resync(
+    pending: Deque[TraceEntry],
+    source: list[SourceInstruction],
+    ngram_index: dict[tuple[str, ...], list[int]],
+    label_to_source_indexes: dict[str, list[int]],
+    current_source_index: int,
+    window: int,
+    search_radius: int = 64,
+) -> int | None:
+    if window <= 0 or len(pending) < window:
+        return None
+
+    pending_window = list(pending)[:window]
+    key = tuple(entry.mnemonic for entry in pending_window)
+    candidates = ngram_index.get(key, [])
+    if not candidates:
+        return None
+
+    local_candidates = [
+        idx for idx in candidates if abs(idx - current_source_index) <= search_radius
+    ]
+    if not local_candidates:
+        return None
+
+    ranked: list[tuple[tuple[int, int, int, int, int], int]] = []
+    for idx in local_candidates:
+        metric = score_sync_candidate(
+            pending_window,
+            idx,
+            source,
+            label_to_source_indexes,
+        )
+        distance_bias = -abs(idx - current_source_index)
+        ranked.append(
+            ((metric[0], metric[1], metric[2], metric[3], distance_bias), idx)
+        )
+
+    best_metric = max(metric for metric, _ in ranked)
+    best_entries = [(metric, idx) for metric, idx in ranked if metric == best_metric]
+    if len(best_entries) != 1:
+        return None
+
+    best_scored_metric, best_idx = best_entries[0]
+    score_metric = (
+        best_scored_metric[0],
+        best_scored_metric[1],
+        best_scored_metric[2],
+        best_scored_metric[3],
+    )
+    if not is_confident_sync_metric(score_metric, window):
+        return None
+
+    return best_idx
 
 
 def write_discovered_labels(
@@ -398,7 +825,9 @@ def write_discovered_labels(
     lines: list[str] = []
     for addr in sorted(discovered.keys()):
         existing_names = set(existing.get(addr, []))
-        new_names = sorted(name for name in discovered[addr] if name not in existing_names)
+        new_names = sorted(
+            name for name in discovered[addr] if name not in existing_names
+        )
         if not new_names:
             continue
         for name in new_names:
@@ -425,13 +854,17 @@ def run_alignment(args: argparse.Namespace) -> int:
 
     ngram_index = build_ngram_index(source, args.sync_window)
     if not ngram_index:
-        print("Could not build source n-gram index. Check --sync-window and source corpus size.")
+        print(
+            "Could not build source n-gram index. Check --sync-window and source corpus size."
+        )
         return 1
 
     discovered: dict[int, set[str]] = defaultdict(set)
     processed = 0
     source_pos: int | None = None
     pending: Deque[TraceEntry] = deque()
+    recent_trace: Deque[TraceEntry] = deque(maxlen=2)
+    source_return_stack: list[tuple[int, int | None]] = []
     synced = False
     stop_reason = "eof"
 
@@ -453,7 +886,13 @@ def run_alignment(args: argparse.Namespace) -> int:
                 break
 
             if not synced:
-                sync_idx, issue = acquire_sync_window(pending, ngram_index, args.sync_window)
+                sync_idx, issue = acquire_sync_window(
+                    pending,
+                    source,
+                    ngram_index,
+                    label_to_source_indexes,
+                    args.sync_window,
+                )
                 if issue is not None:
                     if args.non_interactive:
                         print(f"Stopping: {issue.reason}: {issue.detail}")
@@ -466,27 +905,34 @@ def run_alignment(args: argparse.Namespace) -> int:
                         source,
                         source_pos,
                         label_to_source_indexes,
+                        list(recent_trace),
                     )
                     if action == "quit":
                         stop_reason = issue.reason
                         break
                     if action == "skip":
-                        pending.popleft()
+                        recent_trace.append(pending.popleft())
                         continue
                     if action == "jump" and value is not None:
                         source_pos = value
+                        source_return_stack.clear()
                         synced = True
                         continue
                     continue
 
                 source_pos = sync_idx
+                source_return_stack.clear()
                 synced = True
-                print(f"Synced at source index {source_pos} using window size {args.sync_window}.")
+                print(
+                    f"Synced at source index {source_pos} using window size {args.sync_window}."
+                )
 
             # Synced mode: consume one trace instruction at a time.
             assert source_pos is not None
             if source_pos >= len(source):
-                issue = SyncIssue("source-exhausted", "Reached end of source instruction stream.")
+                issue = SyncIssue(
+                    "source-exhausted", "Reached end of source instruction stream."
+                )
                 if args.non_interactive:
                     stop_reason = issue.reason
                     break
@@ -496,16 +942,18 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source,
                     len(source) - 1,
                     label_to_source_indexes,
+                    list(recent_trace),
                 )
                 if action == "quit":
                     stop_reason = issue.reason
                     break
                 if action == "skip":
-                    pending.popleft()
+                    recent_trace.append(pending.popleft())
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
+                    source_return_stack.clear()
                     continue
                 continue
 
@@ -513,6 +961,19 @@ def run_alignment(args: argparse.Namespace) -> int:
             source_inst = source[source_pos]
 
             if not mnemonics_match(trace_entry.mnemonic, source_inst.mnemonic):
+                local_resync_idx = attempt_local_auto_resync(
+                    pending,
+                    source,
+                    ngram_index,
+                    label_to_source_indexes,
+                    source_pos,
+                    args.sync_window,
+                )
+                if local_resync_idx is not None and local_resync_idx != source_pos:
+                    source_pos = local_resync_idx
+                    source_return_stack.clear()
+                    continue
+
                 issue = SyncIssue(
                     "mnemonic-mismatch",
                     (
@@ -532,16 +993,18 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source,
                     source_pos,
                     label_to_source_indexes,
+                    list(recent_trace),
                 )
                 if action == "quit":
                     stop_reason = issue.reason
                     break
                 if action == "skip":
-                    pending.popleft()
+                    recent_trace.append(pending.popleft())
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
+                    source_return_stack.clear()
                     continue
                 continue
 
@@ -555,8 +1018,17 @@ def run_alignment(args: argparse.Namespace) -> int:
 
             annotated_out.write(line_out + "\n")
 
+            recent_trace.append(trace_entry)
             pending.popleft()
-            source_pos += 1
+            observed_next_pc = pending[0].pc if pending else None
+            source_pos = advance_source_position(
+                trace_entry,
+                source_pos,
+                source,
+                label_to_source_indexes,
+                source_return_stack,
+                observed_next_pc,
+            )
             processed += 1
 
             if args.max_lines and processed >= args.max_lines:
@@ -598,12 +1070,18 @@ def run_self_check() -> None:
     assert parsed_trace.opcode == 0xA9
     assert parsed_trace.mnemonic == "LDA"
     assert parsed_trace.operand == "#$01"
+    assert parsed_trace.pre_pc == 0x2000
+    assert parsed_trace.post_pc == 0x2002
 
-    mli_trace = parse_log_line("@1 PC=$1000 OP=$20 MLI .byte $C8 .word $1234 (OPEN) ; PRE X POST X")
+    mli_trace = parse_log_line(
+        "@1 PC=$1000 OP=$20 MLI .byte $C8 .word $1234 (OPEN) ; PRE X POST X"
+    )
     assert mli_trace is not None
     assert mli_trace.mnemonic == "MLI"
 
-    no_operand_trace = parse_log_line("@7 PC=$2002 OP=$9A TXS ; PRE PC=$2002 POST PC=$2003")
+    no_operand_trace = parse_log_line(
+        "@7 PC=$2002 OP=$9A TXS ; PRE PC=$2002 POST PC=$2003"
+    )
     assert no_operand_trace is not None
     assert no_operand_trace.operand == ""
 
@@ -627,6 +1105,230 @@ Next RTS
         assert parsed_source[0].label == "Start"
         assert parsed_source[2].mnemonic == "BBR"
 
+        branch_label = branch_label_from_source(parsed_source[2])
+        assert branch_label == "Next"
+
+        call_source = [
+            SourceInstruction("main.s", 1, "Main", "JSR", "Worker"),
+            SourceInstruction("main.s", 2, "AfterCall", "LDA", "#$01"),
+            SourceInstruction("main.s", 3, None, "STA", "$2000"),
+            SourceInstruction("worker.s", 1, "Worker", "PHA", ""),
+            SourceInstruction("worker.s", 2, None, "RTS", ""),
+        ]
+        call_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(call_source):
+            if inst.label:
+                call_labels[inst.label.upper()].append(idx)
+
+        return_stack: list[tuple[int, int | None]] = []
+        jsr_trace = TraceEntry(
+            index=10,
+            pc=0x2000,
+            opcode=0x20,
+            mnemonic="JSR",
+            operand="$3000",
+            full_line="@10 PC=$2000 OP=$20 JSR $3000",
+            pre_pc=0x2000,
+            post_pc=0x3000,
+        )
+        next_pos = advance_source_position(
+            jsr_trace,
+            0,
+            call_source,
+            call_labels,
+            return_stack,
+        )
+        assert next_pos == 3
+        assert return_stack == [(1, 0x2003)]
+
+        # Do not push a return frame when JSR does not step into a selected target.
+        no_step_return_stack: list[tuple[int, int | None]] = []
+        jsr_no_step_trace = TraceEntry(
+            index=10,
+            pc=0x2000,
+            opcode=0x20,
+            mnemonic="JSR",
+            operand="$3000",
+            full_line="@10 PC=$2000 OP=$20 JSR $3000",
+            pre_pc=0x2000,
+            post_pc=0x2003,
+        )
+        no_step_pos = advance_source_position(
+            jsr_no_step_trace,
+            0,
+            call_source,
+            call_labels,
+            no_step_return_stack,
+        )
+        assert no_step_pos == 1
+        assert no_step_return_stack == []
+
+        return_stack = [(1, 0x2003), (2, 0x2FFF)]
+        rts_trace = TraceEntry(
+            index=11,
+            pc=0x3001,
+            opcode=0x60,
+            mnemonic="RTS",
+            operand="",
+            full_line="@11 PC=$3001 OP=$60 RTS",
+            pre_pc=0x3001,
+            post_pc=0x2003,
+        )
+        next_pos = advance_source_position(
+            rts_trace,
+            4,
+            call_source,
+            call_labels,
+            return_stack,
+        )
+        assert next_pos == 1
+        assert return_stack == []
+
+        # If post_pc is present and no frame matches it, do not blind-pop stack frames.
+        unmatched_stack: list[tuple[int, int | None]] = [(1, 0x2003), (2, 0x2FFF)]
+        rts_unmatched_trace = TraceEntry(
+            index=12,
+            pc=0x3001,
+            opcode=0x60,
+            mnemonic="RTS",
+            operand="",
+            full_line="@12 PC=$3001 OP=$60 RTS",
+            pre_pc=0x3001,
+            post_pc=0x2222,
+        )
+        unmatched_pos = advance_source_position(
+            rts_unmatched_trace,
+            4,
+            call_source,
+            call_labels,
+            unmatched_stack,
+        )
+        assert unmatched_pos == 5
+        assert unmatched_stack == [(1, 0x2003), (2, 0x2FFF)]
+
+        # Phase 3: branch fallback should use observed next PC when post_pc is missing.
+        loop_source = [
+            SourceInstruction("loop.s", 1, "Loop", "STA", "$0100,X"),
+            SourceInstruction("loop.s", 2, None, "DEX", ""),
+            SourceInstruction("loop.s", 3, None, "BNE", "Loop"),
+            SourceInstruction("loop.s", 4, None, "LDY", "#$19"),
+        ]
+        loop_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(loop_source):
+            if inst.label:
+                loop_labels[inst.label.upper()].append(idx)
+
+        branch_taken_missing_post = TraceEntry(
+            index=13,
+            pc=0x200B,
+            opcode=0xD0,
+            mnemonic="BNE",
+            operand="$2007",
+            full_line="@13 PC=$200B OP=$D0 BNE $2007",
+            pre_pc=0x200B,
+            post_pc=None,
+        )
+        taken_pos = advance_source_position(
+            branch_taken_missing_post,
+            2,
+            loop_source,
+            loop_labels,
+            [],
+            observed_next_pc=0x2007,
+        )
+        assert taken_pos == 0
+
+        branch_not_taken_missing_post = TraceEntry(
+            index=14,
+            pc=0x200B,
+            opcode=0xD0,
+            mnemonic="BNE",
+            operand="$2007",
+            full_line="@14 PC=$200B OP=$D0 BNE $2007",
+            pre_pc=0x200B,
+            post_pc=None,
+        )
+        not_taken_pos = advance_source_position(
+            branch_not_taken_missing_post,
+            2,
+            loop_source,
+            loop_labels,
+            [],
+            observed_next_pc=0x200D,
+        )
+        assert not_taken_pos == 3
+
+        # Phase 3: JSR fallback should use observed next PC when post_pc is missing.
+        jsr_missing_post_return = TraceEntry(
+            index=15,
+            pc=0x2000,
+            opcode=0x20,
+            mnemonic="JSR",
+            operand="$3000",
+            full_line="@15 PC=$2000 OP=$20 JSR $3000",
+            pre_pc=0x2000,
+            post_pc=None,
+        )
+        jsr_missing_post_stack: list[tuple[int, int | None]] = []
+        jsr_missing_post_pos = advance_source_position(
+            jsr_missing_post_return,
+            0,
+            call_source,
+            call_labels,
+            jsr_missing_post_stack,
+            observed_next_pc=0x2003,
+        )
+        assert jsr_missing_post_pos == 1
+        assert jsr_missing_post_stack == []
+
+        jsr_missing_post_step = TraceEntry(
+            index=16,
+            pc=0x2000,
+            opcode=0x20,
+            mnemonic="JSR",
+            operand="$3000",
+            full_line="@16 PC=$2000 OP=$20 JSR $3000",
+            pre_pc=0x2000,
+            post_pc=None,
+        )
+        jsr_missing_post_step_stack: list[tuple[int, int | None]] = []
+        jsr_missing_post_step_pos = advance_source_position(
+            jsr_missing_post_step,
+            0,
+            call_source,
+            call_labels,
+            jsr_missing_post_step_stack,
+            observed_next_pc=0x3000,
+        )
+        assert jsr_missing_post_step_pos == 3
+        assert jsr_missing_post_step_stack == [(1, 0x2003)]
+
+        # Phase 3: RTS fallback should match stack frame via observed next PC.
+        rts_missing_post_trace = TraceEntry(
+            index=17,
+            pc=0x3001,
+            opcode=0x60,
+            mnemonic="RTS",
+            operand="",
+            full_line="@17 PC=$3001 OP=$60 RTS",
+            pre_pc=0x3001,
+            post_pc=None,
+        )
+        rts_missing_post_stack: list[tuple[int, int | None]] = [
+            (1, 0x2003),
+            (2, 0x2FFF),
+        ]
+        rts_missing_post_pos = advance_source_position(
+            rts_missing_post_trace,
+            4,
+            call_source,
+            call_labels,
+            rts_missing_post_stack,
+            observed_next_pc=0x2003,
+        )
+        assert rts_missing_post_pos == 1
+        assert rts_missing_post_stack == []
+
         symbols_file = root / "cpu65c02.cpp"
         symbols_file.write_text(
             """static const MonitorSymbol kMonitorSymbols[] = {
@@ -646,6 +1348,221 @@ Next RTS
         key = tuple(inst.mnemonic for inst in parsed_source[:2])
         assert key in ng
 
+        # Phase 2: resolve ambiguous mnemonic windows with operand/address hints.
+        ambiguous_source = [
+            SourceInstruction("amb.s", 1, "PathA", "LDA", "#$11"),
+            SourceInstruction("amb.s", 2, None, "STA", "$0200"),
+            SourceInstruction("amb.s", 3, None, "BNE", "PathA"),
+            SourceInstruction("amb.s", 4, "PathB", "LDA", "#$22"),
+            SourceInstruction("amb.s", 5, None, "STA", "$0300"),
+            SourceInstruction("amb.s", 6, None, "BNE", "PathB"),
+        ]
+        ambiguous_ngram = build_ngram_index(ambiguous_source, window=3)
+        pending_ambiguous: Deque[TraceEntry] = deque(
+            [
+                TraceEntry(
+                    index=0,
+                    pc=0x2000,
+                    opcode=0xA9,
+                    mnemonic="LDA",
+                    operand="#$22",
+                    full_line="@0 PC=$2000 OP=$A9 LDA #$22",
+                    pre_pc=0x2000,
+                    post_pc=0x2002,
+                ),
+                TraceEntry(
+                    index=1,
+                    pc=0x2002,
+                    opcode=0x8D,
+                    mnemonic="STA",
+                    operand="$0300",
+                    full_line="@1 PC=$2002 OP=$8D STA $0300",
+                    pre_pc=0x2002,
+                    post_pc=0x2005,
+                ),
+                TraceEntry(
+                    index=2,
+                    pc=0x2005,
+                    opcode=0xD0,
+                    mnemonic="BNE",
+                    operand="$2000",
+                    full_line="@2 PC=$2005 OP=$D0 BNE $2000",
+                    pre_pc=0x2005,
+                    post_pc=0x2000,
+                ),
+            ]
+        )
+        ambiguous_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(ambiguous_source):
+            if inst.label:
+                ambiguous_labels[inst.label.upper()].append(idx)
+
+        sync_idx, sync_issue = acquire_sync_window(
+            pending_ambiguous,
+            ambiguous_source,
+            ambiguous_ngram,
+            ambiguous_labels,
+            window=3,
+        )
+        assert sync_issue is None
+        assert sync_idx == 3
+
+        # Phase 2: when already synced, try local auto-resync before prompting.
+        local_source = [
+            SourceInstruction("loop.s", 1, "Loop", "STA", "$0100,X"),
+            SourceInstruction("loop.s", 2, None, "DEX", ""),
+            SourceInstruction("loop.s", 3, None, "BNE", "Loop"),
+            SourceInstruction("loop.s", 4, None, "LDY", "#$19"),
+            SourceInstruction("loop.s", 5, None, "LDA", "#$00"),
+        ]
+        local_ngram = build_ngram_index(local_source, window=3)
+        pending_local: Deque[TraceEntry] = deque(
+            [
+                TraceEntry(
+                    index=8,
+                    pc=0x2007,
+                    opcode=0x9D,
+                    mnemonic="STA",
+                    operand="$0100,X",
+                    full_line="@8 PC=$2007 OP=$9D STA $0100,X",
+                    pre_pc=0x2007,
+                    post_pc=0x200A,
+                ),
+                TraceEntry(
+                    index=9,
+                    pc=0x200A,
+                    opcode=0xCA,
+                    mnemonic="DEX",
+                    operand="",
+                    full_line="@9 PC=$200A OP=$CA DEX",
+                    pre_pc=0x200A,
+                    post_pc=0x200B,
+                ),
+                TraceEntry(
+                    index=10,
+                    pc=0x200B,
+                    opcode=0xD0,
+                    mnemonic="BNE",
+                    operand="$2007",
+                    full_line="@10 PC=$200B OP=$D0 BNE $2007",
+                    pre_pc=0x200B,
+                    post_pc=0x2007,
+                ),
+            ]
+        )
+        local_resync_idx = attempt_local_auto_resync(
+            pending_local,
+            local_source,
+            local_ngram,
+            defaultdict(list),
+            current_source_index=3,
+            window=3,
+            search_radius=4,
+        )
+        assert local_resync_idx == 0
+
+        # Phase 2: do not auto-accept unique low-confidence sync candidates.
+        weak_source = [
+            SourceInstruction("weak.s", 1, "Target", "LDA", "#$10"),
+            SourceInstruction("weak.s", 2, None, "STA", "$1234"),
+            SourceInstruction("weak.s", 3, None, "BEQ", "Target"),
+            SourceInstruction("weak.s", 4, None, "RTS", ""),
+        ]
+        weak_ngram = build_ngram_index(weak_source, window=3)
+        weak_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(weak_source):
+            if inst.label:
+                weak_labels[inst.label.upper()].append(idx)
+
+        pending_weak_sync: Deque[TraceEntry] = deque(
+            [
+                TraceEntry(
+                    index=20,
+                    pc=0x2100,
+                    opcode=0xA5,
+                    mnemonic="LDA",
+                    operand="$44",
+                    full_line="@20 PC=$2100 OP=$A5 LDA $44",
+                    pre_pc=0x2100,
+                    post_pc=0x2102,
+                ),
+                TraceEntry(
+                    index=21,
+                    pc=0x2102,
+                    opcode=0x9D,
+                    mnemonic="STA",
+                    operand="$5678,X",
+                    full_line="@21 PC=$2102 OP=$9D STA $5678,X",
+                    pre_pc=0x2102,
+                    post_pc=0x2105,
+                ),
+                TraceEntry(
+                    index=22,
+                    pc=0x2105,
+                    opcode=0xF0,
+                    mnemonic="BEQ",
+                    operand="$9ABC",
+                    full_line="@22 PC=$2105 OP=$F0 BEQ $9ABC",
+                    pre_pc=0x2105,
+                    post_pc=0x2107,
+                ),
+            ]
+        )
+        weak_sync_idx, weak_sync_issue = acquire_sync_window(
+            pending_weak_sync,
+            weak_source,
+            weak_ngram,
+            weak_labels,
+            window=3,
+        )
+        assert weak_sync_idx is None
+        assert weak_sync_issue is not None
+
+        pending_weak_local: Deque[TraceEntry] = deque(
+            [
+                TraceEntry(
+                    index=30,
+                    pc=0x2200,
+                    opcode=0xA5,
+                    mnemonic="LDA",
+                    operand="$55",
+                    full_line="@30 PC=$2200 OP=$A5 LDA $55",
+                    pre_pc=0x2200,
+                    post_pc=0x2202,
+                ),
+                TraceEntry(
+                    index=31,
+                    pc=0x2202,
+                    opcode=0x9D,
+                    mnemonic="STA",
+                    operand="$6789,X",
+                    full_line="@31 PC=$2202 OP=$9D STA $6789,X",
+                    pre_pc=0x2202,
+                    post_pc=0x2205,
+                ),
+                TraceEntry(
+                    index=32,
+                    pc=0x2205,
+                    opcode=0xF0,
+                    mnemonic="BEQ",
+                    operand="$8000",
+                    full_line="@32 PC=$2205 OP=$F0 BEQ $8000",
+                    pre_pc=0x2205,
+                    post_pc=0x2207,
+                ),
+            ]
+        )
+        weak_local_idx = attempt_local_auto_resync(
+            pending_weak_local,
+            weak_source,
+            weak_ngram,
+            weak_labels,
+            current_source_index=2,
+            window=3,
+            search_radius=8,
+        )
+        assert weak_local_idx is None
+
     print("self-check passed")
 
 
@@ -662,7 +1579,9 @@ def print_dry_run_summary(args: argparse.Namespace) -> None:
     print(f"    instruction lines: {len(source_instructions)}")
     print(f"  symbols file: {args.symbols_file}")
     print(f"    symbol addresses: {len(symbols)}")
-    print(f"    total symbol names (incl aliases): {sum(len(v) for v in symbols.values())}")
+    print(
+        f"    total symbol names (incl aliases): {sum(len(v) for v in symbols.values())}"
+    )
 
     print("\nTrace sample")
     for entry in _preview(trace_samples, limit=3):
