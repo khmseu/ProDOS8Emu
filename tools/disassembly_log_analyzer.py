@@ -745,21 +745,15 @@ def prompt_for_help(
 
     print("\nPending trace entries:")
     if recent_trace:
-        for entry in recent_trace[-3:]:
+        for entry in recent_trace[-6:]:
             print(format_trace_prompt_entry(">>", entry))
     for idx, entry in enumerate(pending_trace[:5]):
         marker = "=>" if idx == 0 else "  "
         print(format_trace_prompt_entry(marker, entry))
 
     if current_source_index is not None:
-        lo_anchor = current_source_index
-        hi_anchor = current_source_index
-        if last_matched_source_index is not None:
-            lo_anchor = min(lo_anchor, last_matched_source_index)
-            hi_anchor = max(hi_anchor, last_matched_source_index)
-
-        lo = max(0, lo_anchor - 2)
-        hi = min(len(source), hi_anchor + 3)
+        lo = max(0, current_source_index - 6)
+        hi = min(len(source), current_source_index + 4)
         print("\nSource context:")
         for idx in range(lo, hi):
             inst = source[idx]
@@ -1058,7 +1052,7 @@ def run_alignment(args: argparse.Namespace) -> int:
     processed = 0
     source_pos: int | None = None
     pending: Deque[TraceEntry] = deque()
-    recent_trace: Deque[TraceEntry] = deque(maxlen=3)
+    recent_trace: Deque[TraceEntry] = deque(maxlen=6)
     last_matched_source_index: int | None = None
     source_return_stack: list[tuple[int, int | None]] = []
     synced = False
@@ -1337,17 +1331,25 @@ def run_self_check() -> None:
 
     help_issue = SyncIssue("mnemonic-mismatch", "Need operator review")
     help_recent_trace = [
-        TraceEntry(100, 0x2000, 0xA9, "LDA", "#$00", "", None, None),
-        TraceEntry(101, 0x2002, 0x8D, "STA", "$3000", "", None, None),
-        TraceEntry(102, 0x2005, 0xEA, "NOP", "", "", None, None),
+        TraceEntry(100, 0x1FF6, 0xA9, "LDA", "#$00", "", None, None),
+        TraceEntry(101, 0x1FF8, 0x8D, "STA", "$3000", "", None, None),
+        TraceEntry(102, 0x1FFB, 0xEA, "NOP", "", "", None, None),
+        TraceEntry(103, 0x1FFC, 0xA2, "LDX", "#$04", "", None, None),
+        TraceEntry(104, 0x1FFE, 0x86, "STX", "$20", "", None, None),
+        TraceEntry(105, 0x2000, 0xA0, "LDY", "#$01", "", None, None),
     ]
     help_pending_trace = [
-        TraceEntry(103, 0x2006, 0xC9, "CMP", "#$10", "", None, None),
-        TraceEntry(104, 0x2008, 0xD0, "BNE", "Next", "", None, None),
+        TraceEntry(106, 0x2006, 0xC9, "CMP", "#$10", "", None, None),
+        TraceEntry(107, 0x2008, 0xD0, "BNE", "Next", "", None, None),
     ]
     help_source = [
-        SourceInstruction("Monitor.S", 910, "LastGood", "LDA", "#$00"),
-        SourceInstruction("Monitor.S", 911, None, "STA", "$3000"),
+        SourceInstruction("Monitor.S", 905, "Older0", "CLC", ""),
+        SourceInstruction("Monitor.S", 906, None, "LDA", "#$00"),
+        SourceInstruction("Monitor.S", 907, None, "STA", "$3000"),
+        SourceInstruction("Monitor.S", 908, None, "LDX", "#$04"),
+        SourceInstruction("Monitor.S", 909, None, "STX", "$20"),
+        SourceInstruction("Monitor.S", 910, None, "LDY", "#$01"),
+        SourceInstruction("Monitor.S", 911, "LastGood", "CMP", "#$08"),
         SourceInstruction("Monitor.S", 912, None, "CMP", "#$10"),
         SourceInstruction("Monitor.S", 913, "Next", "STY", "$20"),
     ]
@@ -1362,10 +1364,10 @@ def run_self_check() -> None:
             help_issue,
             help_pending_trace,
             help_source,
-            3,
+            8,
             help_labels,
             help_recent_trace,
-            1,
+            6,
         )
     assert action == "quit"
     assert value is None
@@ -1376,20 +1378,29 @@ def run_self_check() -> None:
     pending_pos = prompt_text.index("Pending trace entries:")
     assert legend_pos < pending_pos
     assert prompt_text.count(">> previous trace entry / last matched source instruction") == 1
-    assert prompt_text.count(">> @100 PC=$2000 OP=$A9 LDA #$00") == 1
-    assert prompt_text.count(">> @101 PC=$2002 OP=$8D STA $3000") == 1
-    assert prompt_text.count(">> @102 PC=$2005 OP=$EA NOP") == 1
-    assert prompt_text.count("=> @103 PC=$2006 OP=$C9 CMP #$10") == 1
+    assert prompt_text.count(">> @100 PC=$1FF6 OP=$A9 LDA #$00") == 1
+    assert prompt_text.count(">> @101 PC=$1FF8 OP=$8D STA $3000") == 1
+    assert prompt_text.count(">> @102 PC=$1FFB OP=$EA NOP") == 1
+    assert prompt_text.count(">> @103 PC=$1FFC OP=$A2 LDX #$04") == 1
+    assert prompt_text.count(">> @104 PC=$1FFE OP=$86 STX $20") == 1
+    assert prompt_text.count(">> @105 PC=$2000 OP=$A0 LDY #$01") == 1
+    assert prompt_text.count("=> @106 PC=$2006 OP=$C9 CMP #$10") == 1
+    assert "[0] Monitor.S:905 Older0 CLC" not in prompt_text
+    assert "[1] Monitor.S:906 LDA #$00" not in prompt_text
+    assert "[2] Monitor.S:907 STA $3000" in prompt_text
+    assert "[5] Monitor.S:910 LDY #$01" in prompt_text
+    assert ">> [6] Monitor.S:911 LastGood CMP #$08" in prompt_text
+    assert "=> [8] Monitor.S:913 Next STY $20" in prompt_text
     assert "(prev)" not in prompt_text
     assert "=> current source candidate" not in prompt_text
     assert ">> last matched source instruction" not in prompt_text
 
-    retained_recent_trace: Deque[TraceEntry] = deque(maxlen=3)
-    for index in range(4):
+    retained_recent_trace: Deque[TraceEntry] = deque(maxlen=6)
+    for index in range(7):
         retained_recent_trace.append(
             TraceEntry(index, 0x2000 + index, 0xEA, "NOP", "", "", None, None)
         )
-    assert [entry.index for entry in retained_recent_trace] == [1, 2, 3]
+    assert [entry.index for entry in retained_recent_trace] == [1, 2, 3, 4, 5, 6]
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
