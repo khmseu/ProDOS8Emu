@@ -43,7 +43,7 @@ static void disassembly_emits_mnemonic_and_operand_text_with_stable_order(int& f
   const uint32_t c3 = cpu.step();
 
   const std::string expected =
-      "@1 PC=$2000 OP=$A9 LDA #$01 ; PRE PC=$2000 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
+      "@1 PC=$2000 (L2000) OP=$A9 LDA #$01 ; PRE PC=$2000 A=$00 X=$00 Y=$00 SP=$FF P=$24 POST "
       "PC=$2002 A=$01 X=$00 Y=$00 SP=$FF P=$24\n"
       "@2 PC=$2002 OP=$AA TAX ; PRE PC=$2002 A=$01 X=$00 Y=$00 SP=$FF P=$24 POST "
       "PC=$2003 A=$01 X=$01 Y=$00 SP=$FF P=$24\n"
@@ -280,6 +280,44 @@ static void disassembly_register_comment_shows_p_and_sp_transitions(int& failure
   }
 }
 
+static void disassembly_emits_known_pc_symbol_in_trace_header(int& failures) {
+  std::cout << "Test 7: disassembly_emits_known_pc_symbol_in_trace_header\n";
+
+  auto mem = std::make_unique<prodos8emu::Apple2Memory>();
+  mem->setLCReadEnabled(true);
+  mem->setLCWriteEnabled(true);
+
+  const uint16_t start = 0xFC22;
+  writeProgram(*mem, start,
+               {
+                   0xA5,
+                   0x25,
+               });
+  prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
+
+  prodos8emu::CPU65C02 cpu(*mem);
+  std::stringstream    disassemblyLog;
+  cpu.setDisassemblyTraceLog(&disassemblyLog);
+  cpu.reset();
+
+  cpu.step();
+
+  const std::string expected =
+      "@1 PC=$FC22 (LFC22) OP=$A5 LDA $25 ; PRE PC=$FC22 A=$00 X=$00 Y=$00 SP=$FF P=$24 "
+      "POST PC=$FC24 A=$00 X=$00 Y=$00 SP=$FF P=$26\n";
+  const std::string actual = disassemblyLog.str();
+
+  if (actual != expected) {
+    std::cerr << "FAIL: Known PC symbol should be appended in trace header\n"
+              << "Expected:\n"
+              << expected << "Actual:\n"
+              << actual << "\n";
+    failures++;
+  } else {
+    std::cout << "PASS: disassembly_emits_known_pc_symbol_in_trace_header\n";
+  }
+}
+
 int main() {
   int failures = 0;
 
@@ -289,6 +327,7 @@ int main() {
   disassembly_formats_mli_pseudo_instruction_for_jsr_bf00(failures);
   disassembly_only_emits_while_sink_is_non_null(failures);
   disassembly_register_comment_shows_p_and_sp_transitions(failures);
+  disassembly_emits_known_pc_symbol_in_trace_header(failures);
 
   if (failures > 0) {
     std::cerr << "\nFAILED with " << failures << " failure(s).\n";

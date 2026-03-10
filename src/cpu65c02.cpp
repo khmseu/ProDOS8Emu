@@ -382,7 +382,6 @@ namespace prodos8emu {
     };
 
     static const MonitorSymbol kMonitorSymbols[] = {
-        // Zero-page write-monitor symbols.
         {0x0060, "BCDNbr"},
         {0x0063, "StrtSymT"},
         {0x0065, "EndSymT"},
@@ -499,8 +498,21 @@ namespace prodos8emu {
         {0x00ED, "DecimalS"},
         {0x00EF, "ZPRetAdr"},
         {0x00F1, "MacPNLen"},
-
-        // PC marker symbols.
+        {0x2000, "L2000", MonitorSymbolPc},
+        {0x2007, "L2007", MonitorSymbolPc},
+        {0x2011, "L2011", MonitorSymbolPc},
+        {0x201D, "L201D", MonitorSymbolPc},
+        {0x201F, "L201F", MonitorSymbolPc},
+        {0x2022, "L2022", MonitorSymbolPc},
+        {0x202D, "L202D", MonitorSymbolPc},
+        {0x2044, "L2044", MonitorSymbolPc},
+        {0x204A, "L204A", MonitorSymbolPc},
+        {0x20B6, "L20B6", MonitorSymbolPc},
+        {0x20E1, "L20E1", MonitorSymbolPc},
+        {0x20E5, "L20E5", MonitorSymbolPc},
+        {0x20FC, "L20FC", MonitorSymbolPc},
+        {0x2342, "L2342", MonitorSymbolPc},
+        {0x235A, "L235A", MonitorSymbolPc},
         {0x7800, "Assembler ColdStrt", MonitorSymbolPc},
         {0x7816, "ENTER ExecAsm", MonitorSymbolPc},
         {0x78AE, "SetupVec", MonitorSymbolPc},
@@ -524,17 +536,69 @@ namespace prodos8emu {
         {0x9918, "Open4RW", MonitorSymbolPc},
         {0x99DF, "L99DF (flush obj code)", MonitorSymbolPc},
         {0xA70B, "XA70B (get user cmd)", MonitorSymbolPc},
+        {0xA76B, "LA76B", MonitorSymbolPc},
+        {0xA785, "LA785", MonitorSymbolPc},
+        {0xA787, "LA787", MonitorSymbolPc},
+        {0xA7AB, "LA7AB", MonitorSymbolPc},
+        {0xA7E0, "LA7E0", MonitorSymbolPc},
+        {0xB100, "EIStart", MonitorSymbolPc},
+        {0xB102, "LB102", MonitorSymbolPc},
+        {0xB113, "LB113", MonitorSymbolPc},
+        {0xB34F, "LB34F", MonitorSymbolPc},
+        {0xB355, "LB355", MonitorSymbolPc},
+        {0xB35F, "LB35F", MonitorSymbolPc},
+        {0xB365, "LB404", MonitorSymbolPc},
+        {0xB3AC, "LB3AC", MonitorSymbolPc},
+        {0xB3E8, "LB3E8", MonitorSymbolPc},
+        {0xB3F6, "LB3F6", MonitorSymbolPc},
         {0xB6E6, "DoAsmbly (prep for ASM)", MonitorSymbolPc},
+        {0xB774, "LoadDEd", MonitorSymbolPc},
+        {0xB83D, "LB83D", MonitorSymbolPc},
+        {0xB85D, "LB85D", MonitorSymbolPc},
+        {0xB8A7, "LB8A7", MonitorSymbolPc},
+        {0xB8B0, "LB8B0", MonitorSymbolPc},
+        {0xB8B1, "LB8B1", MonitorSymbolPc},
+        {0xB8B4, "LB8B4", MonitorSymbolPc},
+        {0xB8C7, "LB8C7", MonitorSymbolPc},
+        {0xB8DF, "LB8DF", MonitorSymbolPc},
+        {0xB8FA, "LB8FA", MonitorSymbolPc},
+        {0xB97B, "LB97B", MonitorSymbolPc},
+        {0xB990, "LB990", MonitorSymbolPc},
         {0xBE40, "DevCtlS", MonitorSymbolWrite},
         {0xBE41, "DevCtlS+1", MonitorSymbolWrite},
         {0xBE42, "DevCtlS+2", MonitorSymbolWrite},
         {0xD000, "ENTER DoPass3", MonitorSymbolPc},
+        {0xDD4A, "LDD4A", MonitorSymbolPc},
+        {0xDD53, "LDD53", MonitorSymbolPc},
         {0xDD5E, "LDD5E PR#", MonitorSymbolPc},
         {0xDD6E, "LDD6E", MonitorSymbolPc},
         {0xDD74, "LDD74", MonitorSymbolPc},
         {0xDD7F, "LDD7F", MonitorSymbolPc},
         {0xDD8C, "LDD8C", MonitorSymbolPc},
         {0xDD99, "LDD99", MonitorSymbolPc},
+        {0xFB2F, "INIT", MonitorSymbolPc},
+        {0xFB4B, "LFB4B", MonitorSymbolPc},
+        {0xFBC1, "LFBC1", MonitorSymbolPc},
+        {0xFBD0, "LFBD0", MonitorSymbolPc},
+        {0xFC22, "LFC22", MonitorSymbolPc},
+        {0xFC24, "LFC24", MonitorSymbolPc},
+        {0xFC2B, "LFC2B", MonitorSymbolPc},
+        {0xFC46, "LFC46", MonitorSymbolPc},
+        {0xFC58, "HOME", MonitorSymbolPc},
+        {0xFC9E, "LFC9E", MonitorSymbolPc},
+        {0xFCA0, "LFCA0", MonitorSymbolPc},
+        {0xFCB4, "LFCB4", MonitorSymbolPc},
+        {0xFCBA, "LFCBA", MonitorSymbolPc},
+        {0xFCC8, "LFCC8", MonitorSymbolPc},
+        {0xFDED, "COUT", MonitorSymbolPc},
+        {0xFE2C, "MOVE", MonitorSymbolPc},
+        {0xFE84, "SETNORM", MonitorSymbolPc},
+        {0xFE86, "LFE86", MonitorSymbolPc},
+        {0xFE89, "SETKBD", MonitorSymbolPc},
+        {0xFE93, "SETVID", MonitorSymbolPc},
+        {0xFE9B, "LFE9B", MonitorSymbolPc},
+        {0xFEA7, "LFEA7", MonitorSymbolPc},
+        {0xFEA9, "LFEA9", MonitorSymbolPc},
     };
 
     const MonitorSymbol* find_monitor_symbol(uint16_t addr, uint8_t requiredFlag) {
@@ -3494,12 +3558,21 @@ namespace prodos8emu {
     write_hex(os, regs.p, 2);
   }
 
+  static void append_pc_symbol_suffix_for_address(std::ostream& os, uint16_t addr) {
+    const MonitorSymbol* symbol = find_monitor_symbol(addr, MonitorSymbolPc);
+    if (symbol == nullptr) {
+      return;
+    }
+    os << " (" << symbol->name << ")";
+  }
+
   static void emit_disassembly_trace_line(std::ostream& os, uint64_t instructionCount, uint16_t pc,
                                           uint8_t opcode, const std::string& disassemblyText,
                                           const CPU65C02Regs& preRegs,
                                           const CPU65C02Regs& postRegs) {
     os << "@" << instructionCount << " PC=$";
     write_hex(os, pc, 4);
+    append_pc_symbol_suffix_for_address(os, pc);
     os << " OP=$";
     write_hex(os, opcode, 2);
     os << " ";

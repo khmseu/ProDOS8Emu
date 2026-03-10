@@ -34,6 +34,7 @@ class TraceEntry:
     full_line: str
     pre_pc: int | None
     post_pc: int | None
+    pc_symbol: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class SourceInstruction:
     label: str | None
     mnemonic: str
     operand: str
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ class SyncIssue:
 
 TRACE_LINE_RE = re.compile(
     r"^@(?P<index>\d+)\s+PC=\$(?P<pc>[0-9A-Fa-f]{4})\s+"
+    r"(?:\((?P<pcsym>[^\)]+)\)\s+)?"
     r"OP=\$(?P<op>[0-9A-Fa-f]{2})\s+(?P<mnemonic>[A-Za-z0-9]{3,4})\b(?P<tail>.*)$"
 )
 
@@ -64,6 +67,11 @@ OPERAND_ADDR16_RE = re.compile(r"\$([0-9A-Fa-f]{4})")
 
 MONITOR_SYMBOL_RE = re.compile(
     r"\{\s*0x(?P<addr>[0-9A-Fa-f]+)\s*,\s*\"(?P<name>[^\"]+)\""
+)
+
+EQU_STAR_RE = re.compile(
+    r"^(?P<label>[^\s:;]+)\s+EQU\s+\*$",
+    re.IGNORECASE,
 )
 
 # Core 6502/65C02 mnemonics used to identify instruction lines in source.
@@ -170,6 +178,14 @@ def normalize_mnemonic(token: str) -> str:
     return text
 
 
+def normalize_label_token(token: str) -> str:
+    normalized = token.strip().rstrip(":").upper()
+    m = re.fullmatch(r"X([0-9A-F]{4})", normalized)
+    if m is not None:
+        return f"L{m.group(1)}"
+    return normalized
+
+
 def parse_log_line(line: str) -> TraceEntry | None:
     stripped = line.rstrip("\n")
     match = TRACE_LINE_RE.match(stripped)
@@ -181,6 +197,8 @@ def parse_log_line(line: str) -> TraceEntry | None:
 
     pre_pc: int | None = None
     post_pc: int | None = None
+    pc_symbol_raw = match.group("pcsym")
+    pc_symbol = pc_symbol_raw.strip() if pc_symbol_raw else None
     pre_post = TRACE_PRE_POST_PC_RE.search(stripped)
     if pre_post is not None:
         pre_pc = int(pre_post.group("pre"), 16)
@@ -195,6 +213,7 @@ def parse_log_line(line: str) -> TraceEntry | None:
         full_line=stripped,
         pre_pc=pre_pc,
         post_pc=post_pc,
+        pc_symbol=pc_symbol,
     )
 
 
@@ -260,10 +279,27 @@ def parse_source_tree(source_root: Path) -> list[SourceInstruction]:
     )
 
     for source_file in files:
+        pending_equ_star_aliases: list[str] = []
         with source_file.open("r", encoding="utf-8", errors="replace") as handle:
             for line_number, line in enumerate(handle, start=1):
+                code_only = line.split(";", 1)[0].strip()
+                equ_star = EQU_STAR_RE.match(code_only)
+                if equ_star is not None:
+                    pending_equ_star_aliases.append(equ_star.group("label").rstrip(":"))
+                    continue
+
                 parsed = parse_source_instruction_line(source_file, line_number, line)
                 if parsed is not None:
+                    if pending_equ_star_aliases:
+                        parsed = SourceInstruction(
+                            file_path=parsed.file_path,
+                            line_number=parsed.line_number,
+                            label=parsed.label,
+                            mnemonic=parsed.mnemonic,
+                            operand=parsed.operand,
+                            aliases=tuple(pending_equ_star_aliases),
+                        )
+                        pending_equ_star_aliases.clear()
                     instructions.append(parsed)
 
     return instructions
@@ -314,6 +350,30 @@ def parse_trace_log(
                 samples.append(parsed)
 
     return valid_count, invalid_count, samples
+
+
+def with_fallback_pc_symbol(
+    entry: TraceEntry,
+    symbols: dict[int, list[str]],
+) -> TraceEntry:
+    if entry.pc_symbol is not None:
+        return entry
+
+    names = symbols.get(entry.pc, [])
+    if not names:
+        return entry
+
+    return TraceEntry(
+        index=entry.index,
+        pc=entry.pc,
+        opcode=entry.opcode,
+        mnemonic=entry.mnemonic,
+        operand=entry.operand,
+        full_line=entry.full_line,
+        pre_pc=entry.pre_pc,
+        post_pc=entry.post_pc,
+        pc_symbol=names[0],
+    )
 
 
 def _preview(entries: Iterable[T], limit: int = 3) -> list[T]:
@@ -385,6 +445,20 @@ def call_label_from_source(inst: SourceInstruction) -> str | None:
     return token.rstrip(":")
 
 
+def jump_label_from_source(inst: SourceInstruction) -> str | None:
+    if inst.mnemonic != "JMP":
+        return None
+
+    token = inst.operand.split(",", 1)[0].strip().split(" ", 1)[0]
+    if not token:
+        return None
+    if token.startswith("("):
+        return None
+    if token.startswith("$") or token.startswith("#") or token[0].isdigit():
+        return None
+    return token.rstrip(":")
+
+
 def normalize_operand_text(operand: str) -> str:
     return re.sub(r"\s+", "", operand.upper())
 
@@ -426,10 +500,12 @@ def operand_addresses_16(operand: str) -> set[int]:
     return {int(token, 16) for token in OPERAND_ADDR16_RE.findall(operand)}
 
 
-def is_confident_sync_metric(metric: tuple[int, int, int, int], window: int) -> bool:
-    score, exact_operands, addr_overlap_hits, branch_compat_hits = metric
+def is_confident_sync_metric(metric: tuple[int, int, int, int, int], window: int) -> bool:
+    score, exact_operands, addr_overlap_hits, branch_compat_hits, pc_label_hits = metric
     min_score = max(MIN_CONFIDENCE_SCORE_BASE, window * MIN_CONFIDENCE_SCORE_PER_ENTRY)
-    strong_signal_hits = exact_operands + addr_overlap_hits + branch_compat_hits
+    strong_signal_hits = (
+        exact_operands + addr_overlap_hits + branch_compat_hits + pc_label_hits
+    )
     return score >= min_score and strong_signal_hits > 0
 
 
@@ -439,11 +515,22 @@ def score_trace_source_pair(
     source_index: int,
     source: list[SourceInstruction],
     label_to_source_indexes: dict[str, list[int]],
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     score = 0
     exact_operands = 0
     addr_overlap_hits = 0
     branch_compat_hits = 0
+    pc_label_hits = 0
+
+    if trace_entry.pc_symbol is not None:
+        trace_pc_symbol = normalize_label_token(trace_entry.pc_symbol)
+        source_names: list[str] = []
+        if source_inst.label is not None:
+            source_names.append(source_inst.label)
+        source_names.extend(source_inst.aliases)
+        if any(normalize_label_token(name) == trace_pc_symbol for name in source_names):
+            score += 10
+            pc_label_hits += 1
 
     trace_operand = normalize_operand_text(trace_entry.operand)
     source_operand = normalize_operand_text(source_inst.operand)
@@ -491,7 +578,7 @@ def score_trace_source_pair(
                     score += 1
                     branch_compat_hits += 1
 
-    return score, exact_operands, addr_overlap_hits, branch_compat_hits
+    return score, exact_operands, addr_overlap_hits, branch_compat_hits, pc_label_hits
 
 
 def score_sync_candidate(
@@ -499,21 +586,22 @@ def score_sync_candidate(
     source_start: int,
     source: list[SourceInstruction],
     label_to_source_indexes: dict[str, list[int]],
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     total_score = 0
     exact_operands = 0
     addr_overlap_hits = 0
     branch_compat_hits = 0
+    pc_label_hits = 0
 
     if source_start < 0 or source_start + len(pending_window) > len(source):
-        return (-10_000, 0, 0, 0)
+        return (-10_000, 0, 0, 0, 0)
 
     for offset, trace_entry in enumerate(pending_window):
         source_inst = source[source_start + offset]
         if not mnemonics_match(trace_entry.mnemonic, source_inst.mnemonic):
-            return (-10_000, 0, 0, 0)
+            return (-10_000, 0, 0, 0, 0)
 
-        pair_score, pair_exact, pair_overlap, pair_branch = score_trace_source_pair(
+        pair_score, pair_exact, pair_overlap, pair_branch, pair_pc_label = score_trace_source_pair(
             trace_entry,
             source_inst,
             source_start + offset,
@@ -524,8 +612,15 @@ def score_sync_candidate(
         exact_operands += pair_exact
         addr_overlap_hits += pair_overlap
         branch_compat_hits += pair_branch
+        pc_label_hits += pair_pc_label
 
-    return (total_score, exact_operands, addr_overlap_hits, branch_compat_hits)
+    return (
+        total_score,
+        exact_operands,
+        addr_overlap_hits,
+        branch_compat_hits,
+        pc_label_hits,
+    )
 
 
 def choose_source_label_target(
@@ -534,7 +629,7 @@ def choose_source_label_target(
     source: list[SourceInstruction],
     label_to_source_indexes: dict[str, list[int]],
 ) -> int | None:
-    candidates = label_to_source_indexes.get(label.upper(), [])
+    candidates = label_to_source_indexes.get(normalize_label_token(label), [])
     if not candidates:
         return None
 
@@ -571,6 +666,18 @@ def advance_source_position(
                 )
                 if target_idx is not None:
                     next_source_pos = target_idx
+
+    if source_inst.mnemonic == "JMP":
+        jump_label = jump_label_from_source(source_inst)
+        if jump_label is not None:
+            target_idx = choose_source_label_target(
+                jump_label,
+                source_pos,
+                source,
+                label_to_source_indexes,
+            )
+            if target_idx is not None:
+                next_source_pos = target_idx
 
     if source_inst.mnemonic == "JSR":
         return_pc = (trace_entry.pc + 3) & 0xFFFF
@@ -616,6 +723,7 @@ def prompt_for_help(
     current_source_index: int | None,
     label_to_source_indexes: dict[str, list[int]],
     recent_trace: list[TraceEntry] | None = None,
+    last_matched_source_index: int | None = None,
 ) -> tuple[str, int | None]:
     print("\n=== Alignment Needs Help ===")
     print(f"Reason: {issue.reason}")
@@ -633,13 +741,29 @@ def prompt_for_help(
         )
 
     if current_source_index is not None:
-        lo = max(0, current_source_index - 2)
-        hi = min(len(source), current_source_index + 3)
+        lo_anchor = current_source_index
+        hi_anchor = current_source_index
+        if last_matched_source_index is not None:
+            lo_anchor = min(lo_anchor, last_matched_source_index)
+            hi_anchor = max(hi_anchor, last_matched_source_index)
+
+        lo = max(0, lo_anchor - 2)
+        hi = min(len(source), hi_anchor + 3)
         print("\nSource context:")
+        print("  => current source candidate")
+        if last_matched_source_index is not None:
+            print("  >> last matched source instruction")
         for idx in range(lo, hi):
             inst = source[idx]
             label = f"{inst.label} " if inst.label else ""
-            pointer = "->" if idx == current_source_index else "  "
+            pointer = "  "
+            if idx == current_source_index:
+                pointer = "=>"
+            if (
+                last_matched_source_index is not None
+                and idx == last_matched_source_index
+            ):
+                pointer = "*>" if idx == current_source_index else ">>"
             print(
                 f"{pointer} [{idx}] {inst.file_path}:{inst.line_number} "
                 f"{label}{inst.mnemonic} {inst.operand}".rstrip()
@@ -673,7 +797,7 @@ def prompt_for_help(
             continue
         if raw.startswith("l "):
             label = raw[2:].strip().rstrip(":")
-            matches = label_to_source_indexes.get(label.upper(), [])
+            matches = label_to_source_indexes.get(normalize_label_token(label), [])
             if not matches:
                 print("Label not found in parsed source instructions.")
                 continue
@@ -707,7 +831,7 @@ def acquire_sync_window(
         )
 
     pending_window = list(pending)[:window]
-    scored: list[tuple[tuple[int, int, int, int], int]] = []
+    scored: list[tuple[tuple[int, int, int, int, int], int]] = []
     for candidate in candidates:
         scored.append(
             (
@@ -730,7 +854,8 @@ def acquire_sync_window(
             (
                 f"Unique source window for key {' '.join(key)} was rejected "
                 f"(score {only_metric[0]}, exact {only_metric[1]}, "
-                f"overlap {only_metric[2]}, branch {only_metric[3]})."
+                f"overlap {only_metric[2]}, branch {only_metric[3]}, "
+                f"pcsym {only_metric[4]})."
             ),
         )
 
@@ -745,7 +870,8 @@ def acquire_sync_window(
             (
                 f"Best source window for key {' '.join(key)} was unique but weak "
                 f"(score {best_metric[0]}, exact {best_metric[1]}, "
-                f"overlap {best_metric[2]}, branch {best_metric[3]})."
+                f"overlap {best_metric[2]}, branch {best_metric[3]}, "
+                f"pcsym {best_metric[4]})."
             ),
         )
 
@@ -754,7 +880,8 @@ def acquire_sync_window(
         (
             f"{len(candidates)} source windows match key: {' '.join(key)} "
             f"(best score {best_metric[0]}, exact {best_metric[1]}, "
-            f"overlap {best_metric[2]}, branch {best_metric[3]})."
+            f"overlap {best_metric[2]}, branch {best_metric[3]}, "
+            f"pcsym {best_metric[4]})."
         ),
     )
 
@@ -783,7 +910,7 @@ def attempt_local_auto_resync(
     if not local_candidates:
         return None
 
-    ranked: list[tuple[tuple[int, int, int, int, int], int]] = []
+    ranked: list[tuple[tuple[int, int, int, int, int, int], int]] = []
     for idx in local_candidates:
         metric = score_sync_candidate(
             pending_window,
@@ -793,7 +920,7 @@ def attempt_local_auto_resync(
         )
         distance_bias = -abs(idx - current_source_index)
         ranked.append(
-            ((metric[0], metric[1], metric[2], metric[3], distance_bias), idx)
+            ((metric[0], metric[1], metric[2], metric[3], metric[4], distance_bias), idx)
         )
 
     best_metric = max(metric for metric, _ in ranked)
@@ -807,11 +934,69 @@ def attempt_local_auto_resync(
         best_scored_metric[1],
         best_scored_metric[2],
         best_scored_metric[3],
+        best_scored_metric[4],
     )
     if not is_confident_sync_metric(score_metric, window):
         return None
 
     return best_idx
+
+
+def attempt_pc_symbol_resync(
+    trace_entry: TraceEntry,
+    source: list[SourceInstruction],
+    label_to_source_indexes: dict[str, list[int]],
+    current_source_index: int,
+) -> int | None:
+    # Prefer exact runtime address labels (Lxxxx / Xxxxx canonicalized to Lxxxx)
+    # over semantic aliases (e.g. COUT), because aliases can map to non-relocated
+    # source locations while Lxxxx points to the trace address directly.
+    runtime_label = f"L{trace_entry.pc:04X}"
+    runtime_idx = choose_source_label_target(
+        runtime_label,
+        current_source_index,
+        source,
+        label_to_source_indexes,
+    )
+    if runtime_idx is not None:
+        return runtime_idx
+
+    if trace_entry.pc_symbol is None:
+        return None
+
+    return choose_source_label_target(
+        trace_entry.pc_symbol,
+        current_source_index,
+        source,
+        label_to_source_indexes,
+    )
+
+
+def attempt_indirect_jmp_next_trace_resync(
+    pending: Deque[TraceEntry],
+    source: list[SourceInstruction],
+    label_to_source_indexes: dict[str, list[int]],
+    current_source_index: int,
+) -> int | None:
+    if len(pending) < 2:
+        return None
+
+    current = pending[0]
+    if current.mnemonic != "JMP":
+        return None
+
+    operand = normalize_operand_text(current.operand)
+    if not operand.startswith("("):
+        return None
+
+    # For indirect JMP, follow observed flow using the next trace entry's target PC symbol.
+    next_entry = pending[1]
+    return attempt_pc_symbol_resync(
+        next_entry,
+        source,
+        label_to_source_indexes,
+        current_source_index,
+    )
 
 
 def write_discovered_labels(
@@ -850,7 +1035,9 @@ def run_alignment(args: argparse.Namespace) -> int:
     label_to_source_indexes: dict[str, list[int]] = defaultdict(list)
     for idx, inst in enumerate(source):
         if inst.label:
-            label_to_source_indexes[inst.label.upper()].append(idx)
+            label_to_source_indexes[normalize_label_token(inst.label)].append(idx)
+        for alias in inst.aliases:
+            label_to_source_indexes[normalize_label_token(alias)].append(idx)
 
     ngram_index = build_ngram_index(source, args.sync_window)
     if not ngram_index:
@@ -864,6 +1051,7 @@ def run_alignment(args: argparse.Namespace) -> int:
     source_pos: int | None = None
     pending: Deque[TraceEntry] = deque()
     recent_trace: Deque[TraceEntry] = deque(maxlen=2)
+    last_matched_source_index: int | None = None
     source_return_stack: list[tuple[int, int | None]] = []
     synced = False
     stop_reason = "eof"
@@ -877,7 +1065,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                     stop_reason = "max-lines"
                     break
                 try:
-                    pending.append(next(entry_iter))
+                    entry = next(entry_iter)
+                    pending.append(with_fallback_pc_symbol(entry, existing_symbols))
                 except StopIteration:
                     stop_reason = "eof"
                     break
@@ -906,6 +1095,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                         source_pos,
                         label_to_source_indexes,
                         list(recent_trace),
+                        last_matched_source_index,
                     )
                     if action == "quit":
                         stop_reason = issue.reason
@@ -943,6 +1133,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     len(source) - 1,
                     label_to_source_indexes,
                     list(recent_trace),
+                    last_matched_source_index,
                 )
                 if action == "quit":
                     stop_reason = issue.reason
@@ -961,6 +1152,33 @@ def run_alignment(args: argparse.Namespace) -> int:
             source_inst = source[source_pos]
 
             if not mnemonics_match(trace_entry.mnemonic, source_inst.mnemonic):
+                indirect_jmp_resync_idx = attempt_indirect_jmp_next_trace_resync(
+                    pending,
+                    source,
+                    label_to_source_indexes,
+                    source_pos,
+                )
+                if indirect_jmp_resync_idx is not None:
+                    recent_trace.append(pending.popleft())
+                    processed += 1
+                    source_pos = indirect_jmp_resync_idx
+                    source_return_stack.clear()
+                    continue
+
+                pc_symbol_resync_idx = attempt_pc_symbol_resync(
+                    trace_entry,
+                    source,
+                    label_to_source_indexes,
+                    source_pos,
+                )
+                if (
+                    pc_symbol_resync_idx is not None
+                    and pc_symbol_resync_idx != source_pos
+                ):
+                    source_pos = pc_symbol_resync_idx
+                    source_return_stack.clear()
+                    continue
+
                 local_resync_idx = attempt_local_auto_resync(
                     pending,
                     source,
@@ -994,6 +1212,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source_pos,
                     label_to_source_indexes,
                     list(recent_trace),
+                    last_matched_source_index,
                 )
                 if action == "quit":
                     stop_reason = issue.reason
@@ -1018,6 +1237,7 @@ def run_alignment(args: argparse.Namespace) -> int:
 
             annotated_out.write(line_out + "\n")
 
+            last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
             pending.popleft()
             observed_next_pc = pending[0].pc if pending else None
@@ -1085,6 +1305,28 @@ def run_self_check() -> None:
     assert no_operand_trace is not None
     assert no_operand_trace.operand == ""
 
+    pc_symbol_trace = parse_log_line(
+        "@8 PC=$FC22 (LFC22) OP=$A5 LDA $25 ; PRE PC=$FC22 POST PC=$FC24"
+    )
+    assert pc_symbol_trace is not None
+    assert pc_symbol_trace.pc == 0xFC22
+    assert pc_symbol_trace.mnemonic == "LDA"
+    assert pc_symbol_trace.pc_symbol == "LFC22"
+
+    fallback_entry = TraceEntry(
+        index=9,
+        pc=0xFC22,
+        opcode=0xA5,
+        mnemonic="LDA",
+        operand="$25",
+        full_line="@9 PC=$FC22 OP=$A5 LDA $25",
+        pre_pc=None,
+        post_pc=None,
+    )
+    fallback_symbols = {0xFC22: ["LFC22", "ALIAS"]}
+    enriched = with_fallback_pc_symbol(fallback_entry, fallback_symbols)
+    assert enriched.pc_symbol == "LFC22"
+
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         src_dir = root / "EDASM.SRC"
@@ -1107,6 +1349,17 @@ Next RTS
 
         branch_label = branch_label_from_source(parsed_source[2])
         assert branch_label == "Next"
+
+        equ_file = src_dir / "EQUSTAR.S"
+        equ_file.write_text(
+            """Alias EQU *
+Labeled LDA #$01
+""",
+            encoding="utf-8",
+        )
+        parsed_source = parse_source_tree(src_dir)
+        equ_inst = next(inst for inst in parsed_source if inst.label == "Labeled")
+        assert "Alias" in equ_inst.aliases
 
         call_source = [
             SourceInstruction("main.s", 1, "Main", "JSR", "Worker"),
@@ -1328,6 +1581,37 @@ Next RTS
         )
         assert rts_missing_post_pos == 1
         assert rts_missing_post_stack == []
+
+        # Follow unconditional JMP labels.
+        jmp_source = [
+            SourceInstruction("jmp.s", 1, "L1000", "JMP", "L2000"),
+            SourceInstruction("jmp.s", 2, None, "NOP", ""),
+            SourceInstruction("jmp.s", 3, "L2000", "LDA", "#$01"),
+        ]
+        jmp_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(jmp_source):
+            if inst.label:
+                jmp_labels[inst.label.upper()].append(idx)
+
+        jmp_trace = TraceEntry(
+            index=18,
+            pc=0x1000,
+            opcode=0x4C,
+            mnemonic="JMP",
+            operand="$2000",
+            full_line="@18 PC=$1000 OP=$4C JMP $2000",
+            pre_pc=0x1000,
+            post_pc=0x2000,
+        )
+        jmp_pos = advance_source_position(
+            jmp_trace,
+            0,
+            jmp_source,
+            jmp_labels,
+            [],
+            observed_next_pc=0x2000,
+        )
+        assert jmp_pos == 2
 
         symbols_file = root / "cpu65c02.cpp"
         symbols_file.write_text(
@@ -1562,6 +1846,118 @@ Next RTS
             search_radius=8,
         )
         assert weak_local_idx is None
+
+        pc_symbol_source = [
+            SourceInstruction("s.s", 1, "Near", "NOP", ""),
+            SourceInstruction("s.s", 2, "Far", "LDX", "#$03"),
+        ]
+        pc_symbol_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(pc_symbol_source):
+            if inst.label:
+                pc_symbol_labels[inst.label.upper()].append(idx)
+
+        pc_symbol_entry = TraceEntry(
+            index=40,
+            pc=0xB100,
+            opcode=0xA2,
+            mnemonic="LDX",
+            operand="#$03",
+            full_line="@40 PC=$B100 OP=$A2 LDX #$03",
+            pre_pc=None,
+            post_pc=None,
+            pc_symbol="Far",
+        )
+        pc_symbol_idx = attempt_pc_symbol_resync(
+            pc_symbol_entry,
+            pc_symbol_source,
+            pc_symbol_labels,
+            current_source_index=0,
+        )
+        assert pc_symbol_idx == 1
+
+        # Prefer exact PC address label over ambiguous semantic pc symbol alias.
+        pc_addr_source = [
+            SourceInstruction("addr.s", 1, "COUT", "NOP", ""),
+            SourceInstruction("addr.s", 2, "LB3D9", "CMP", "#$E0"),
+        ]
+        pc_addr_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(pc_addr_source):
+            if inst.label:
+                pc_addr_labels[normalize_label_token(inst.label)].append(idx)
+
+        pc_addr_entry = TraceEntry(
+            index=41,
+            pc=0xB3D9,
+            opcode=0xC9,
+            mnemonic="CMP",
+            operand="#$E0",
+            full_line="@41 PC=$B3D9 OP=$C9 CMP #$E0",
+            pre_pc=None,
+            post_pc=None,
+            pc_symbol="COUT",
+        )
+        pc_addr_idx = attempt_pc_symbol_resync(
+            pc_addr_entry,
+            pc_addr_source,
+            pc_addr_labels,
+            current_source_index=0,
+        )
+        assert pc_addr_idx == 1
+
+        indirect_jmp_source = [
+            SourceInstruction("ijmp.s", 1, "LB3D9", "CMP", "#$E0"),
+            SourceInstruction("ijmp.s", 2, None, "BCC", "LB3E8"),
+        ]
+        indirect_jmp_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(indirect_jmp_source):
+            if inst.label:
+                indirect_jmp_labels[normalize_label_token(inst.label)].append(idx)
+
+        pending_indirect_jmp: Deque[TraceEntry] = deque(
+            [
+                TraceEntry(
+                    index=50,
+                    pc=0xFDED,
+                    opcode=0x6C,
+                    mnemonic="JMP",
+                    operand="(0036)",
+                    full_line="@50 PC=$FDED OP=$6C JMP (0036)",
+                    pre_pc=None,
+                    post_pc=None,
+                ),
+                TraceEntry(
+                    index=51,
+                    pc=0xB3D9,
+                    opcode=0xC9,
+                    mnemonic="CMP",
+                    operand="#$E0",
+                    full_line="@51 PC=$B3D9 OP=$C9 CMP #$E0",
+                    pre_pc=None,
+                    post_pc=None,
+                    pc_symbol="LB3D9",
+                ),
+            ]
+        )
+        indirect_jmp_idx = attempt_indirect_jmp_next_trace_resync(
+            pending_indirect_jmp,
+            indirect_jmp_source,
+            indirect_jmp_labels,
+            current_source_index=0,
+        )
+        assert indirect_jmp_idx == 0
+
+        # Xhhhh and Lhhhh labels should resolve to the same source target.
+        xmap_source = [
+            SourceInstruction("xmap.s", 1, "LA75B", "LDA", "#$00"),
+            SourceInstruction("xmap.s", 2, "LB000", "RTS", ""),
+        ]
+        xmap_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(xmap_source):
+            if inst.label:
+                xmap_labels[normalize_label_token(inst.label)].append(idx)
+
+        assert choose_source_label_target("XA75B", 1, xmap_source, xmap_labels) == 0
+        assert choose_source_label_target("LA75B", 1, xmap_source, xmap_labels) == 0
 
     print("self-check passed")
 
