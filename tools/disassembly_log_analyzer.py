@@ -14,12 +14,15 @@ This tool:
 from __future__ import annotations
 
 import argparse
+import io
 import re
 import tempfile
+from contextlib import redirect_stdout
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Deque, Iterable, Iterator, TypeVar
+from unittest.mock import patch
 
 T = TypeVar("T")
 
@@ -725,20 +728,28 @@ def prompt_for_help(
     recent_trace: list[TraceEntry] | None = None,
     last_matched_source_index: int | None = None,
 ) -> tuple[str, int | None]:
+    def format_trace_prompt_entry(marker: str, entry: TraceEntry) -> str:
+        return (
+            f"{marker} @{entry.index} PC=${entry.pc:04X} OP=${entry.opcode:02X} "
+            f"{entry.mnemonic} {entry.operand}"
+        ).rstrip()
+
     print("\n=== Alignment Needs Help ===")
     print(f"Reason: {issue.reason}")
     print(issue.detail)
 
+    print("\nLegend:")
+    print("  => current trace/source candidate")
+    if recent_trace or last_matched_source_index is not None:
+        print("  >> previous trace entry / last matched source instruction")
+
     print("\nPending trace entries:")
     if recent_trace:
-        for entry in recent_trace[-2:]:
-            print(
-                f"  (prev) @{entry.index} PC=${entry.pc:04X} OP=${entry.opcode:02X} {entry.mnemonic} {entry.operand}".rstrip()
-            )
-    for entry in pending_trace[:5]:
-        print(
-            f"  @{entry.index} PC=${entry.pc:04X} OP=${entry.opcode:02X} {entry.mnemonic} {entry.operand}".rstrip()
-        )
+        for entry in recent_trace[-3:]:
+            print(format_trace_prompt_entry(">>", entry))
+    for idx, entry in enumerate(pending_trace[:5]):
+        marker = "=>" if idx == 0 else "  "
+        print(format_trace_prompt_entry(marker, entry))
 
     if current_source_index is not None:
         lo_anchor = current_source_index
@@ -750,9 +761,6 @@ def prompt_for_help(
         lo = max(0, lo_anchor - 2)
         hi = min(len(source), hi_anchor + 3)
         print("\nSource context:")
-        print("  => current source candidate")
-        if last_matched_source_index is not None:
-            print("  >> last matched source instruction")
         for idx in range(lo, hi):
             inst = source[idx]
             label = f"{inst.label} " if inst.label else ""
@@ -1050,7 +1058,7 @@ def run_alignment(args: argparse.Namespace) -> int:
     processed = 0
     source_pos: int | None = None
     pending: Deque[TraceEntry] = deque()
-    recent_trace: Deque[TraceEntry] = deque(maxlen=2)
+    recent_trace: Deque[TraceEntry] = deque(maxlen=3)
     last_matched_source_index: int | None = None
     source_return_stack: list[tuple[int, int | None]] = []
     synced = False
@@ -1326,6 +1334,62 @@ def run_self_check() -> None:
     fallback_symbols = {0xFC22: ["LFC22", "ALIAS"]}
     enriched = with_fallback_pc_symbol(fallback_entry, fallback_symbols)
     assert enriched.pc_symbol == "LFC22"
+
+    help_issue = SyncIssue("mnemonic-mismatch", "Need operator review")
+    help_recent_trace = [
+        TraceEntry(100, 0x2000, 0xA9, "LDA", "#$00", "", None, None),
+        TraceEntry(101, 0x2002, 0x8D, "STA", "$3000", "", None, None),
+        TraceEntry(102, 0x2005, 0xEA, "NOP", "", "", None, None),
+    ]
+    help_pending_trace = [
+        TraceEntry(103, 0x2006, 0xC9, "CMP", "#$10", "", None, None),
+        TraceEntry(104, 0x2008, 0xD0, "BNE", "Next", "", None, None),
+    ]
+    help_source = [
+        SourceInstruction("Monitor.S", 910, "LastGood", "LDA", "#$00"),
+        SourceInstruction("Monitor.S", 911, None, "STA", "$3000"),
+        SourceInstruction("Monitor.S", 912, None, "CMP", "#$10"),
+        SourceInstruction("Monitor.S", 913, "Next", "STY", "$20"),
+    ]
+    help_labels: dict[str, list[int]] = defaultdict(list)
+    for idx, inst in enumerate(help_source):
+        if inst.label:
+            help_labels[inst.label.upper()].append(idx)
+
+    prompt_output = io.StringIO()
+    with patch("builtins.input", side_effect=["q"]), redirect_stdout(prompt_output):
+        action, value = prompt_for_help(
+            help_issue,
+            help_pending_trace,
+            help_source,
+            3,
+            help_labels,
+            help_recent_trace,
+            1,
+        )
+    assert action == "quit"
+    assert value is None
+
+    prompt_text = prompt_output.getvalue()
+    assert prompt_text.count("\nLegend:\n") == 1
+    legend_pos = prompt_text.index("=> current trace/source candidate")
+    pending_pos = prompt_text.index("Pending trace entries:")
+    assert legend_pos < pending_pos
+    assert prompt_text.count(">> previous trace entry / last matched source instruction") == 1
+    assert prompt_text.count(">> @100 PC=$2000 OP=$A9 LDA #$00") == 1
+    assert prompt_text.count(">> @101 PC=$2002 OP=$8D STA $3000") == 1
+    assert prompt_text.count(">> @102 PC=$2005 OP=$EA NOP") == 1
+    assert prompt_text.count("=> @103 PC=$2006 OP=$C9 CMP #$10") == 1
+    assert "(prev)" not in prompt_text
+    assert "=> current source candidate" not in prompt_text
+    assert ">> last matched source instruction" not in prompt_text
+
+    retained_recent_trace: Deque[TraceEntry] = deque(maxlen=3)
+    for index in range(4):
+        retained_recent_trace.append(
+            TraceEntry(index, 0x2000 + index, 0xEA, "NOP", "", "", None, None)
+        )
+    assert [entry.index for entry in retained_recent_trace] == [1, 2, 3]
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
