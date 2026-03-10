@@ -17,14 +17,16 @@ import argparse
 import io
 import re
 import tempfile
-from contextlib import redirect_stdout
 from collections import defaultdict, deque
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Deque, Iterable, Iterator, TypeVar
+from typing import Deque, Iterable, Iterator, Sequence, TypeAlias, TypeVar
 from unittest.mock import patch
 
 T = TypeVar("T")
+ReturnFrame: TypeAlias = tuple[int, int | None]
+ReturnStackSnapshot: TypeAlias = tuple[ReturnFrame, ...]
 
 
 @dataclass(frozen=True)
@@ -503,7 +505,9 @@ def operand_addresses_16(operand: str) -> set[int]:
     return {int(token, 16) for token in OPERAND_ADDR16_RE.findall(operand)}
 
 
-def is_confident_sync_metric(metric: tuple[int, int, int, int, int], window: int) -> bool:
+def is_confident_sync_metric(
+    metric: tuple[int, int, int, int, int], window: int
+) -> bool:
     score, exact_operands, addr_overlap_hits, branch_compat_hits, pc_label_hits = metric
     min_score = max(MIN_CONFIDENCE_SCORE_BASE, window * MIN_CONFIDENCE_SCORE_PER_ENTRY)
     strong_signal_hits = (
@@ -604,12 +608,14 @@ def score_sync_candidate(
         if not mnemonics_match(trace_entry.mnemonic, source_inst.mnemonic):
             return (-10_000, 0, 0, 0, 0)
 
-        pair_score, pair_exact, pair_overlap, pair_branch, pair_pc_label = score_trace_source_pair(
-            trace_entry,
-            source_inst,
-            source_start + offset,
-            source,
-            label_to_source_indexes,
+        pair_score, pair_exact, pair_overlap, pair_branch, pair_pc_label = (
+            score_trace_source_pair(
+                trace_entry,
+                source_inst,
+                source_start + offset,
+                source,
+                label_to_source_indexes,
+            )
         )
         total_score += pair_score
         exact_operands += pair_exact
@@ -727,6 +733,7 @@ def prompt_for_help(
     label_to_source_indexes: dict[str, list[int]],
     recent_trace: list[TraceEntry] | None = None,
     last_matched_source_index: int | None = None,
+    recent_stack_snapshots: Sequence[ReturnStackSnapshot | None] | None = None,
 ) -> tuple[str, int | None]:
     def format_trace_prompt_entry(marker: str, entry: TraceEntry) -> str:
         return (
@@ -745,8 +752,30 @@ def prompt_for_help(
 
     print("\nPending trace entries:")
     if recent_trace:
-        for entry in recent_trace[-6:]:
+        displayed = recent_trace[-6:]
+        displayed_snapshots = recent_stack_snapshots[-6:] if recent_stack_snapshots else None
+        for entry in displayed:
             print(format_trace_prompt_entry(">>", entry))
+        rts_idx = None
+        for i in range(len(displayed) - 1, -1, -1):
+            if displayed[i].mnemonic == "RTS":
+                rts_idx = i
+                break
+        if rts_idx is not None:
+            snapshot = (
+                displayed_snapshots[rts_idx]
+                if displayed_snapshots is not None and rts_idx < len(displayed_snapshots)
+                else None
+            )
+            print("\nEmulated stack before last shown RTS (top first):")
+            if snapshot is None:
+                print("  (snapshot unavailable)")
+            elif len(snapshot) == 0:
+                print("  (empty)")
+            else:
+                for i, (src_idx, ret_pc) in enumerate(reversed(snapshot)):
+                    pc_str = f"${ret_pc:04X}" if ret_pc is not None else "(unknown)"
+                    print(f"  [{i}] source[{src_idx}], return_pc={pc_str}")
     for idx, entry in enumerate(pending_trace[:5]):
         marker = "=>" if idx == 0 else "  "
         print(format_trace_prompt_entry(marker, entry))
@@ -922,7 +951,10 @@ def attempt_local_auto_resync(
         )
         distance_bias = -abs(idx - current_source_index)
         ranked.append(
-            ((metric[0], metric[1], metric[2], metric[3], metric[4], distance_bias), idx)
+            (
+                (metric[0], metric[1], metric[2], metric[3], metric[4], distance_bias),
+                idx,
+            )
         )
 
     best_metric = max(metric for metric, _ in ranked)
@@ -1053,6 +1085,7 @@ def run_alignment(args: argparse.Namespace) -> int:
     source_pos: int | None = None
     pending: Deque[TraceEntry] = deque()
     recent_trace: Deque[TraceEntry] = deque(maxlen=6)
+    recent_stack_snapshots: Deque[ReturnStackSnapshot | None] = deque(maxlen=6)
     last_matched_source_index: int | None = None
     source_return_stack: list[tuple[int, int | None]] = []
     synced = False
@@ -1098,12 +1131,14 @@ def run_alignment(args: argparse.Namespace) -> int:
                         label_to_source_indexes,
                         list(recent_trace),
                         last_matched_source_index,
+                        list(recent_stack_snapshots),
                     )
                     if action == "quit":
                         stop_reason = issue.reason
                         break
                     if action == "skip":
                         recent_trace.append(pending.popleft())
+                        recent_stack_snapshots.append(None)
                         continue
                     if action == "jump" and value is not None:
                         source_pos = value
@@ -1136,12 +1171,14 @@ def run_alignment(args: argparse.Namespace) -> int:
                     label_to_source_indexes,
                     list(recent_trace),
                     last_matched_source_index,
+                    list(recent_stack_snapshots),
                 )
                 if action == "quit":
                     stop_reason = issue.reason
                     break
                 if action == "skip":
                     recent_trace.append(pending.popleft())
+                    recent_stack_snapshots.append(None)
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
@@ -1162,6 +1199,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                 )
                 if indirect_jmp_resync_idx is not None:
                     recent_trace.append(pending.popleft())
+                    recent_stack_snapshots.append(None)
                     processed += 1
                     source_pos = indirect_jmp_resync_idx
                     source_return_stack.clear()
@@ -1215,12 +1253,14 @@ def run_alignment(args: argparse.Namespace) -> int:
                     label_to_source_indexes,
                     list(recent_trace),
                     last_matched_source_index,
+                    list(recent_stack_snapshots),
                 )
                 if action == "quit":
                     stop_reason = issue.reason
                     break
                 if action == "skip":
                     recent_trace.append(pending.popleft())
+                    recent_stack_snapshots.append(None)
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
@@ -1239,8 +1279,10 @@ def run_alignment(args: argparse.Namespace) -> int:
 
             annotated_out.write(line_out + "\n")
 
+            pre_exec_snapshot = tuple(source_return_stack)
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
+            recent_stack_snapshots.append(pre_exec_snapshot)
             pending.popleft()
             observed_next_pc = pending[0].pc if pending else None
             source_pos = advance_source_position(
@@ -1377,7 +1419,10 @@ def run_self_check() -> None:
     legend_pos = prompt_text.index("=> current trace/source candidate")
     pending_pos = prompt_text.index("Pending trace entries:")
     assert legend_pos < pending_pos
-    assert prompt_text.count(">> previous trace entry / last matched source instruction") == 1
+    assert (
+        prompt_text.count(">> previous trace entry / last matched source instruction")
+        == 1
+    )
     assert prompt_text.count(">> @100 PC=$1FF6 OP=$A9 LDA #$00") == 1
     assert prompt_text.count(">> @101 PC=$1FF8 OP=$8D STA $3000") == 1
     assert prompt_text.count(">> @102 PC=$1FFB OP=$EA NOP") == 1
@@ -2033,6 +2078,87 @@ Labeled LDA #$01
 
         assert choose_source_label_target("XA75B", 1, xmap_source, xmap_labels) == 0
         assert choose_source_label_target("LA75B", 1, xmap_source, xmap_labels) == 0
+
+    # Phase 1-3: RTS stack snapshot rendered in prompt.
+    rts_recent = [
+        TraceEntry(200, 0x3000, 0x20, "JSR", "$4000", "@200", None, None),
+        TraceEntry(201, 0x4000, 0xA9, "LDA", "#$01", "@201", None, None),
+        TraceEntry(202, 0x4002, 0x60, "RTS", "", "@202", None, None),
+    ]
+
+    # RTS with non-empty snapshot -> section with frame lines.
+    rts_snapshots_nonempty: list[ReturnStackSnapshot | None] = [
+        (),
+        ((5, 0x3003),),
+        ((5, 0x3003),),
+    ]
+    rts_out1 = io.StringIO()
+    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out1):
+        prompt_for_help(
+            SyncIssue("mnemonic-mismatch", "test"),
+            help_pending_trace,
+            help_source,
+            8,
+            help_labels,
+            rts_recent,
+            6,
+            rts_snapshots_nonempty,
+        )
+    rts_text1 = rts_out1.getvalue()
+    assert "Emulated stack before last shown RTS (top first):" in rts_text1
+    assert "[0] source[5], return_pc=$3003" in rts_text1
+
+    # RTS with empty snapshot -> explicit empty output.
+    rts_snapshots_empty: list[ReturnStackSnapshot | None] = [None, None, ()]
+    rts_out_empty = io.StringIO()
+    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out_empty):
+        prompt_for_help(
+            SyncIssue("mnemonic-mismatch", "test"),
+            help_pending_trace,
+            help_source,
+            8,
+            help_labels,
+            rts_recent,
+            6,
+            rts_snapshots_empty,
+        )
+    rts_text_empty = rts_out_empty.getvalue()
+    assert "Emulated stack before last shown RTS (top first):" in rts_text_empty
+    assert "(empty)" in rts_text_empty
+
+    # RTS with unavailable snapshot (None) -> fallback line.
+    rts_snapshots_unavail: list[ReturnStackSnapshot | None] = [None, None, None]
+    rts_out2 = io.StringIO()
+    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out2):
+        prompt_for_help(
+            SyncIssue("mnemonic-mismatch", "test"),
+            help_pending_trace,
+            help_source,
+            8,
+            help_labels,
+            rts_recent,
+            6,
+            rts_snapshots_unavail,
+        )
+    rts_text2 = rts_out2.getvalue()
+    assert "Emulated stack before last shown RTS (top first):" in rts_text2
+    assert "(snapshot unavailable)" in rts_text2
+
+    # No RTS in recent trace -> no stack section.
+    rts_out3 = io.StringIO()
+    no_rts_snapshots: list[ReturnStackSnapshot | None] = [None] * len(help_recent_trace)
+    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out3):
+        prompt_for_help(
+            help_issue,
+            help_pending_trace,
+            help_source,
+            8,
+            help_labels,
+            help_recent_trace,
+            6,
+            no_rts_snapshots,
+        )
+    assert "Emulated stack before last shown RTS" not in rts_out3.getvalue()
 
     print("self-check passed")
 
