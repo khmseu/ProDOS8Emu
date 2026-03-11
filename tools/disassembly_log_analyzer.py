@@ -1184,12 +1184,14 @@ def run_alignment(args: argparse.Namespace) -> int:
                         continue
                     if action == "jump" and value is not None:
                         source_pos = value
-                        source_return_stack.clear()
+                        if not args.no_stack_reset_on_manual_jump:
+                            source_return_stack.clear()
                         synced = True
                         continue
                     continue
 
                 source_pos = sync_idx
+                # Initial sync always clears stack (previous context is unknown)
                 source_return_stack.clear()
                 synced = True
                 print(
@@ -1225,7 +1227,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
-                    source_return_stack.clear()
+                    if not args.no_stack_reset_on_manual_jump:
+                        source_return_stack.clear()
                     continue
                 continue
 
@@ -1244,7 +1247,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                     recent_stack_snapshots.append(None)
                     processed += 1
                     source_pos = indirect_jmp_resync_idx
-                    source_return_stack.clear()
+                    if not args.no_stack_reset_on_indirect_jmp:
+                        source_return_stack.clear()
                     continue
 
                 pc_symbol_resync_idx = attempt_pc_symbol_resync(
@@ -1258,7 +1262,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                     and pc_symbol_resync_idx != source_pos
                 ):
                     source_pos = pc_symbol_resync_idx
-                    source_return_stack.clear()
+                    if not args.no_stack_reset_on_pc_symbol:
+                        source_return_stack.clear()
                     continue
 
                 local_resync_idx = attempt_local_auto_resync(
@@ -1271,7 +1276,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                 )
                 if local_resync_idx is not None and local_resync_idx != source_pos:
                     source_pos = local_resync_idx
-                    source_return_stack.clear()
+                    if not args.no_stack_reset_on_local_resync:
+                        source_return_stack.clear()
                     continue
 
                 issue = SyncIssue(
@@ -1307,7 +1313,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
-                    source_return_stack.clear()
+                    if not args.no_stack_reset_on_manual_jump:
+                        source_return_stack.clear()
                     continue
                 continue
 
@@ -1526,7 +1533,10 @@ def run_self_check() -> None:
         ((5, 0x3003),),
         ((5, 0x3003), (8, 0x3005)),
     )
-    assert "EMU_STACK_AFTER_PUSH: source[8],return_pc=$3005 | source[5],return_pc=$3003" in annotated_push
+    assert (
+        "EMU_STACK_AFTER_PUSH: source[8],return_pc=$3005 | source[5],return_pc=$3003"
+        in annotated_push
+    )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -2345,6 +2355,26 @@ def parse_args() -> argparse.Namespace:
         "--run-after-self-check",
         action="store_true",
         help="Continue into alignment run after --self-check completes.",
+    )
+    parser.add_argument(
+        "--no-stack-reset-on-indirect-jmp",
+        action="store_true",
+        help="Preserve stack across indirect jump resynchronization.",
+    )
+    parser.add_argument(
+        "--no-stack-reset-on-pc-symbol",
+        action="store_true",
+        help="Preserve stack when resyncing to PC-symbol matched instruction.",
+    )
+    parser.add_argument(
+        "--no-stack-reset-on-local-resync",
+        action="store_true",
+        help="Preserve stack across local n-gram resynchronization.",
+    )
+    parser.add_argument(
+        "--no-stack-reset-on-manual-jump",
+        action="store_true",
+        help="Preserve stack when user manually jumps to a source position.",
     )
     return parser.parse_args()
 
