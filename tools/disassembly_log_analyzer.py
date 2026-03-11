@@ -753,7 +753,9 @@ def prompt_for_help(
     print("\nPending trace entries:")
     if recent_trace:
         displayed = recent_trace[-6:]
-        displayed_snapshots = recent_stack_snapshots[-6:] if recent_stack_snapshots else None
+        displayed_snapshots = (
+            recent_stack_snapshots[-6:] if recent_stack_snapshots else None
+        )
         for entry in displayed:
             print(format_trace_prompt_entry(">>", entry))
         rts_idx = None
@@ -764,7 +766,8 @@ def prompt_for_help(
         if rts_idx is not None:
             snapshot = (
                 displayed_snapshots[rts_idx]
-                if displayed_snapshots is not None and rts_idx < len(displayed_snapshots)
+                if displayed_snapshots is not None
+                and rts_idx < len(displayed_snapshots)
                 else None
             )
             print("\nEmulated stack before last shown RTS (top first):")
@@ -1033,6 +1036,39 @@ def attempt_indirect_jmp_next_trace_resync(
     )
 
 
+def format_return_stack_for_annotation(snapshot: ReturnStackSnapshot) -> str:
+    if len(snapshot) == 0:
+        return "(empty)"
+
+    frames: list[str] = []
+    for source_idx, return_pc in reversed(snapshot):
+        pc_text = f"${return_pc:04X}" if return_pc is not None else "(unknown)"
+        frames.append(f"source[{source_idx}],return_pc={pc_text}")
+
+    return " | ".join(frames)
+
+
+def build_annotated_line(
+    base_line: str,
+    names_here: list[str],
+    source_mnemonic: str,
+    pre_exec_snapshot: ReturnStackSnapshot,
+) -> str:
+    suffixes: list[str] = []
+    if names_here:
+        suffixes.append(f"NEW_PC_LABELS: {', '.join(names_here)}")
+    if source_mnemonic == "RTS":
+        suffixes.append(
+            "EMU_STACK_BEFORE_RTS: "
+            + format_return_stack_for_annotation(pre_exec_snapshot)
+        )
+
+    if not suffixes:
+        return base_line
+
+    return f"{base_line} ; {' ; '.join(suffixes)}"
+
+
 def write_discovered_labels(
     out_path: Path,
     discovered: dict[int, set[str]],
@@ -1272,14 +1308,18 @@ def run_alignment(args: argparse.Namespace) -> int:
             if source_inst.label:
                 discovered[trace_entry.pc].add(source_inst.label)
 
+            pre_exec_snapshot = tuple(source_return_stack)
             line_out = trace_entry.full_line
             names_here = sorted(discovered.get(trace_entry.pc, set()))
-            if names_here:
-                line_out = f"{line_out} ; NEW_PC_LABELS: {', '.join(names_here)}"
+            line_out = build_annotated_line(
+                line_out,
+                names_here,
+                source_inst.mnemonic,
+                pre_exec_snapshot,
+            )
 
             annotated_out.write(line_out + "\n")
 
-            pre_exec_snapshot = tuple(source_return_stack)
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
             recent_stack_snapshots.append(pre_exec_snapshot)
@@ -1446,6 +1486,29 @@ def run_self_check() -> None:
             TraceEntry(index, 0x2000 + index, 0xEA, "NOP", "", "", None, None)
         )
     assert [entry.index for entry in retained_recent_trace] == [1, 2, 3, 4, 5, 6]
+
+    assert format_return_stack_for_annotation(()) == "(empty)"
+    assert (
+        format_return_stack_for_annotation(((4, 0x3003), (9, None)))
+        == "source[9],return_pc=(unknown) | source[4],return_pc=$3003"
+    )
+
+    annotated_plain = build_annotated_line(
+        "@1 PC=$3000 OP=$EA NOP",
+        [],
+        "NOP",
+        (),
+    )
+    assert annotated_plain == "@1 PC=$3000 OP=$EA NOP"
+
+    annotated_rts = build_annotated_line(
+        "@2 PC=$3001 OP=$60 RTS",
+        ["LB001"],
+        "RTS",
+        ((5, 0x3003),),
+    )
+    assert "NEW_PC_LABELS: LB001" in annotated_rts
+    assert "EMU_STACK_BEFORE_RTS: source[5],return_pc=$3003" in annotated_rts
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
