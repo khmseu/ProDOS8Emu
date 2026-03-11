@@ -1053,6 +1053,7 @@ def build_annotated_line(
     names_here: list[str],
     source_mnemonic: str,
     pre_exec_snapshot: ReturnStackSnapshot,
+    post_exec_snapshot: ReturnStackSnapshot,
 ) -> str:
     suffixes: list[str] = []
     if names_here:
@@ -1061,6 +1062,11 @@ def build_annotated_line(
         suffixes.append(
             "EMU_STACK_BEFORE_RTS: "
             + format_return_stack_for_annotation(pre_exec_snapshot)
+        )
+    if len(post_exec_snapshot) > len(pre_exec_snapshot):
+        suffixes.append(
+            "EMU_STACK_AFTER_PUSH: "
+            + format_return_stack_for_annotation(post_exec_snapshot)
         )
 
     if not suffixes:
@@ -1309,16 +1315,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                 discovered[trace_entry.pc].add(source_inst.label)
 
             pre_exec_snapshot = tuple(source_return_stack)
-            line_out = trace_entry.full_line
             names_here = sorted(discovered.get(trace_entry.pc, set()))
-            line_out = build_annotated_line(
-                line_out,
-                names_here,
-                source_inst.mnemonic,
-                pre_exec_snapshot,
-            )
-
-            annotated_out.write(line_out + "\n")
 
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
@@ -1333,6 +1330,16 @@ def run_alignment(args: argparse.Namespace) -> int:
                 source_return_stack,
                 observed_next_pc,
             )
+
+            post_exec_snapshot = tuple(source_return_stack)
+            line_out = build_annotated_line(
+                trace_entry.full_line,
+                names_here,
+                source_inst.mnemonic,
+                pre_exec_snapshot,
+                post_exec_snapshot,
+            )
+            annotated_out.write(line_out + "\n")
             processed += 1
 
             if args.max_lines and processed >= args.max_lines:
@@ -1498,6 +1505,7 @@ def run_self_check() -> None:
         [],
         "NOP",
         (),
+        (),
     )
     assert annotated_plain == "@1 PC=$3000 OP=$EA NOP"
 
@@ -1506,9 +1514,19 @@ def run_self_check() -> None:
         ["LB001"],
         "RTS",
         ((5, 0x3003),),
+        (),
     )
     assert "NEW_PC_LABELS: LB001" in annotated_rts
     assert "EMU_STACK_BEFORE_RTS: source[5],return_pc=$3003" in annotated_rts
+
+    annotated_push = build_annotated_line(
+        "@3 PC=$3002 OP=$20 JSR $4000",
+        [],
+        "JSR",
+        ((5, 0x3003),),
+        ((5, 0x3003), (8, 0x3005)),
+    )
+    assert "EMU_STACK_AFTER_PUSH: source[8],return_pc=$3005 | source[5],return_pc=$3003" in annotated_push
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
