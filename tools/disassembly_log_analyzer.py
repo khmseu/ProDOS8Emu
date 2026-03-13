@@ -40,6 +40,11 @@ class TraceEntry:
     pre_pc: int | None
     post_pc: int | None
     pc_symbol: str | None = None
+    pre_a: int | None = None
+    pre_x: int | None = None
+    pre_y: int | None = None
+    pre_p: int | None = None
+    pre_sp: int | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,12 @@ TRACE_PRE_POST_PC_RE = re.compile(
     r";\s*PRE\s+PC=\$(?P<pre>[0-9A-Fa-f]{4}).*?POST\s+PC=\$(?P<post>[0-9A-Fa-f]{4})"
 )
 
+TRACE_PRE_POST_STATE_RE = re.compile(r";\s*PRE\s+(?P<pre>.*?)\s+POST\s+(?P<post>.*)$")
+
+TRACE_STATE_FIELD_RE = re.compile(
+    r"\b(?P<name>PC|A|X|Y|SP|P)=\$(?P<value>[0-9A-Fa-f]{2,4})\b"
+)
+
 OPERAND_ADDR16_RE = re.compile(r"\$([0-9A-Fa-f]{4})")
 
 MONITOR_SYMBOL_RE = re.compile(
@@ -78,6 +89,14 @@ EQU_STAR_RE = re.compile(
     r"^(?P<label>[^\s:;]+)\s+EQU\s+\*$",
     re.IGNORECASE,
 )
+
+
+def parse_trace_state_fields(section: str) -> dict[str, int]:
+    fields: dict[str, int] = {}
+    for match in TRACE_STATE_FIELD_RE.finditer(section):
+        fields[match.group("name").upper()] = int(match.group("value"), 16)
+    return fields
+
 
 # Core 6502/65C02 mnemonics used to identify instruction lines in source.
 CPU_MNEMONICS = {
@@ -202,12 +221,36 @@ def parse_log_line(line: str) -> TraceEntry | None:
 
     pre_pc: int | None = None
     post_pc: int | None = None
+    pre_a: int | None = None
+    pre_x: int | None = None
+    pre_y: int | None = None
+    pre_p: int | None = None
+    pre_sp: int | None = None
     pc_symbol_raw = match.group("pcsym")
     pc_symbol = pc_symbol_raw.strip() if pc_symbol_raw else None
+
+    pre_fields: dict[str, int] = {}
+    post_fields: dict[str, int] = {}
+    state_match = TRACE_PRE_POST_STATE_RE.search(stripped)
+    if state_match is not None:
+        pre_fields = parse_trace_state_fields(state_match.group("pre"))
+        post_fields = parse_trace_state_fields(state_match.group("post"))
+
+    pre_pc = pre_fields.get("PC")
+    post_pc = post_fields.get("PC")
+    pre_a = pre_fields.get("A")
+    pre_x = pre_fields.get("X")
+    pre_y = pre_fields.get("Y")
+    pre_p = pre_fields.get("P")
+    pre_sp = pre_fields.get("SP")
+
+    # Fallback for lines where only PRE/POST PC can be extracted.
     pre_post = TRACE_PRE_POST_PC_RE.search(stripped)
     if pre_post is not None:
-        pre_pc = int(pre_post.group("pre"), 16)
-        post_pc = int(pre_post.group("post"), 16)
+        if pre_pc is None:
+            pre_pc = int(pre_post.group("pre"), 16)
+        if post_pc is None:
+            post_pc = int(pre_post.group("post"), 16)
 
     return TraceEntry(
         index=int(match.group("index")),
@@ -219,6 +262,11 @@ def parse_log_line(line: str) -> TraceEntry | None:
         pre_pc=pre_pc,
         post_pc=post_pc,
         pc_symbol=pc_symbol,
+        pre_a=pre_a,
+        pre_x=pre_x,
+        pre_y=pre_y,
+        pre_p=pre_p,
+        pre_sp=pre_sp,
     )
 
 
@@ -648,6 +696,60 @@ def choose_source_label_target(
     return min(pool, key=lambda idx: abs(idx - current_source_index))
 
 
+def stack_push_value_for_instruction(
+    mnemonic: str,
+    trace_entry: TraceEntry,
+) -> int | None:
+    if mnemonic == "PHA":
+        return trace_entry.pre_a
+    if mnemonic == "PHX":
+        return trace_entry.pre_x
+    if mnemonic == "PHY":
+        return trace_entry.pre_y
+    if mnemonic == "PHP":
+        return trace_entry.pre_p
+    return None
+
+
+def derive_rts_return_pc_from_stack(
+    emulated_stack_bytes: Sequence[int] | None,
+) -> int | None:
+    if emulated_stack_bytes is None or len(emulated_stack_bytes) < 2:
+        return None
+
+    low = emulated_stack_bytes[-1] & 0xFF
+    high = emulated_stack_bytes[-2] & 0xFF
+    return (((high << 8) | low) + 1) & 0xFFFF
+
+
+def detect_rts_alignment_issue(
+    trace_entry: TraceEntry,
+    source_inst: SourceInstruction,
+    source_pos: int,
+    emulated_stack_bytes: Sequence[int] | None,
+) -> SyncIssue | None:
+    if source_inst.mnemonic != "RTS":
+        return None
+    if trace_entry.post_pc is None:
+        return None
+
+    derived_return_pc = derive_rts_return_pc_from_stack(emulated_stack_bytes)
+    if derived_return_pc is None:
+        return None
+    if derived_return_pc == trace_entry.post_pc:
+        return None
+
+    return SyncIssue(
+        "rts-return-mismatch",
+        (
+            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS returned to "
+            f"${trace_entry.post_pc:04X}, but emulated stack top implies "
+            f"${derived_return_pc:04X} "
+            f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+        ),
+    )
+
+
 def advance_source_position(
     trace_entry: TraceEntry,
     source_pos: int,
@@ -655,8 +757,10 @@ def advance_source_position(
     label_to_source_indexes: dict[str, list[int]],
     return_stack: list[tuple[int, int | None]],
     observed_next_pc: int | None = None,
+    emulated_stack_bytes: list[int] | None = None,
 ) -> int:
     source_inst = source[source_pos]
+    mnemonic = source_inst.mnemonic
     next_source_pos = source_pos + 1
     observed_post_pc = (
         trace_entry.post_pc if trace_entry.post_pc is not None else observed_next_pc
@@ -676,7 +780,7 @@ def advance_source_position(
                 if target_idx is not None:
                     next_source_pos = target_idx
 
-    if source_inst.mnemonic == "JMP":
+    if mnemonic == "JMP":
         jump_label = jump_label_from_source(source_inst)
         if jump_label is not None:
             target_idx = choose_source_label_target(
@@ -688,7 +792,7 @@ def advance_source_position(
             if target_idx is not None:
                 next_source_pos = target_idx
 
-    if source_inst.mnemonic == "JSR":
+    if mnemonic == "JSR":
         return_pc = (trace_entry.pc + 3) & 0xFFFF
         call_label = call_label_from_source(source_inst)
         stepped_into_callee = False
@@ -708,19 +812,62 @@ def advance_source_position(
         if stepped_into_callee:
             return_stack.append((source_pos + 1, return_pc))
 
-    if source_inst.mnemonic == "RTS" and return_stack:
-        if observed_post_pc is not None:
-            for i in range(len(return_stack) - 1, -1, -1):
-                return_index, return_pc = return_stack[i]
-                if return_pc == observed_post_pc:
-                    del return_stack[i:]
-                    return return_index
+            if emulated_stack_bytes is not None:
+                jsr_stack_return_addr = (return_pc - 1) & 0xFFFF
+                emulated_stack_bytes.append((jsr_stack_return_addr >> 8) & 0xFF)
+                emulated_stack_bytes.append(jsr_stack_return_addr & 0xFF)
 
-            # No reliable return target; keep alignment linear and let mismatch logic recover.
+    pushed_stack_byte = stack_push_value_for_instruction(mnemonic, trace_entry)
+    if pushed_stack_byte is not None and emulated_stack_bytes is not None:
+        emulated_stack_bytes.append(pushed_stack_byte & 0xFF)
+
+    if mnemonic in {"PLA", "PLP", "PLX", "PLY"} and emulated_stack_bytes is not None:
+        if emulated_stack_bytes:
+            emulated_stack_bytes.pop()
+
+    if mnemonic == "RTS":
+        derived_post_pc = derive_rts_return_pc_from_stack(emulated_stack_bytes)
+        if derived_post_pc is not None and emulated_stack_bytes is not None:
+            low = emulated_stack_bytes.pop() & 0xFF
+            high = emulated_stack_bytes.pop() & 0xFF
+            assert (((high << 8) | low) + 1) & 0xFFFF == derived_post_pc
+
+        effective_post_pc = (
+            derived_post_pc if derived_post_pc is not None else observed_post_pc
+        )
+
+        if return_stack:
+            if effective_post_pc is not None:
+                for i in range(len(return_stack) - 1, -1, -1):
+                    return_index, return_pc = return_stack[i]
+                    if return_pc == effective_post_pc:
+                        del return_stack[i:]
+                        return return_index
+
+                # No reliable return frame match; fall back to source label lookup.
+            else:
+                return_index, _ = return_stack.pop()
+                return return_index
+
+        if effective_post_pc is not None:
+            runtime_target_idx = choose_source_label_target(
+                f"L{effective_post_pc:04X}",
+                source_pos,
+                source,
+                label_to_source_indexes,
+            )
+            if runtime_target_idx is not None:
+                return runtime_target_idx
+
+            # Keep alignment linear if no frame or runtime label target is available.
             return next_source_pos
 
-        return_index, _ = return_stack.pop()
-        return return_index
+        return next_source_pos
+
+    if mnemonic == "RTI" and emulated_stack_bytes is not None:
+        # RTI pulls status and then return address low/high bytes.
+        for _ in range(min(3, len(emulated_stack_bytes))):
+            emulated_stack_bytes.pop()
 
     return next_source_pos
 
@@ -734,6 +881,7 @@ def prompt_for_help(
     recent_trace: list[TraceEntry] | None = None,
     last_matched_source_index: int | None = None,
     recent_stack_snapshots: Sequence[ReturnStackSnapshot | None] | None = None,
+    recent_source_indexes: Sequence[int | None] | None = None,
 ) -> tuple[str, int | None]:
     def format_trace_prompt_entry(marker: str, entry: TraceEntry) -> str:
         return (
@@ -786,8 +934,24 @@ def prompt_for_help(
     if current_source_index is not None:
         lo = max(0, current_source_index - 6)
         hi = min(len(source), current_source_index + 4)
+        local_indexes = set(range(lo, hi))
+        previous_indexes: list[int] = []
+        if recent_source_indexes:
+            for idx in recent_source_indexes[-6:]:
+                if idx is None or not (0 <= idx < len(source)):
+                    continue
+                if idx not in previous_indexes:
+                    previous_indexes.append(idx)
+        previous_index_set = set(previous_indexes)
+        display_indexes = sorted(local_indexes | previous_index_set)
+
         print("\nSource context:")
-        for idx in range(lo, hi):
+        previous_displayed_idx: int | None = None
+        for idx in display_indexes:
+            if previous_displayed_idx is not None and idx - previous_displayed_idx > 1:
+                print("  ...")
+            previous_displayed_idx = idx
+
             inst = source[idx]
             label = f"{inst.label} " if inst.label else ""
             pointer = "  "
@@ -798,9 +962,20 @@ def prompt_for_help(
                 and idx == last_matched_source_index
             ):
                 pointer = "*>" if idx == current_source_index else ">>"
+            elif idx in previous_index_set:
+                pointer = ">>"
+
+            extra = ""
+            if idx in previous_index_set and idx not in local_indexes:
+                extra = " [previous-match]"
+
+            rendered_instruction = f"{label}{inst.mnemonic}"
+            if inst.operand:
+                rendered_instruction += f" {inst.operand}"
+            rendered_instruction += extra
             print(
                 f"{pointer} [{idx}] {inst.file_path}:{inst.line_number} "
-                f"{label}{inst.mnemonic} {inst.operand}".rstrip()
+                f"{rendered_instruction}".rstrip()
             )
 
     print("\nActions:")
@@ -1128,8 +1303,10 @@ def run_alignment(args: argparse.Namespace) -> int:
     pending: Deque[TraceEntry] = deque()
     recent_trace: Deque[TraceEntry] = deque(maxlen=6)
     recent_stack_snapshots: Deque[ReturnStackSnapshot | None] = deque(maxlen=6)
+    recent_source_indexes: Deque[int | None] = deque(maxlen=6)
     last_matched_source_index: int | None = None
     source_return_stack: list[tuple[int, int | None]] = []
+    source_byte_stack: list[int] = []
     synced = False
     stop_reason = "eof"
 
@@ -1174,6 +1351,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                         list(recent_trace),
                         last_matched_source_index,
                         list(recent_stack_snapshots),
+                        list(recent_source_indexes),
                     )
                     if action == "quit":
                         stop_reason = issue.reason
@@ -1181,11 +1359,13 @@ def run_alignment(args: argparse.Namespace) -> int:
                     if action == "skip":
                         recent_trace.append(pending.popleft())
                         recent_stack_snapshots.append(None)
+                        recent_source_indexes.append(None)
                         continue
                     if action == "jump" and value is not None:
                         source_pos = value
                         if not args.no_stack_reset_on_manual_jump:
                             source_return_stack.clear()
+                            source_byte_stack.clear()
                         synced = True
                         continue
                     continue
@@ -1193,6 +1373,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                 source_pos = sync_idx
                 # Initial sync always clears stack (previous context is unknown)
                 source_return_stack.clear()
+                source_byte_stack.clear()
                 synced = True
                 print(
                     f"Synced at source index {source_pos} using window size {args.sync_window}."
@@ -1216,6 +1397,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     list(recent_trace),
                     last_matched_source_index,
                     list(recent_stack_snapshots),
+                    list(recent_source_indexes),
                 )
                 if action == "quit":
                     stop_reason = issue.reason
@@ -1223,17 +1405,61 @@ def run_alignment(args: argparse.Namespace) -> int:
                 if action == "skip":
                     recent_trace.append(pending.popleft())
                     recent_stack_snapshots.append(None)
+                    recent_source_indexes.append(None)
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
                     if not args.no_stack_reset_on_manual_jump:
                         source_return_stack.clear()
+                        source_byte_stack.clear()
                     continue
                 continue
 
             trace_entry = pending[0]
             source_inst = source[source_pos]
+
+            rts_alignment_issue = detect_rts_alignment_issue(
+                trace_entry,
+                source_inst,
+                source_pos,
+                source_byte_stack,
+            )
+            if rts_alignment_issue is not None:
+                if args.non_interactive:
+                    print(
+                        f"Stopping: {rts_alignment_issue.reason}: {rts_alignment_issue.detail}"
+                    )
+                    stop_reason = rts_alignment_issue.reason
+                    break
+
+                action, value = prompt_for_help(
+                    rts_alignment_issue,
+                    list(pending),
+                    source,
+                    source_pos,
+                    label_to_source_indexes,
+                    list(recent_trace),
+                    last_matched_source_index,
+                    list(recent_stack_snapshots),
+                    list(recent_source_indexes),
+                )
+                if action == "quit":
+                    stop_reason = rts_alignment_issue.reason
+                    break
+                if action == "skip":
+                    recent_trace.append(pending.popleft())
+                    recent_stack_snapshots.append(None)
+                    recent_source_indexes.append(None)
+                    processed += 1
+                    continue
+                if action == "jump" and value is not None:
+                    source_pos = value
+                    if not args.no_stack_reset_on_manual_jump:
+                        source_return_stack.clear()
+                        source_byte_stack.clear()
+                    continue
+                continue
 
             if not mnemonics_match(trace_entry.mnemonic, source_inst.mnemonic):
                 indirect_jmp_resync_idx = attempt_indirect_jmp_next_trace_resync(
@@ -1245,10 +1471,12 @@ def run_alignment(args: argparse.Namespace) -> int:
                 if indirect_jmp_resync_idx is not None:
                     recent_trace.append(pending.popleft())
                     recent_stack_snapshots.append(None)
+                    recent_source_indexes.append(None)
                     processed += 1
                     source_pos = indirect_jmp_resync_idx
                     if not args.no_stack_reset_on_indirect_jmp:
                         source_return_stack.clear()
+                        source_byte_stack.clear()
                     continue
 
                 pc_symbol_resync_idx = attempt_pc_symbol_resync(
@@ -1264,6 +1492,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source_pos = pc_symbol_resync_idx
                     if not args.no_stack_reset_on_pc_symbol:
                         source_return_stack.clear()
+                        source_byte_stack.clear()
                     continue
 
                 local_resync_idx = attempt_local_auto_resync(
@@ -1278,6 +1507,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source_pos = local_resync_idx
                     if not args.no_stack_reset_on_local_resync:
                         source_return_stack.clear()
+                        source_byte_stack.clear()
                     continue
 
                 issue = SyncIssue(
@@ -1302,6 +1532,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     list(recent_trace),
                     last_matched_source_index,
                     list(recent_stack_snapshots),
+                    list(recent_source_indexes),
                 )
                 if action == "quit":
                     stop_reason = issue.reason
@@ -1309,12 +1540,14 @@ def run_alignment(args: argparse.Namespace) -> int:
                 if action == "skip":
                     recent_trace.append(pending.popleft())
                     recent_stack_snapshots.append(None)
+                    recent_source_indexes.append(None)
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
                     if not args.no_stack_reset_on_manual_jump:
                         source_return_stack.clear()
+                        source_byte_stack.clear()
                     continue
                 continue
 
@@ -1327,6 +1560,7 @@ def run_alignment(args: argparse.Namespace) -> int:
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
             recent_stack_snapshots.append(pre_exec_snapshot)
+            recent_source_indexes.append(source_pos)
             pending.popleft()
             observed_next_pc = pending[0].pc if pending else None
             source_pos = advance_source_position(
@@ -1336,6 +1570,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                 label_to_source_indexes,
                 source_return_stack,
                 observed_next_pc,
+                source_byte_stack,
             )
 
             post_exec_snapshot = tuple(source_return_stack)
@@ -1390,6 +1625,11 @@ def run_self_check() -> None:
     assert parsed_trace.operand == "#$01"
     assert parsed_trace.pre_pc == 0x2000
     assert parsed_trace.post_pc == 0x2002
+    assert parsed_trace.pre_a == 0x00
+    assert parsed_trace.pre_x == 0x00
+    assert parsed_trace.pre_y == 0x00
+    assert parsed_trace.pre_sp == 0xFF
+    assert parsed_trace.pre_p == 0x24
 
     mli_trace = parse_log_line(
         "@1 PC=$1000 OP=$20 MLI .byte $C8 .word $1234 (OPEN) ; PRE X POST X"
@@ -1494,6 +1734,24 @@ def run_self_check() -> None:
     assert "=> current source candidate" not in prompt_text
     assert ">> last matched source instruction" not in prompt_text
 
+    prompt_output_with_prev = io.StringIO()
+    with patch("builtins.input", side_effect=["q"]), redirect_stdout(
+        prompt_output_with_prev
+    ):
+        prompt_for_help(
+            help_issue,
+            help_pending_trace,
+            help_source,
+            8,
+            help_labels,
+            help_recent_trace,
+            6,
+            recent_source_indexes=[0, 1, 2, 3, 4, 5],
+        )
+    prompt_text_with_prev = prompt_output_with_prev.getvalue()
+    assert ">> [0] Monitor.S:905 Older0 CLC [previous-match]" in prompt_text_with_prev
+    assert ">> [1] Monitor.S:906 LDA #$00 [previous-match]" in prompt_text_with_prev
+
     retained_recent_trace: Deque[TraceEntry] = deque(maxlen=6)
     for index in range(7):
         retained_recent_trace.append(
@@ -1506,6 +1764,9 @@ def run_self_check() -> None:
         format_return_stack_for_annotation(((4, 0x3003), (9, None)))
         == "source[9],return_pc=(unknown) | source[4],return_pc=$3003"
     )
+    assert derive_rts_return_pc_from_stack(None) is None
+    assert derive_rts_return_pc_from_stack([0x99]) is None
+    assert derive_rts_return_pc_from_stack([0x99, 0xD5]) == 0x99D6
 
     annotated_plain = build_annotated_line(
         "@1 PC=$3000 OP=$EA NOP",
@@ -1792,6 +2053,150 @@ Labeled LDA #$01
         )
         assert rts_missing_post_pos == 1
         assert rts_missing_post_stack == []
+
+        # Track pushed stack bytes and derive RTS runtime target from them.
+        rts_byte_source = [
+            SourceInstruction("dispatch.s", 1, "Dispatcher", "PHA", ""),
+            SourceInstruction("dispatch.s", 2, None, "DEY", ""),
+            SourceInstruction("dispatch.s", 3, None, "LDA", "$9D21,Y"),
+            SourceInstruction("dispatch.s", 4, None, "PHA", ""),
+            SourceInstruction("dispatch.s", 5, None, "RTS", ""),
+            SourceInstruction("dispatch.s", 6, "L99D6", "LDA", "$12"),
+        ]
+        rts_byte_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(rts_byte_source):
+            if inst.label:
+                rts_byte_labels[normalize_label_token(inst.label)].append(idx)
+
+        rts_byte_frames: list[tuple[int, int | None]] = []
+        rts_byte_stack: list[int] = []
+
+        pha_high_trace = TraceEntry(
+            index=100,
+            pc=0xB25C,
+            opcode=0x48,
+            mnemonic="PHA",
+            operand="",
+            full_line="@100 PC=$B25C OP=$48 PHA",
+            pre_pc=0xB25C,
+            post_pc=0xB25D,
+            pre_a=0x99,
+        )
+        pha_high_pos = advance_source_position(
+            pha_high_trace,
+            0,
+            rts_byte_source,
+            rts_byte_labels,
+            rts_byte_frames,
+            emulated_stack_bytes=rts_byte_stack,
+        )
+        assert pha_high_pos == 1
+        assert rts_byte_stack == [0x99]
+
+        pha_low_trace = TraceEntry(
+            index=101,
+            pc=0xB261,
+            opcode=0x48,
+            mnemonic="PHA",
+            operand="",
+            full_line="@101 PC=$B261 OP=$48 PHA",
+            pre_pc=0xB261,
+            post_pc=0xB262,
+            pre_a=0xD5,
+        )
+        pha_low_pos = advance_source_position(
+            pha_low_trace,
+            3,
+            rts_byte_source,
+            rts_byte_labels,
+            rts_byte_frames,
+            emulated_stack_bytes=rts_byte_stack,
+        )
+        assert pha_low_pos == 4
+        assert rts_byte_stack == [0x99, 0xD5]
+
+        rts_from_stack_trace = TraceEntry(
+            index=102,
+            pc=0xB262,
+            opcode=0x60,
+            mnemonic="RTS",
+            operand="",
+            full_line="@102 PC=$B262 OP=$60 RTS",
+            pre_pc=0xB262,
+            post_pc=None,
+        )
+        rts_from_stack_pos = advance_source_position(
+            rts_from_stack_trace,
+            4,
+            rts_byte_source,
+            rts_byte_labels,
+            rts_byte_frames,
+            emulated_stack_bytes=rts_byte_stack,
+        )
+        assert rts_from_stack_pos == 5
+        assert rts_byte_stack == []
+
+        rts_stack_mismatch_issue = detect_rts_alignment_issue(
+            TraceEntry(
+                index=103,
+                pc=0xB262,
+                opcode=0x60,
+                mnemonic="RTS",
+                operand="",
+                full_line="@103 PC=$B262 OP=$60 RTS",
+                pre_pc=0xB262,
+                post_pc=0x7A2D,
+            ),
+            rts_byte_source[4],
+            4,
+            [0x99, 0xD5],
+        )
+        assert rts_stack_mismatch_issue is not None
+        assert rts_stack_mismatch_issue.reason == "rts-return-mismatch"
+        assert "$7A2D" in rts_stack_mismatch_issue.detail
+        assert "$99D6" in rts_stack_mismatch_issue.detail
+
+        rts_stack_match_issue = detect_rts_alignment_issue(
+            TraceEntry(
+                index=104,
+                pc=0xB262,
+                opcode=0x60,
+                mnemonic="RTS",
+                operand="",
+                full_line="@104 PC=$B262 OP=$60 RTS",
+                pre_pc=0xB262,
+                post_pc=0x99D6,
+            ),
+            rts_byte_source[4],
+            4,
+            [0x99, 0xD5],
+        )
+        assert rts_stack_match_issue is None
+
+        pull_source = [SourceInstruction("pull.s", 1, None, "PLA", "")]
+        pull_labels: dict[str, list[int]] = defaultdict(list)
+        pull_frames: list[tuple[int, int | None]] = []
+        pull_stack = [0x42]
+        pla_trace = TraceEntry(
+            index=103,
+            pc=0x3000,
+            opcode=0x68,
+            mnemonic="PLA",
+            operand="",
+            full_line="@103 PC=$3000 OP=$68 PLA",
+            pre_pc=0x3000,
+            post_pc=0x3001,
+        )
+        pla_pos = advance_source_position(
+            pla_trace,
+            0,
+            pull_source,
+            pull_labels,
+            pull_frames,
+            emulated_stack_bytes=pull_stack,
+        )
+        assert pla_pos == 1
+        assert pull_stack == []
 
         # Follow unconditional JMP labels.
         jmp_source = [

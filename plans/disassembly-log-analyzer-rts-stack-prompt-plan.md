@@ -3,6 +3,7 @@
 Add prompt-time visibility into the analyzer's emulated JSR/RTS return stack when a recent RTS appears in the displayed previous trace entries. This helps operators understand call-depth state at the mismatch point without changing alignment behavior.
 
 **Phases 3**
+
 1. **Phase 1: Capture Pre-Execution Stack Snapshots**
     - **Objective:** Retain a pre-execution stack snapshot for each recent trace entry shown in help prompts.
     - **Files/Functions to Modify/Create:** tools/disassembly_log_analyzer.py, run_alignment
@@ -29,4 +30,5 @@ Add prompt-time visibility into the analyzer's emulated JSR/RTS return stack whe
         3. Run analyzer self-check and fix any failures.
 
 **Open Questions 1**
+
 1. Emulated stack is interpreted as analyzer return frames `(source_index, return_pc)` tracked by source_return_stack.
