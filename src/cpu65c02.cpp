@@ -3859,6 +3859,64 @@ namespace prodos8emu {
     os << "\n";
   }
 
+  static bool is_disassembly_stack_push_opcode(uint8_t opcode) {
+    switch (opcode) {
+      case 0x20:  // JSR
+      case 0x00:  // BRK
+      case 0x48:  // PHA
+      case 0x08:  // PHP
+      case 0xDA:  // PHX
+      case 0x5A:  // PHY
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static bool is_disassembly_stack_pop_opcode(uint8_t opcode) {
+    switch (opcode) {
+      case 0x60:  // RTS
+      case 0x40:  // RTI
+      case 0x68:  // PLA
+      case 0x28:  // PLP
+      case 0xFA:  // PLX
+      case 0x7A:  // PLY
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static void emit_disassembly_stack_dump_line(std::ostream& os, uint64_t instructionCount,
+                                               const char* phase, uint8_t opcode, uint16_t pc,
+                                               const ConstMemoryBanks& banks, uint8_t sp) {
+    const uint16_t stackTop = 0x01FF;
+    const uint16_t stackPtr = static_cast<uint16_t>(0x0100 + sp);
+
+    os << "  STACK META[INSN=" << instructionCount << " PHASE=" << phase << " OP=$";
+    write_hex(os, opcode, 2);
+    os << " PC=$";
+    write_hex(os, pc, 4);
+    os << " SP=$";
+    write_hex(os, sp, 2);
+    os << "] SP=$";
+    write_hex(os, sp, 2);
+
+    if (stackPtr >= stackTop) {
+      os << " EMPTY\n";
+      return;
+    }
+
+    os << " USED=" << (stackTop - stackPtr) << ":";
+    for (uint16_t addr = static_cast<uint16_t>(stackPtr + 1); addr <= stackTop; ++addr) {
+      os << " $";
+      write_hex(os, addr, 4);
+      os << "=$";
+      write_hex(os, read_u8(banks, addr), 2);
+    }
+    os << "\n";
+  }
+
   uint32_t CPU65C02::step() {
     if (m_stopped) {
       return 0;
@@ -3890,8 +3948,16 @@ namespace prodos8emu {
     uint32_t cycles = execute(op);
 
     if (m_disassemblyTraceLog != nullptr) {
+      if (is_disassembly_stack_pop_opcode(op)) {
+        emit_disassembly_stack_dump_line(*m_disassemblyTraceLog, m_instructionCount, "PRE", op,
+                                         instructionPC, m_mem.constBanks(), preRegs.sp);
+      }
       emit_disassembly_trace_line(*m_disassemblyTraceLog, m_instructionCount, instructionPC, op,
                                   disassemblyText, preRegs, m_r);
+      if (is_disassembly_stack_push_opcode(op) && m_r.sp != preRegs.sp) {
+        emit_disassembly_stack_dump_line(*m_disassemblyTraceLog, m_instructionCount, "POST", op,
+                                         instructionPC, m_mem.constBanks(), m_r.sp);
+      }
     }
 
     if (track_trace) {

@@ -22,7 +22,7 @@ m)
 	"$AM_SCRIPT"
 	;;
 a)
-	python3 tools/disassembly_log_analyzer.py --no-stack-reset-on-indirect-jmp --no-stack-reset-on-pc-symbol --no-stack-reset-on-local-resync --no-stack-reset-on-manual-jump
+	python3 tools/disassembly_log_analyzer.py
 	;;
 h)
 	head -n 9 "$0" | tail -n +2

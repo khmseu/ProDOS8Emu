@@ -19,14 +19,12 @@ import re
 import tempfile
 from collections import defaultdict, deque
 from contextlib import redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Deque, Iterable, Iterator, Sequence, TypeAlias, TypeVar
+from typing import Deque, Iterable, Iterator, Sequence, TypeVar
 from unittest.mock import patch
 
 T = TypeVar("T")
-ReturnFrame: TypeAlias = tuple[int, int | None]
-ReturnStackSnapshot: TypeAlias = tuple[ReturnFrame, ...]
 
 
 @dataclass(frozen=True)
@@ -45,6 +43,21 @@ class TraceEntry:
     pre_y: int | None = None
     pre_p: int | None = None
     pre_sp: int | None = None
+    pre_stack_bytes: tuple[int, ...] | None = None
+    post_stack_bytes: tuple[int, ...] | None = None
+    pre_stack_lines: tuple[str, ...] = ()
+    post_stack_lines: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StackDumpLine:
+    raw_line: str
+    stack_bytes: tuple[int, ...]
+    instruction_index: int | None = None
+    phase: str | None = None
+    opcode: int | None = None
+    pc: int | None = None
+    sp: int | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +90,19 @@ TRACE_PRE_POST_STATE_RE = re.compile(r";\s*PRE\s+(?P<pre>.*?)\s+POST\s+(?P<post>
 
 TRACE_STATE_FIELD_RE = re.compile(
     r"\b(?P<name>PC|A|X|Y|SP|P)=\$(?P<value>[0-9A-Fa-f]{2,4})\b"
+)
+
+TRACE_STACK_LINE_RE = re.compile(
+    r"^\s*STACK(?:\s+META\[(?P<meta>[^\]]+)\])?\s+SP=\$(?P<sp>[0-9A-Fa-f]{2})\s+"
+    r"(?:(?P<empty>EMPTY)|USED=(?P<used>\d+):(?P<body>.*))\s*$"
+)
+
+TRACE_STACK_BYTE_RE = re.compile(r"\$[0-9A-Fa-f]{4}=\$(?P<value>[0-9A-Fa-f]{2})")
+
+TRACE_STACK_META_RE = re.compile(
+    r"\bINSN=(?P<index>\d+)\s+PHASE=(?P<phase>PRE|POST)\s+"
+    r"OP=\$(?P<op>[0-9A-Fa-f]{2})\s+PC=\$(?P<pc>[0-9A-Fa-f]{4})\s+"
+    r"SP=\$(?P<meta_sp>[0-9A-Fa-f]{2})\b"
 )
 
 OPERAND_ADDR16_RE = re.compile(r"\$([0-9A-Fa-f]{4})")
@@ -187,6 +213,24 @@ BRANCH_MNEMONICS = {
     "BBS",
 }
 
+STACK_PUSH_MNEMONICS = {
+    "JSR",
+    "BRK",
+    "PHA",
+    "PHP",
+    "PHX",
+    "PHY",
+}
+
+STACK_POP_MNEMONICS = {
+    "RTS",
+    "RTI",
+    "PLA",
+    "PLP",
+    "PLX",
+    "PLY",
+}
+
 MIN_CONFIDENCE_SCORE_BASE = 4
 MIN_CONFIDENCE_SCORE_PER_ENTRY = 2
 
@@ -208,6 +252,21 @@ def normalize_label_token(token: str) -> str:
     if m is not None:
         return f"L{m.group(1)}"
     return normalized
+
+
+def is_pc_label_already_known(
+    label: str,
+    trace_entry: TraceEntry,
+    existing_symbol_tokens_for_pc: set[str],
+) -> bool:
+    token = normalize_label_token(label)
+    if token in existing_symbol_tokens_for_pc:
+        return True
+
+    if trace_entry.pc_symbol is not None:
+        return token == normalize_label_token(trace_entry.pc_symbol)
+
+    return False
 
 
 def parse_log_line(line: str) -> TraceEntry | None:
@@ -270,12 +329,149 @@ def parse_log_line(line: str) -> TraceEntry | None:
     )
 
 
+def parse_stack_dump_line(line: str) -> StackDumpLine | None:
+    stripped = line.rstrip("\n")
+    match = TRACE_STACK_LINE_RE.match(stripped)
+    if match is None:
+        return None
+
+    instruction_index: int | None = None
+    phase: str | None = None
+    opcode: int | None = None
+    pc: int | None = None
+    meta_sp: int | None = None
+    meta_raw = match.group("meta")
+    if meta_raw is not None:
+        meta_match = TRACE_STACK_META_RE.search(meta_raw)
+        if meta_match is not None:
+            instruction_index = int(meta_match.group("index"))
+            phase = meta_match.group("phase")
+            opcode = int(meta_match.group("op"), 16)
+            pc = int(meta_match.group("pc"), 16)
+            meta_sp = int(meta_match.group("meta_sp"), 16)
+
+    sp = int(match.group("sp"), 16)
+
+    if match.group("empty") is not None:
+        return StackDumpLine(
+            raw_line=stripped,
+            stack_bytes=(),
+            instruction_index=instruction_index,
+            phase=phase,
+            opcode=opcode,
+            pc=pc,
+            sp=meta_sp if meta_sp is not None else sp,
+        )
+
+    body = match.group("body") or ""
+    values = [
+        int(byte_match.group("value"), 16)
+        for byte_match in TRACE_STACK_BYTE_RE.finditer(body)
+    ]
+
+    used_raw = match.group("used")
+    if used_raw is not None:
+        used = int(used_raw)
+        if used == 0:
+            values = []
+
+    return StackDumpLine(
+        raw_line=stripped,
+        stack_bytes=tuple(values),
+        instruction_index=instruction_index,
+        phase=phase,
+        opcode=opcode,
+        pc=pc,
+        sp=meta_sp if meta_sp is not None else sp,
+    )
+
+
 def trace_entries(log_path: Path) -> Iterator[TraceEntry]:
+    pending_untagged_stacks: list[StackDumpLine] = []
+    tagged_stacks: dict[tuple[int, str], list[StackDumpLine]] = defaultdict(list)
+    current_entry: TraceEntry | None = None
+    current_pre_records: list[StackDumpLine] = []
+    current_post_records: list[StackDumpLine] = []
+
+    def finalize_current_entry() -> TraceEntry | None:
+        nonlocal current_entry, current_pre_records, current_post_records
+        if current_entry is None:
+            return None
+
+        finalized = replace(
+            current_entry,
+            pre_stack_bytes=(
+                current_pre_records[-1].stack_bytes if current_pre_records else None
+            ),
+            post_stack_bytes=(
+                current_post_records[-1].stack_bytes if current_post_records else None
+            ),
+            pre_stack_lines=tuple(record.raw_line for record in current_pre_records),
+            post_stack_lines=tuple(record.raw_line for record in current_post_records),
+        )
+
+        current_entry = None
+        current_pre_records = []
+        current_post_records = []
+        return finalized
+
     with log_path.open("r", encoding="utf-8", errors="replace") as handle:
         for raw in handle:
+            stack_record = parse_stack_dump_line(raw)
+            if stack_record is not None:
+                if (
+                    current_entry is not None
+                    and stack_record.instruction_index == current_entry.index
+                    and stack_record.phase in {"PRE", "POST"}
+                ):
+                    if stack_record.phase == "PRE":
+                        current_pre_records.append(stack_record)
+                    else:
+                        current_post_records.append(stack_record)
+                    continue
+
+                if (
+                    stack_record.instruction_index is not None
+                    and stack_record.phase in {"PRE", "POST"}
+                ):
+                    tagged_stacks[
+                        (stack_record.instruction_index, stack_record.phase)
+                    ].append(stack_record)
+                else:
+                    # Legacy untagged format fallback:
+                    # If stack line appears immediately after a trace line for a push mnemonic,
+                    # treat it as that instruction's post-push dump; otherwise keep it pending
+                    # as pre-stack for the next parsed instruction.
+                    if (
+                        current_entry is not None
+                        and current_entry.mnemonic in STACK_PUSH_MNEMONICS
+                    ):
+                        current_post_records.append(stack_record)
+                    else:
+                        pending_untagged_stacks.append(stack_record)
+                continue
+
             parsed = parse_log_line(raw)
             if parsed is not None:
-                yield parsed
+                finalized = finalize_current_entry()
+                if finalized is not None:
+                    yield finalized
+
+                current_entry = parsed
+                current_pre_records = tagged_stacks.pop((parsed.index, "PRE"), [])
+                current_post_records = tagged_stacks.pop((parsed.index, "POST"), [])
+
+                if (
+                    not current_pre_records
+                    and not current_post_records
+                    and pending_untagged_stacks
+                ):
+                    current_pre_records = pending_untagged_stacks
+                pending_untagged_stacks = []
+
+    finalized = finalize_current_entry()
+    if finalized is not None:
+        yield finalized
 
 
 def parse_source_instruction_line(
@@ -393,6 +589,9 @@ def parse_trace_log(
 
     with log_path.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
+            if parse_stack_dump_line(line) is not None:
+                continue
+
             parsed = parse_log_line(line)
             if parsed is None:
                 invalid_count += 1
@@ -426,6 +625,15 @@ def with_fallback_pc_symbol(
         pre_pc=entry.pre_pc,
         post_pc=entry.post_pc,
         pc_symbol=names[0],
+        pre_a=entry.pre_a,
+        pre_x=entry.pre_x,
+        pre_y=entry.pre_y,
+        pre_p=entry.pre_p,
+        pre_sp=entry.pre_sp,
+        pre_stack_bytes=entry.pre_stack_bytes,
+        post_stack_bytes=entry.post_stack_bytes,
+        pre_stack_lines=entry.pre_stack_lines,
+        post_stack_lines=entry.post_stack_lines,
     )
 
 
@@ -696,29 +904,14 @@ def choose_source_label_target(
     return min(pool, key=lambda idx: abs(idx - current_source_index))
 
 
-def stack_push_value_for_instruction(
-    mnemonic: str,
-    trace_entry: TraceEntry,
+def derive_rts_return_pc_from_trace_stack(
+    trace_stack_bytes: Sequence[int] | None,
 ) -> int | None:
-    if mnemonic == "PHA":
-        return trace_entry.pre_a
-    if mnemonic == "PHX":
-        return trace_entry.pre_x
-    if mnemonic == "PHY":
-        return trace_entry.pre_y
-    if mnemonic == "PHP":
-        return trace_entry.pre_p
-    return None
-
-
-def derive_rts_return_pc_from_stack(
-    emulated_stack_bytes: Sequence[int] | None,
-) -> int | None:
-    if emulated_stack_bytes is None or len(emulated_stack_bytes) < 2:
+    if trace_stack_bytes is None or len(trace_stack_bytes) < 2:
         return None
 
-    low = emulated_stack_bytes[-1] & 0xFF
-    high = emulated_stack_bytes[-2] & 0xFF
+    low = trace_stack_bytes[0] & 0xFF
+    high = trace_stack_bytes[1] & 0xFF
     return (((high << 8) | low) + 1) & 0xFFFF
 
 
@@ -726,25 +919,37 @@ def detect_rts_alignment_issue(
     trace_entry: TraceEntry,
     source_inst: SourceInstruction,
     source_pos: int,
-    emulated_stack_bytes: Sequence[int] | None,
 ) -> SyncIssue | None:
+    if trace_entry.mnemonic != "RTS":
+        return None
     if source_inst.mnemonic != "RTS":
         return None
     if trace_entry.post_pc is None:
         return None
 
-    derived_return_pc = derive_rts_return_pc_from_stack(emulated_stack_bytes)
-    if derived_return_pc is None:
-        return None
-    if derived_return_pc == trace_entry.post_pc:
+    if trace_entry.pre_stack_bytes is None or len(trace_entry.pre_stack_bytes) < 2:
+        return SyncIssue(
+            "rts-insufficient-trace-stack",
+            (
+                f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS to "
+                f"${trace_entry.post_pc:04X}: trace stack bytes missing or insufficient "
+                f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+            ),
+        )
+
+    trace_stack_return_pc = derive_rts_return_pc_from_trace_stack(
+        trace_entry.pre_stack_bytes
+    )
+    # trace_stack_return_pc is non-None here; pre_stack_bytes length >= 2 is guaranteed.
+    if trace_stack_return_pc == trace_entry.post_pc:
         return None
 
     return SyncIssue(
         "rts-return-mismatch",
         (
             f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS returned to "
-            f"${trace_entry.post_pc:04X}, but emulated stack top implies "
-            f"${derived_return_pc:04X} "
+            f"${trace_entry.post_pc:04X}, but trace stack top implies "
+            f"${trace_stack_return_pc:04X} "
             f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
         ),
     )
@@ -755,10 +960,13 @@ def advance_source_position(
     source_pos: int,
     source: list[SourceInstruction],
     label_to_source_indexes: dict[str, list[int]],
-    return_stack: list[tuple[int, int | None]],
+    return_frames: list[tuple[int, int | None]] | None = None,
     observed_next_pc: int | None = None,
-    emulated_stack_bytes: list[int] | None = None,
+    runtime_symbols_by_addr: dict[int, list[str]] | None = None,
 ) -> int:
+    if return_frames is None:
+        return_frames = []
+
     source_inst = source[source_pos]
     mnemonic = source_inst.mnemonic
     next_source_pos = source_pos + 1
@@ -808,66 +1016,67 @@ def advance_source_position(
             if target_idx is not None:
                 next_source_pos = target_idx
                 stepped_into_callee = True
+        elif (
+            observed_post_pc is not None
+            and observed_post_pc != return_pc
+            and runtime_symbols_by_addr is not None
+        ):
+            for candidate_label in runtime_symbols_by_addr.get(observed_post_pc, []):
+                target_idx = choose_source_label_target(
+                    candidate_label,
+                    source_pos,
+                    source,
+                    label_to_source_indexes,
+                )
+                if target_idx is not None:
+                    next_source_pos = target_idx
+                    stepped_into_callee = True
+                    break
 
         if stepped_into_callee:
-            return_stack.append((source_pos + 1, return_pc))
-
-            if emulated_stack_bytes is not None:
-                jsr_stack_return_addr = (return_pc - 1) & 0xFFFF
-                emulated_stack_bytes.append((jsr_stack_return_addr >> 8) & 0xFF)
-                emulated_stack_bytes.append(jsr_stack_return_addr & 0xFF)
-
-    pushed_stack_byte = stack_push_value_for_instruction(mnemonic, trace_entry)
-    if pushed_stack_byte is not None and emulated_stack_bytes is not None:
-        emulated_stack_bytes.append(pushed_stack_byte & 0xFF)
-
-    if mnemonic in {"PLA", "PLP", "PLX", "PLY"} and emulated_stack_bytes is not None:
-        if emulated_stack_bytes:
-            emulated_stack_bytes.pop()
+            dump_return_pc = derive_rts_return_pc_from_trace_stack(
+                trace_entry.post_stack_bytes
+            )
+            return_frames.append((source_pos + 1, dump_return_pc or return_pc))
 
     if mnemonic == "RTS":
-        derived_post_pc = derive_rts_return_pc_from_stack(emulated_stack_bytes)
-        if derived_post_pc is not None and emulated_stack_bytes is not None:
-            low = emulated_stack_bytes.pop() & 0xFF
-            high = emulated_stack_bytes.pop() & 0xFF
-            assert (((high << 8) | low) + 1) & 0xFFFF == derived_post_pc
-
+        trace_derived_pc = derive_rts_return_pc_from_trace_stack(
+            trace_entry.pre_stack_bytes
+        )
         effective_post_pc = (
-            derived_post_pc if derived_post_pc is not None else observed_post_pc
+            trace_derived_pc if trace_derived_pc is not None else observed_post_pc
         )
 
-        if return_stack:
+        if return_frames:
             if effective_post_pc is not None:
-                for i in range(len(return_stack) - 1, -1, -1):
-                    return_index, return_pc = return_stack[i]
+                for i in range(len(return_frames) - 1, -1, -1):
+                    return_index, return_pc = return_frames[i]
                     if return_pc == effective_post_pc:
-                        del return_stack[i:]
+                        del return_frames[i:]
                         return return_index
-
-                # No reliable return frame match; fall back to source label lookup.
             else:
-                return_index, _ = return_stack.pop()
+                return_index, _ = return_frames.pop()
                 return return_index
 
         if effective_post_pc is not None:
-            runtime_target_idx = choose_source_label_target(
-                f"L{effective_post_pc:04X}",
-                source_pos,
-                source,
-                label_to_source_indexes,
-            )
-            if runtime_target_idx is not None:
-                return runtime_target_idx
+            runtime_label_candidates = [f"L{effective_post_pc:04X}"]
+            if runtime_symbols_by_addr is not None:
+                runtime_label_candidates.extend(
+                    runtime_symbols_by_addr.get(effective_post_pc, [])
+                )
 
-            # Keep alignment linear if no frame or runtime label target is available.
+            for candidate_label in runtime_label_candidates:
+                runtime_target_idx = choose_source_label_target(
+                    candidate_label,
+                    source_pos,
+                    source,
+                    label_to_source_indexes,
+                )
+                if runtime_target_idx is not None:
+                    return runtime_target_idx
             return next_source_pos
 
         return next_source_pos
-
-    if mnemonic == "RTI" and emulated_stack_bytes is not None:
-        # RTI pulls status and then return address low/high bytes.
-        for _ in range(min(3, len(emulated_stack_bytes))):
-            emulated_stack_bytes.pop()
 
     return next_source_pos
 
@@ -880,7 +1089,6 @@ def prompt_for_help(
     label_to_source_indexes: dict[str, list[int]],
     recent_trace: list[TraceEntry] | None = None,
     last_matched_source_index: int | None = None,
-    recent_stack_snapshots: Sequence[ReturnStackSnapshot | None] | None = None,
     recent_source_indexes: Sequence[int | None] | None = None,
 ) -> tuple[str, int | None]:
     def format_trace_prompt_entry(marker: str, entry: TraceEntry) -> str:
@@ -901,32 +1109,8 @@ def prompt_for_help(
     print("\nPending trace entries:")
     if recent_trace:
         displayed = recent_trace[-6:]
-        displayed_snapshots = (
-            recent_stack_snapshots[-6:] if recent_stack_snapshots else None
-        )
         for entry in displayed:
             print(format_trace_prompt_entry(">>", entry))
-        rts_idx = None
-        for i in range(len(displayed) - 1, -1, -1):
-            if displayed[i].mnemonic == "RTS":
-                rts_idx = i
-                break
-        if rts_idx is not None:
-            snapshot = (
-                displayed_snapshots[rts_idx]
-                if displayed_snapshots is not None
-                and rts_idx < len(displayed_snapshots)
-                else None
-            )
-            print("\nEmulated stack before last shown RTS (top first):")
-            if snapshot is None:
-                print("  (snapshot unavailable)")
-            elif len(snapshot) == 0:
-                print("  (empty)")
-            else:
-                for i, (src_idx, ret_pc) in enumerate(reversed(snapshot)):
-                    pc_str = f"${ret_pc:04X}" if ret_pc is not None else "(unknown)"
-                    print(f"  [{i}] source[{src_idx}], return_pc={pc_str}")
     for idx, entry in enumerate(pending_trace[:5]):
         marker = "=>" if idx == 0 else "  "
         print(format_trace_prompt_entry(marker, entry))
@@ -1211,38 +1395,13 @@ def attempt_indirect_jmp_next_trace_resync(
     )
 
 
-def format_return_stack_for_annotation(snapshot: ReturnStackSnapshot) -> str:
-    if len(snapshot) == 0:
-        return "(empty)"
-
-    frames: list[str] = []
-    for source_idx, return_pc in reversed(snapshot):
-        pc_text = f"${return_pc:04X}" if return_pc is not None else "(unknown)"
-        frames.append(f"source[{source_idx}],return_pc={pc_text}")
-
-    return " | ".join(frames)
-
-
 def build_annotated_line(
     base_line: str,
-    names_here: list[str],
-    source_mnemonic: str,
-    pre_exec_snapshot: ReturnStackSnapshot,
-    post_exec_snapshot: ReturnStackSnapshot,
+    new_names_here: list[str],
 ) -> str:
     suffixes: list[str] = []
-    if names_here:
-        suffixes.append(f"NEW_PC_LABELS: {', '.join(names_here)}")
-    if source_mnemonic == "RTS":
-        suffixes.append(
-            "EMU_STACK_BEFORE_RTS: "
-            + format_return_stack_for_annotation(pre_exec_snapshot)
-        )
-    if len(post_exec_snapshot) > len(pre_exec_snapshot):
-        suffixes.append(
-            "EMU_STACK_AFTER_PUSH: "
-            + format_return_stack_for_annotation(post_exec_snapshot)
-        )
+    if new_names_here:
+        suffixes.append(f"NEW_PC_LABELS: {', '.join(new_names_here)}")
 
     if not suffixes:
         return base_line
@@ -1283,6 +1442,10 @@ def run_alignment(args: argparse.Namespace) -> int:
         return 1
 
     existing_symbols = parse_existing_monitor_symbols(args.symbols_file)
+    existing_symbol_tokens_by_addr: dict[int, set[str]] = {
+        addr: {normalize_label_token(name) for name in names}
+        for addr, names in existing_symbols.items()
+    }
     label_to_source_indexes: dict[str, list[int]] = defaultdict(list)
     for idx, inst in enumerate(source):
         if inst.label:
@@ -1302,11 +1465,9 @@ def run_alignment(args: argparse.Namespace) -> int:
     source_pos: int | None = None
     pending: Deque[TraceEntry] = deque()
     recent_trace: Deque[TraceEntry] = deque(maxlen=6)
-    recent_stack_snapshots: Deque[ReturnStackSnapshot | None] = deque(maxlen=6)
     recent_source_indexes: Deque[int | None] = deque(maxlen=6)
     last_matched_source_index: int | None = None
-    source_return_stack: list[tuple[int, int | None]] = []
-    source_byte_stack: list[int] = []
+    source_return_frames: list[tuple[int, int | None]] = []
     synced = False
     stop_reason = "eof"
 
@@ -1350,7 +1511,6 @@ def run_alignment(args: argparse.Namespace) -> int:
                         label_to_source_indexes,
                         list(recent_trace),
                         last_matched_source_index,
-                        list(recent_stack_snapshots),
                         list(recent_source_indexes),
                     )
                     if action == "quit":
@@ -1358,22 +1518,17 @@ def run_alignment(args: argparse.Namespace) -> int:
                         break
                     if action == "skip":
                         recent_trace.append(pending.popleft())
-                        recent_stack_snapshots.append(None)
                         recent_source_indexes.append(None)
                         continue
                     if action == "jump" and value is not None:
                         source_pos = value
-                        if not args.no_stack_reset_on_manual_jump:
-                            source_return_stack.clear()
-                            source_byte_stack.clear()
+                        source_return_frames.clear()
                         synced = True
                         continue
                     continue
 
                 source_pos = sync_idx
-                # Initial sync always clears stack (previous context is unknown)
-                source_return_stack.clear()
-                source_byte_stack.clear()
+                source_return_frames.clear()
                 synced = True
                 print(
                     f"Synced at source index {source_pos} using window size {args.sync_window}."
@@ -1396,7 +1551,6 @@ def run_alignment(args: argparse.Namespace) -> int:
                     label_to_source_indexes,
                     list(recent_trace),
                     last_matched_source_index,
-                    list(recent_stack_snapshots),
                     list(recent_source_indexes),
                 )
                 if action == "quit":
@@ -1404,15 +1558,12 @@ def run_alignment(args: argparse.Namespace) -> int:
                     break
                 if action == "skip":
                     recent_trace.append(pending.popleft())
-                    recent_stack_snapshots.append(None)
                     recent_source_indexes.append(None)
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
-                    if not args.no_stack_reset_on_manual_jump:
-                        source_return_stack.clear()
-                        source_byte_stack.clear()
+                    source_return_frames.clear()
                     continue
                 continue
 
@@ -1423,7 +1574,6 @@ def run_alignment(args: argparse.Namespace) -> int:
                 trace_entry,
                 source_inst,
                 source_pos,
-                source_byte_stack,
             )
             if rts_alignment_issue is not None:
                 if args.non_interactive:
@@ -1441,7 +1591,6 @@ def run_alignment(args: argparse.Namespace) -> int:
                     label_to_source_indexes,
                     list(recent_trace),
                     last_matched_source_index,
-                    list(recent_stack_snapshots),
                     list(recent_source_indexes),
                 )
                 if action == "quit":
@@ -1449,15 +1598,12 @@ def run_alignment(args: argparse.Namespace) -> int:
                     break
                 if action == "skip":
                     recent_trace.append(pending.popleft())
-                    recent_stack_snapshots.append(None)
                     recent_source_indexes.append(None)
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
-                    if not args.no_stack_reset_on_manual_jump:
-                        source_return_stack.clear()
-                        source_byte_stack.clear()
+                    source_return_frames.clear()
                     continue
                 continue
 
@@ -1470,13 +1616,10 @@ def run_alignment(args: argparse.Namespace) -> int:
                 )
                 if indirect_jmp_resync_idx is not None:
                     recent_trace.append(pending.popleft())
-                    recent_stack_snapshots.append(None)
                     recent_source_indexes.append(None)
                     processed += 1
                     source_pos = indirect_jmp_resync_idx
-                    if not args.no_stack_reset_on_indirect_jmp:
-                        source_return_stack.clear()
-                        source_byte_stack.clear()
+                    source_return_frames.clear()
                     continue
 
                 pc_symbol_resync_idx = attempt_pc_symbol_resync(
@@ -1490,9 +1633,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     and pc_symbol_resync_idx != source_pos
                 ):
                     source_pos = pc_symbol_resync_idx
-                    if not args.no_stack_reset_on_pc_symbol:
-                        source_return_stack.clear()
-                        source_byte_stack.clear()
+                    source_return_frames.clear()
                     continue
 
                 local_resync_idx = attempt_local_auto_resync(
@@ -1505,9 +1646,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                 )
                 if local_resync_idx is not None and local_resync_idx != source_pos:
                     source_pos = local_resync_idx
-                    if not args.no_stack_reset_on_local_resync:
-                        source_return_stack.clear()
-                        source_byte_stack.clear()
+                    source_return_frames.clear()
                     continue
 
                 issue = SyncIssue(
@@ -1531,7 +1670,6 @@ def run_alignment(args: argparse.Namespace) -> int:
                     label_to_source_indexes,
                     list(recent_trace),
                     last_matched_source_index,
-                    list(recent_stack_snapshots),
                     list(recent_source_indexes),
                 )
                 if action == "quit":
@@ -1539,27 +1677,34 @@ def run_alignment(args: argparse.Namespace) -> int:
                     break
                 if action == "skip":
                     recent_trace.append(pending.popleft())
-                    recent_stack_snapshots.append(None)
                     recent_source_indexes.append(None)
                     processed += 1
                     continue
                 if action == "jump" and value is not None:
                     source_pos = value
-                    if not args.no_stack_reset_on_manual_jump:
-                        source_return_stack.clear()
-                        source_byte_stack.clear()
+                    source_return_frames.clear()
                     continue
                 continue
 
+            new_names_here: list[str] = []
             if source_inst.label:
-                discovered[trace_entry.pc].add(source_inst.label)
-
-            pre_exec_snapshot = tuple(source_return_stack)
-            names_here = sorted(discovered.get(trace_entry.pc, set()))
+                source_label_token = normalize_label_token(source_inst.label)
+                discovered_tokens_for_pc = {
+                    normalize_label_token(name) for name in discovered[trace_entry.pc]
+                }
+                if (
+                    source_label_token not in discovered_tokens_for_pc
+                    and not is_pc_label_already_known(
+                        source_inst.label,
+                        trace_entry,
+                        existing_symbol_tokens_by_addr.get(trace_entry.pc, set()),
+                    )
+                ):
+                    discovered[trace_entry.pc].add(source_inst.label)
+                    new_names_here = [source_inst.label]
 
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
-            recent_stack_snapshots.append(pre_exec_snapshot)
             recent_source_indexes.append(source_pos)
             pending.popleft()
             observed_next_pc = pending[0].pc if pending else None
@@ -1568,20 +1713,20 @@ def run_alignment(args: argparse.Namespace) -> int:
                 source_pos,
                 source,
                 label_to_source_indexes,
-                source_return_stack,
+                source_return_frames,
                 observed_next_pc,
-                source_byte_stack,
+                existing_symbols,
             )
 
-            post_exec_snapshot = tuple(source_return_stack)
             line_out = build_annotated_line(
                 trace_entry.full_line,
-                names_here,
-                source_inst.mnemonic,
-                pre_exec_snapshot,
-                post_exec_snapshot,
+                new_names_here,
             )
+            for stack_line in trace_entry.pre_stack_lines:
+                annotated_out.write(stack_line + "\n")
             annotated_out.write(line_out + "\n")
+            for stack_line in trace_entry.post_stack_lines:
+                annotated_out.write(stack_line + "\n")
             processed += 1
 
             if args.max_lines and processed >= args.max_lines:
@@ -1650,6 +1795,85 @@ def run_self_check() -> None:
     assert pc_symbol_trace.pc == 0xFC22
     assert pc_symbol_trace.mnemonic == "LDA"
     assert pc_symbol_trace.pc_symbol == "LFC22"
+
+    assert is_pc_label_already_known("LFC22", pc_symbol_trace, set())
+    assert is_pc_label_already_known("XFC22", pc_symbol_trace, set())
+    assert not is_pc_label_already_known("LFC23", pc_symbol_trace, set())
+    assert is_pc_label_already_known(
+        "DelayLup",
+        TraceEntry(
+            index=9,
+            pc=0x7A25,
+            opcode=0xA9,
+            mnemonic="LDA",
+            operand="#$00",
+            full_line="@9 PC=$7A25 OP=$A9 LDA #$00",
+            pre_pc=0x7A25,
+            post_pc=0x7A27,
+        ),
+        {"DELAYLUP"},
+    )
+
+    parsed_stack_dump = parse_stack_dump_line(
+        "  STACK SP=$FD USED=2: $01FE=$12 $01FF=$25"
+    )
+    assert parsed_stack_dump is not None
+    assert parsed_stack_dump.stack_bytes == (0x12, 0x25)
+    assert parsed_stack_dump.phase is None
+    empty_stack_dump = parse_stack_dump_line("  STACK SP=$FF EMPTY")
+    assert empty_stack_dump is not None
+    assert empty_stack_dump.stack_bytes == ()
+
+    tagged_stack_dump = parse_stack_dump_line(
+        "  STACK META[INSN=3 PHASE=PRE OP=$60 PC=$4001 SP=$FD] SP=$FD USED=2: "
+        "$01FE=$02 $01FF=$30"
+    )
+    assert tagged_stack_dump is not None
+    assert tagged_stack_dump.instruction_index == 3
+    assert tagged_stack_dump.phase == "PRE"
+    assert tagged_stack_dump.opcode == 0x60
+    assert tagged_stack_dump.pc == 0x4001
+    assert tagged_stack_dump.sp == 0xFD
+    assert tagged_stack_dump.stack_bytes == (0x02, 0x30)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        log_file = Path(temp_dir) / "trace.log"
+        log_file.write_text(
+            "\n".join(
+                [
+                    "@1 PC=$3000 OP=$20 JSR $4000 ; PRE PC=$3000 POST PC=$4000",
+                    "  STACK META[INSN=1 PHASE=POST OP=$20 PC=$3000 SP=$FD] SP=$FD USED=2: "
+                    "$01FE=$02 $01FF=$30",
+                    "@2 PC=$4000 OP=$EA NOP ; PRE PC=$4000 POST PC=$4001",
+                    "  STACK META[INSN=3 PHASE=PRE OP=$60 PC=$4001 SP=$FD] SP=$FD USED=2: "
+                    "$01FE=$02 $01FF=$30",
+                    "@3 PC=$4001 OP=$60 RTS ; PRE PC=$4001 POST PC=$3003",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        parsed_entries = list(trace_entries(log_file))
+        assert len(parsed_entries) == 3
+        assert parsed_entries[0].mnemonic == "JSR"
+        assert parsed_entries[0].pre_stack_bytes is None
+        assert parsed_entries[0].post_stack_bytes == (0x02, 0x30)
+        assert parsed_entries[0].pre_stack_lines == ()
+        assert parsed_entries[0].post_stack_lines == (
+            "  STACK META[INSN=1 PHASE=POST OP=$20 PC=$3000 SP=$FD] SP=$FD USED=2: "
+            "$01FE=$02 $01FF=$30",
+        )
+        assert parsed_entries[1].mnemonic == "NOP"
+        assert parsed_entries[1].pre_stack_bytes is None
+        assert parsed_entries[1].pre_stack_lines == ()
+        assert parsed_entries[1].post_stack_lines == ()
+        assert parsed_entries[2].mnemonic == "RTS"
+        assert parsed_entries[2].pre_stack_bytes == (0x02, 0x30)
+        assert parsed_entries[2].pre_stack_lines == (
+            "  STACK META[INSN=3 PHASE=PRE OP=$60 PC=$4001 SP=$FD] SP=$FD USED=2: "
+            "$01FE=$02 $01FF=$30",
+        )
+        assert parsed_entries[2].post_stack_lines == ()
 
     fallback_entry = TraceEntry(
         index=9,
@@ -1759,45 +1983,35 @@ def run_self_check() -> None:
         )
     assert [entry.index for entry in retained_recent_trace] == [1, 2, 3, 4, 5, 6]
 
-    assert format_return_stack_for_annotation(()) == "(empty)"
-    assert (
-        format_return_stack_for_annotation(((4, 0x3003), (9, None)))
-        == "source[9],return_pc=(unknown) | source[4],return_pc=$3003"
-    )
-    assert derive_rts_return_pc_from_stack(None) is None
-    assert derive_rts_return_pc_from_stack([0x99]) is None
-    assert derive_rts_return_pc_from_stack([0x99, 0xD5]) == 0x99D6
+    assert derive_rts_return_pc_from_trace_stack(None) is None
+    assert derive_rts_return_pc_from_trace_stack([0x99]) is None
+    assert derive_rts_return_pc_from_trace_stack([0xD5, 0x99]) == 0x99D6
 
     annotated_plain = build_annotated_line(
         "@1 PC=$3000 OP=$EA NOP",
         [],
-        "NOP",
-        (),
-        (),
     )
     assert annotated_plain == "@1 PC=$3000 OP=$EA NOP"
 
     annotated_rts = build_annotated_line(
         "@2 PC=$3001 OP=$60 RTS",
         ["LB001"],
-        "RTS",
-        ((5, 0x3003),),
-        (),
     )
     assert "NEW_PC_LABELS: LB001" in annotated_rts
-    assert "EMU_STACK_BEFORE_RTS: source[5],return_pc=$3003" in annotated_rts
 
     annotated_push = build_annotated_line(
         "@3 PC=$3002 OP=$20 JSR $4000",
         [],
-        "JSR",
-        ((5, 0x3003),),
-        ((5, 0x3003), (8, 0x3005)),
     )
-    assert (
-        "EMU_STACK_AFTER_PUSH: source[8],return_pc=$3005 | source[5],return_pc=$3003"
-        in annotated_push
+    assert annotated_push == "@3 PC=$3002 OP=$20 JSR $4000"
+
+    # NEW_PC_LABELS should only include labels discovered on this instruction,
+    # not all labels ever discovered for this PC (avoids loop spam).
+    annotated_repeat_pc = build_annotated_line(
+        "@4 PC=$FCA9 OP=$48 PHA",
+        [],
     )
+    assert "NEW_PC_LABELS:" not in annotated_repeat_pc
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -1835,7 +2049,7 @@ Labeled LDA #$01
 
         call_source = [
             SourceInstruction("main.s", 1, "Main", "JSR", "Worker"),
-            SourceInstruction("main.s", 2, "AfterCall", "LDA", "#$01"),
+            SourceInstruction("main.s", 2, "L2003", "LDA", "#$01"),
             SourceInstruction("main.s", 3, None, "STA", "$2000"),
             SourceInstruction("worker.s", 1, "Worker", "PHA", ""),
             SourceInstruction("worker.s", 2, None, "RTS", ""),
@@ -1845,7 +2059,6 @@ Labeled LDA #$01
             if inst.label:
                 call_labels[inst.label.upper()].append(idx)
 
-        return_stack: list[tuple[int, int | None]] = []
         jsr_trace = TraceEntry(
             index=10,
             pc=0x2000,
@@ -1861,13 +2074,10 @@ Labeled LDA #$01
             0,
             call_source,
             call_labels,
-            return_stack,
         )
         assert next_pos == 3
-        assert return_stack == [(1, 0x2003)]
 
-        # Do not push a return frame when JSR does not step into a selected target.
-        no_step_return_stack: list[tuple[int, int | None]] = []
+        # Do not step into callee when JSR appears to return immediately.
         jsr_no_step_trace = TraceEntry(
             index=10,
             pc=0x2000,
@@ -1883,12 +2093,9 @@ Labeled LDA #$01
             0,
             call_source,
             call_labels,
-            no_step_return_stack,
         )
         assert no_step_pos == 1
-        assert no_step_return_stack == []
 
-        return_stack = [(1, 0x2003), (2, 0x2FFF)]
         rts_trace = TraceEntry(
             index=11,
             pc=0x3001,
@@ -1904,13 +2111,10 @@ Labeled LDA #$01
             4,
             call_source,
             call_labels,
-            return_stack,
         )
         assert next_pos == 1
-        assert return_stack == []
 
-        # If post_pc is present and no frame matches it, do not blind-pop stack frames.
-        unmatched_stack: list[tuple[int, int | None]] = [(1, 0x2003), (2, 0x2FFF)]
+        # If post_pc is present and cannot be resolved to a source label, keep linear advance.
         rts_unmatched_trace = TraceEntry(
             index=12,
             pc=0x3001,
@@ -1926,10 +2130,8 @@ Labeled LDA #$01
             4,
             call_source,
             call_labels,
-            unmatched_stack,
         )
         assert unmatched_pos == 5
-        assert unmatched_stack == [(1, 0x2003), (2, 0x2FFF)]
 
         # Phase 3: branch fallback should use observed next PC when post_pc is missing.
         loop_source = [
@@ -1958,7 +2160,6 @@ Labeled LDA #$01
             2,
             loop_source,
             loop_labels,
-            [],
             observed_next_pc=0x2007,
         )
         assert taken_pos == 0
@@ -1978,7 +2179,6 @@ Labeled LDA #$01
             2,
             loop_source,
             loop_labels,
-            [],
             observed_next_pc=0x200D,
         )
         assert not_taken_pos == 3
@@ -1994,17 +2194,14 @@ Labeled LDA #$01
             pre_pc=0x2000,
             post_pc=None,
         )
-        jsr_missing_post_stack: list[tuple[int, int | None]] = []
         jsr_missing_post_pos = advance_source_position(
             jsr_missing_post_return,
             0,
             call_source,
             call_labels,
-            jsr_missing_post_stack,
             observed_next_pc=0x2003,
         )
         assert jsr_missing_post_pos == 1
-        assert jsr_missing_post_stack == []
 
         jsr_missing_post_step = TraceEntry(
             index=16,
@@ -2016,19 +2213,16 @@ Labeled LDA #$01
             pre_pc=0x2000,
             post_pc=None,
         )
-        jsr_missing_post_step_stack: list[tuple[int, int | None]] = []
         jsr_missing_post_step_pos = advance_source_position(
             jsr_missing_post_step,
             0,
             call_source,
             call_labels,
-            jsr_missing_post_step_stack,
             observed_next_pc=0x3000,
         )
         assert jsr_missing_post_step_pos == 3
-        assert jsr_missing_post_step_stack == [(1, 0x2003)]
 
-        # Phase 3: RTS fallback should match stack frame via observed next PC.
+        # Phase 3: RTS fallback should match runtime label via observed next PC.
         rts_missing_post_trace = TraceEntry(
             index=17,
             pc=0x3001,
@@ -2039,102 +2233,39 @@ Labeled LDA #$01
             pre_pc=0x3001,
             post_pc=None,
         )
-        rts_missing_post_stack: list[tuple[int, int | None]] = [
-            (1, 0x2003),
-            (2, 0x2FFF),
-        ]
         rts_missing_post_pos = advance_source_position(
             rts_missing_post_trace,
             4,
             call_source,
             call_labels,
-            rts_missing_post_stack,
             observed_next_pc=0x2003,
         )
         assert rts_missing_post_pos == 1
-        assert rts_missing_post_stack == []
 
-        # Track pushed stack bytes and derive RTS runtime target from them.
-        rts_byte_source = [
-            SourceInstruction("dispatch.s", 1, "Dispatcher", "PHA", ""),
-            SourceInstruction("dispatch.s", 2, None, "DEY", ""),
-            SourceInstruction("dispatch.s", 3, None, "LDA", "$9D21,Y"),
-            SourceInstruction("dispatch.s", 4, None, "PHA", ""),
-            SourceInstruction("dispatch.s", 5, None, "RTS", ""),
-            SourceInstruction("dispatch.s", 6, "L99D6", "LDA", "$12"),
-        ]
-        rts_byte_labels: dict[str, list[int]] = defaultdict(list)
-        for idx, inst in enumerate(rts_byte_source):
-            if inst.label:
-                rts_byte_labels[normalize_label_token(inst.label)].append(idx)
-
-        rts_byte_frames: list[tuple[int, int | None]] = []
-        rts_byte_stack: list[int] = []
-
-        pha_high_trace = TraceEntry(
-            index=100,
-            pc=0xB25C,
-            opcode=0x48,
-            mnemonic="PHA",
-            operand="",
-            full_line="@100 PC=$B25C OP=$48 PHA",
-            pre_pc=0xB25C,
-            post_pc=0xB25D,
-            pre_a=0x99,
-        )
-        pha_high_pos = advance_source_position(
-            pha_high_trace,
-            0,
-            rts_byte_source,
-            rts_byte_labels,
-            rts_byte_frames,
-            emulated_stack_bytes=rts_byte_stack,
-        )
-        assert pha_high_pos == 1
-        assert rts_byte_stack == [0x99]
-
-        pha_low_trace = TraceEntry(
-            index=101,
-            pc=0xB261,
-            opcode=0x48,
-            mnemonic="PHA",
-            operand="",
-            full_line="@101 PC=$B261 OP=$48 PHA",
-            pre_pc=0xB261,
-            post_pc=0xB262,
-            pre_a=0xD5,
-        )
-        pha_low_pos = advance_source_position(
-            pha_low_trace,
-            3,
-            rts_byte_source,
-            rts_byte_labels,
-            rts_byte_frames,
-            emulated_stack_bytes=rts_byte_stack,
-        )
-        assert pha_low_pos == 4
-        assert rts_byte_stack == [0x99, 0xD5]
-
-        rts_from_stack_trace = TraceEntry(
-            index=102,
-            pc=0xB262,
+        # Phase 2: advance_source_position RTS path uses trace stack bytes over observed
+        # post_pc when pre_stack_bytes is available.
+        rts_trace_stack_priority_trace = TraceEntry(
+            index=18,
+            pc=0x3001,
             opcode=0x60,
             mnemonic="RTS",
             operand="",
-            full_line="@102 PC=$B262 OP=$60 RTS",
-            pre_pc=0xB262,
-            post_pc=None,
+            full_line="@18 PC=$3001 OP=$60 RTS",
+            pre_pc=0x3001,
+            post_pc=0x9999,  # observed post_pc would not match any frame
+            pre_stack_bytes=(0x02, 0x20),  # derives to 0x2003
         )
-        rts_from_stack_pos = advance_source_position(
-            rts_from_stack_trace,
+        rts_stack_priority_pos = advance_source_position(
+            rts_trace_stack_priority_trace,
             4,
-            rts_byte_source,
-            rts_byte_labels,
-            rts_byte_frames,
-            emulated_stack_bytes=rts_byte_stack,
+            call_source,
+            call_labels,
         )
-        assert rts_from_stack_pos == 5
-        assert rts_byte_stack == []
+        assert rts_stack_priority_pos == 1
+
+        # Phase 2: detect_rts_alignment_issue returns mismatch-significant issue when
+        # trace stack bytes are missing or insufficient.
+        rts_source = [SourceInstruction("dispatch.s", 1, None, "RTS", "")]
 
         rts_stack_mismatch_issue = detect_rts_alignment_issue(
             TraceEntry(
@@ -2147,36 +2278,50 @@ Labeled LDA #$01
                 pre_pc=0xB262,
                 post_pc=0x7A2D,
             ),
-            rts_byte_source[4],
-            4,
-            [0x99, 0xD5],
+            rts_source[0],
+            0,
         )
         assert rts_stack_mismatch_issue is not None
-        assert rts_stack_mismatch_issue.reason == "rts-return-mismatch"
-        assert "$7A2D" in rts_stack_mismatch_issue.detail
-        assert "$99D6" in rts_stack_mismatch_issue.detail
+        assert rts_stack_mismatch_issue.reason == "rts-insufficient-trace-stack"
 
-        rts_stack_match_issue = detect_rts_alignment_issue(
+        rts_trace_stack_match_issue = detect_rts_alignment_issue(
             TraceEntry(
-                index=104,
+                index=103,
                 pc=0xB262,
                 opcode=0x60,
                 mnemonic="RTS",
                 operand="",
-                full_line="@104 PC=$B262 OP=$60 RTS",
+                full_line="@103 PC=$B262 OP=$60 RTS",
                 pre_pc=0xB262,
-                post_pc=0x99D6,
+                post_pc=0x7A2D,
+                pre_stack_bytes=(0x2C, 0x7A),
             ),
-            rts_byte_source[4],
-            4,
-            [0x99, 0xD5],
+            rts_source[0],
+            0,
         )
-        assert rts_stack_match_issue is None
+        assert rts_trace_stack_match_issue is None
+
+        rts_trace_stack_mismatch_issue = detect_rts_alignment_issue(
+            TraceEntry(
+                index=103,
+                pc=0xB262,
+                opcode=0x60,
+                mnemonic="RTS",
+                operand="",
+                full_line="@103 PC=$B262 OP=$60 RTS",
+                pre_pc=0xB262,
+                post_pc=0x7A2D,
+                pre_stack_bytes=(0xE9, 0x7E),
+            ),
+            rts_source[0],
+            0,
+        )
+        assert rts_trace_stack_mismatch_issue is not None
+        assert rts_trace_stack_mismatch_issue.reason == "rts-return-mismatch"
+        assert "$7EEA" in rts_trace_stack_mismatch_issue.detail
 
         pull_source = [SourceInstruction("pull.s", 1, None, "PLA", "")]
         pull_labels: dict[str, list[int]] = defaultdict(list)
-        pull_frames: list[tuple[int, int | None]] = []
-        pull_stack = [0x42]
         pla_trace = TraceEntry(
             index=103,
             pc=0x3000,
@@ -2192,11 +2337,8 @@ Labeled LDA #$01
             0,
             pull_source,
             pull_labels,
-            pull_frames,
-            emulated_stack_bytes=pull_stack,
         )
         assert pla_pos == 1
-        assert pull_stack == []
 
         # Follow unconditional JMP labels.
         jmp_source = [
@@ -2224,7 +2366,6 @@ Labeled LDA #$01
             0,
             jmp_source,
             jmp_labels,
-            [],
             observed_next_pc=0x2000,
         )
         assert jmp_pos == 2
@@ -2575,21 +2716,13 @@ Labeled LDA #$01
         assert choose_source_label_target("XA75B", 1, xmap_source, xmap_labels) == 0
         assert choose_source_label_target("LA75B", 1, xmap_source, xmap_labels) == 0
 
-    # Phase 1-3: RTS stack snapshot rendered in prompt.
     rts_recent = [
         TraceEntry(200, 0x3000, 0x20, "JSR", "$4000", "@200", None, None),
         TraceEntry(201, 0x4000, 0xA9, "LDA", "#$01", "@201", None, None),
         TraceEntry(202, 0x4002, 0x60, "RTS", "", "@202", None, None),
     ]
-
-    # RTS with non-empty snapshot -> section with frame lines.
-    rts_snapshots_nonempty: list[ReturnStackSnapshot | None] = [
-        (),
-        ((5, 0x3003),),
-        ((5, 0x3003),),
-    ]
-    rts_out1 = io.StringIO()
-    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out1):
+    rts_out = io.StringIO()
+    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out):
         prompt_for_help(
             SyncIssue("mnemonic-mismatch", "test"),
             help_pending_trace,
@@ -2598,63 +2731,8 @@ Labeled LDA #$01
             help_labels,
             rts_recent,
             6,
-            rts_snapshots_nonempty,
         )
-    rts_text1 = rts_out1.getvalue()
-    assert "Emulated stack before last shown RTS (top first):" in rts_text1
-    assert "[0] source[5], return_pc=$3003" in rts_text1
-
-    # RTS with empty snapshot -> explicit empty output.
-    rts_snapshots_empty: list[ReturnStackSnapshot | None] = [None, None, ()]
-    rts_out_empty = io.StringIO()
-    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out_empty):
-        prompt_for_help(
-            SyncIssue("mnemonic-mismatch", "test"),
-            help_pending_trace,
-            help_source,
-            8,
-            help_labels,
-            rts_recent,
-            6,
-            rts_snapshots_empty,
-        )
-    rts_text_empty = rts_out_empty.getvalue()
-    assert "Emulated stack before last shown RTS (top first):" in rts_text_empty
-    assert "(empty)" in rts_text_empty
-
-    # RTS with unavailable snapshot (None) -> fallback line.
-    rts_snapshots_unavail: list[ReturnStackSnapshot | None] = [None, None, None]
-    rts_out2 = io.StringIO()
-    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out2):
-        prompt_for_help(
-            SyncIssue("mnemonic-mismatch", "test"),
-            help_pending_trace,
-            help_source,
-            8,
-            help_labels,
-            rts_recent,
-            6,
-            rts_snapshots_unavail,
-        )
-    rts_text2 = rts_out2.getvalue()
-    assert "Emulated stack before last shown RTS (top first):" in rts_text2
-    assert "(snapshot unavailable)" in rts_text2
-
-    # No RTS in recent trace -> no stack section.
-    rts_out3 = io.StringIO()
-    no_rts_snapshots: list[ReturnStackSnapshot | None] = [None] * len(help_recent_trace)
-    with patch("builtins.input", side_effect=["q"]), redirect_stdout(rts_out3):
-        prompt_for_help(
-            help_issue,
-            help_pending_trace,
-            help_source,
-            8,
-            help_labels,
-            help_recent_trace,
-            6,
-            no_rts_snapshots,
-        )
-    assert "Emulated stack before last shown RTS" not in rts_out3.getvalue()
+    assert "Emulated stack before last shown RTS" not in rts_out.getvalue()
 
     print("self-check passed")
 
@@ -2760,26 +2838,6 @@ def parse_args() -> argparse.Namespace:
         "--run-after-self-check",
         action="store_true",
         help="Continue into alignment run after --self-check completes.",
-    )
-    parser.add_argument(
-        "--no-stack-reset-on-indirect-jmp",
-        action="store_true",
-        help="Preserve stack across indirect jump resynchronization.",
-    )
-    parser.add_argument(
-        "--no-stack-reset-on-pc-symbol",
-        action="store_true",
-        help="Preserve stack when resyncing to PC-symbol matched instruction.",
-    )
-    parser.add_argument(
-        "--no-stack-reset-on-local-resync",
-        action="store_true",
-        help="Preserve stack across local n-gram resynchronization.",
-    )
-    parser.add_argument(
-        "--no-stack-reset-on-manual-jump",
-        action="store_true",
-        help="Preserve stack when user manually jumps to a source position.",
     )
     return parser.parse_args()
 

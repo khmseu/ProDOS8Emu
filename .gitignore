@@ -41,7 +41,7 @@ _codeql_detected_source_root
 *.log
 EDASM.SRC/
 inputs/
+new_labels_kMonitorSymbols.txt
 third_party_docs/
 typescript
 work/
-new_labels_kMonitorSymbols.txt
