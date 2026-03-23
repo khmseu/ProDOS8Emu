@@ -116,6 +116,8 @@ EQU_STAR_RE = re.compile(
     re.IGNORECASE,
 )
 
+RUNTIME_LABEL_ADDR_RE = re.compile(r"^[LX]([0-9A-F]{4})$")
+
 
 def parse_trace_state_fields(section: str) -> dict[str, int]:
     fields: dict[str, int] = {}
@@ -904,7 +906,7 @@ def choose_source_label_target(
     return min(pool, key=lambda idx: abs(idx - current_source_index))
 
 
-def derive_rts_return_pc_from_trace_stack(
+def derive_stack_top_addr_from_trace_stack(
     trace_stack_bytes: Sequence[int] | None,
 ) -> int | None:
     if trace_stack_bytes is None or len(trace_stack_bytes) < 2:
@@ -912,7 +914,16 @@ def derive_rts_return_pc_from_trace_stack(
 
     low = trace_stack_bytes[0] & 0xFF
     high = trace_stack_bytes[1] & 0xFF
-    return (((high << 8) | low) + 1) & 0xFFFF
+    return ((high << 8) | low) & 0xFFFF
+
+
+def derive_rts_return_pc_from_trace_stack(
+    trace_stack_bytes: Sequence[int] | None,
+) -> int | None:
+    stack_top_addr = derive_stack_top_addr_from_trace_stack(trace_stack_bytes)
+    if stack_top_addr is None:
+        return None
+    return (stack_top_addr + 1) & 0xFFFF
 
 
 def detect_rts_alignment_issue(
@@ -955,6 +966,34 @@ def detect_rts_alignment_issue(
     )
 
 
+def record_runtime_label_event(
+    runtime_label_events: list[dict[str, object]] | None,
+    kind: str,
+    trace_entry: TraceEntry,
+    runtime_label: str,
+    target_source_idx: int,
+    source: list[SourceInstruction],
+) -> None:
+    if runtime_label_events is None:
+        return
+
+    if not (0 <= target_source_idx < len(source)):
+        return
+
+    target = source[target_source_idx]
+    runtime_label_events.append(
+        {
+            "kind": kind,
+            "trace_index": trace_entry.index,
+            "trace_pc": trace_entry.pc,
+            "runtime_label": runtime_label,
+            "target_source_index": target_source_idx,
+            "target_source_file": target.file_path,
+            "target_source_line": target.line_number,
+        }
+    )
+
+
 def advance_source_position(
     trace_entry: TraceEntry,
     source_pos: int,
@@ -963,9 +1002,15 @@ def advance_source_position(
     return_frames: list[tuple[int, int | None]] | None = None,
     observed_next_pc: int | None = None,
     runtime_symbols_by_addr: dict[int, list[str]] | None = None,
+    runtime_label_events: list[dict[str, object]] | None = None,
+    jsr_stack_associations: dict[int, int] | None = None,
+    rts_miss_log: list[str] | None = None,
+    jsr_assoc_log: list[str] | None = None,
 ) -> int:
     if return_frames is None:
         return_frames = []
+    if jsr_stack_associations is None:
+        jsr_stack_associations = {}
 
     source_inst = source[source_pos]
     mnemonic = source_inst.mnemonic
@@ -1031,6 +1076,14 @@ def advance_source_position(
                 if target_idx is not None:
                     next_source_pos = target_idx
                     stepped_into_callee = True
+                    record_runtime_label_event(
+                        runtime_label_events,
+                        "jsr-runtime-fallback",
+                        trace_entry,
+                        candidate_label,
+                        target_idx,
+                        source,
+                    )
                     break
 
         if stepped_into_callee:
@@ -1039,13 +1092,47 @@ def advance_source_position(
             )
             return_frames.append((source_pos + 1, dump_return_pc or return_pc))
 
+        pushed_return_addr = derive_stack_top_addr_from_trace_stack(
+            trace_entry.post_stack_bytes
+        )
+        if pushed_return_addr is None:
+            pushed_return_addr = (return_pc - 1) & 0xFFFF
+        jsr_stack_associations[pushed_return_addr] = source_pos + 1
+        if jsr_assoc_log is not None:
+            jsr_assoc_log.append(
+                f"  JSR @{trace_entry.index} PC=${trace_entry.pc:04X} "
+                f"assoc: ${pushed_return_addr:04X}->src[{source_pos + 1}]"
+            )
+
     if mnemonic == "RTS":
+        stack_top_addr = derive_stack_top_addr_from_trace_stack(
+            trace_entry.pre_stack_bytes
+        )
         trace_derived_pc = derive_rts_return_pc_from_trace_stack(
             trace_entry.pre_stack_bytes
         )
         effective_post_pc = (
             trace_derived_pc if trace_derived_pc is not None else observed_post_pc
         )
+
+        if stack_top_addr is not None and stack_top_addr in jsr_stack_associations:
+            return jsr_stack_associations.pop(stack_top_addr)
+
+        if rts_miss_log is not None:
+            looked_for = (
+                f"${stack_top_addr:04X}" if stack_top_addr is not None else "none"
+            )
+            assoc_entries = (
+                ", ".join(
+                    f"${k:04X}->src[{v}]"
+                    for k, v in sorted(jsr_stack_associations.items())
+                )
+                or "(empty)"
+            )
+            rts_miss_log.append(
+                f"  RTS @{trace_entry.index} PC=${trace_entry.pc:04X} "
+                f"non-assoc: looked-for={looked_for} assocs={{{assoc_entries}}}"
+            )
 
         if return_frames:
             if effective_post_pc is not None:
@@ -1073,6 +1160,14 @@ def advance_source_position(
                     label_to_source_indexes,
                 )
                 if runtime_target_idx is not None:
+                    record_runtime_label_event(
+                        runtime_label_events,
+                        "rts-runtime-fallback",
+                        trace_entry,
+                        candidate_label,
+                        runtime_target_idx,
+                        source,
+                    )
                     return runtime_target_idx
             return next_source_pos
 
@@ -1343,6 +1438,8 @@ def attempt_pc_symbol_resync(
     source: list[SourceInstruction],
     label_to_source_indexes: dict[str, list[int]],
     current_source_index: int,
+    runtime_label_events: list[dict[str, object]] | None = None,
+    event_kind: str = "pc-symbol-resync",
 ) -> int | None:
     # Prefer exact runtime address labels (Lxxxx / Xxxxx canonicalized to Lxxxx)
     # over semantic aliases (e.g. COUT), because aliases can map to non-relocated
@@ -1355,17 +1452,36 @@ def attempt_pc_symbol_resync(
         label_to_source_indexes,
     )
     if runtime_idx is not None:
+        if runtime_idx != current_source_index:
+            record_runtime_label_event(
+                runtime_label_events,
+                event_kind,
+                trace_entry,
+                runtime_label,
+                runtime_idx,
+                source,
+            )
         return runtime_idx
 
     if trace_entry.pc_symbol is None:
         return None
 
-    return choose_source_label_target(
+    pc_symbol_idx = choose_source_label_target(
         trace_entry.pc_symbol,
         current_source_index,
         source,
         label_to_source_indexes,
     )
+    if pc_symbol_idx is not None and pc_symbol_idx != current_source_index:
+        record_runtime_label_event(
+            runtime_label_events,
+            event_kind,
+            trace_entry,
+            trace_entry.pc_symbol,
+            pc_symbol_idx,
+            source,
+        )
+    return pc_symbol_idx
 
 
 def attempt_indirect_jmp_next_trace_resync(
@@ -1373,6 +1489,7 @@ def attempt_indirect_jmp_next_trace_resync(
     source: list[SourceInstruction],
     label_to_source_indexes: dict[str, list[int]],
     current_source_index: int,
+    runtime_label_events: list[dict[str, object]] | None = None,
 ) -> int | None:
     if len(pending) < 2:
         return None
@@ -1392,6 +1509,8 @@ def attempt_indirect_jmp_next_trace_resync(
         source,
         label_to_source_indexes,
         current_source_index,
+        runtime_label_events=runtime_label_events,
+        event_kind="indirect-jmp-next-trace-resync",
     )
 
 
@@ -1435,6 +1554,118 @@ def write_discovered_labels(
     return entries_written, aliases_written
 
 
+def runtime_label_to_addr(runtime_label: object) -> int | None:
+    if not isinstance(runtime_label, str):
+        return None
+
+    normalized = normalize_label_token(runtime_label)
+    match = RUNTIME_LABEL_ADDR_RE.match(normalized)
+    if match is None:
+        return None
+    return int(match.group(1), 16)
+
+
+def coerce_event_int(value: object, default: int = -1) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return default
+        if text.startswith("$"):
+            text = "0x" + text[1:]
+        try:
+            return int(text, 0)
+        except ValueError:
+            return default
+    return default
+
+
+def dedupe_runtime_label_events(
+    runtime_label_events: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    deduped: list[dict[str, object]] = []
+    seen: set[tuple[object, ...]] = set()
+
+    for event in runtime_label_events:
+        kind = str(event.get("kind", ""))
+        trace_index = coerce_event_int(event.get("trace_index", -1), -1)
+        trace_pc = coerce_event_int(event.get("trace_pc", -1), -1)
+        runtime_label = str(event.get("runtime_label", ""))
+        runtime_label_token = normalize_label_token(runtime_label)
+        runtime_addr = runtime_label_to_addr(runtime_label)
+        target_source_index = coerce_event_int(event.get("target_source_index", -1), -1)
+        target_source_file = str(event.get("target_source_file", ""))
+        target_source_line = coerce_event_int(event.get("target_source_line", -1), -1)
+
+        # Keep encounter order stable while suppressing duplicate runtime-recovery records.
+        dedupe_key = (
+            kind,
+            trace_pc,
+            runtime_label_token,
+            runtime_addr,
+            target_source_index,
+            target_source_file,
+            target_source_line,
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        deduped.append(
+            {
+                "kind": kind,
+                "trace_index": trace_index,
+                "trace_pc": trace_pc,
+                "runtime_label": runtime_label,
+                "runtime_label_token": runtime_label_token,
+                "runtime_addr": runtime_addr,
+                "target_source_index": target_source_index,
+                "target_source_file": target_source_file,
+                "target_source_line": target_source_line,
+            }
+        )
+
+    return deduped
+
+
+def write_runtime_label_report(
+    out_path: Path,
+    runtime_label_events: list[dict[str, object]],
+) -> tuple[int, int]:
+    deduped_events = dedupe_runtime_label_events(runtime_label_events)
+    duplicate_count = len(runtime_label_events) - len(deduped_events)
+
+    rows = [
+        "kind\ttrace_index\ttrace_pc\truntime_label\truntime_label_token\truntime_addr\ttarget_source_index\ttarget_source_file\ttarget_source_line"
+    ]
+    for event in deduped_events:
+        runtime_addr = event["runtime_addr"]
+        runtime_addr_text = (
+            f"${runtime_addr:04X}"
+            if isinstance(runtime_addr, int) and runtime_addr >= 0
+            else ""
+        )
+        rows.append(
+            "\t".join(
+                [
+                    str(event["kind"]),
+                    str(event["trace_index"]),
+                    f"${coerce_event_int(event['trace_pc'], -1) & 0xFFFF:04X}",
+                    str(event["runtime_label"]),
+                    str(event["runtime_label_token"]),
+                    runtime_addr_text,
+                    str(event["target_source_index"]),
+                    str(event["target_source_file"]),
+                    str(event["target_source_line"]),
+                ]
+            )
+        )
+
+    out_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return len(deduped_events), duplicate_count
+
+
 def run_alignment(args: argparse.Namespace) -> int:
     source = parse_source_tree(args.source_root)
     if not source:
@@ -1468,6 +1699,8 @@ def run_alignment(args: argparse.Namespace) -> int:
     recent_source_indexes: Deque[int | None] = deque(maxlen=6)
     last_matched_source_index: int | None = None
     source_return_frames: list[tuple[int, int | None]] = []
+    jsr_stack_associations: dict[int, int] = {}
+    runtime_label_events: list[dict[str, object]] = []
     synced = False
     stop_reason = "eof"
 
@@ -1613,6 +1846,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source,
                     label_to_source_indexes,
                     source_pos,
+                    runtime_label_events=runtime_label_events,
                 )
                 if indirect_jmp_resync_idx is not None:
                     recent_trace.append(pending.popleft())
@@ -1627,6 +1861,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source,
                     label_to_source_indexes,
                     source_pos,
+                    runtime_label_events=runtime_label_events,
                 )
                 if (
                     pc_symbol_resync_idx is not None
@@ -1708,6 +1943,8 @@ def run_alignment(args: argparse.Namespace) -> int:
             recent_source_indexes.append(source_pos)
             pending.popleft()
             observed_next_pc = pending[0].pc if pending else None
+            rts_miss_log: list[str] = []
+            jsr_assoc_log: list[str] = []
             source_pos = advance_source_position(
                 trace_entry,
                 source_pos,
@@ -1716,6 +1953,10 @@ def run_alignment(args: argparse.Namespace) -> int:
                 source_return_frames,
                 observed_next_pc,
                 existing_symbols,
+                runtime_label_events,
+                jsr_stack_associations,
+                rts_miss_log,
+                jsr_assoc_log,
             )
 
             line_out = build_annotated_line(
@@ -1724,6 +1965,10 @@ def run_alignment(args: argparse.Namespace) -> int:
             )
             for stack_line in trace_entry.pre_stack_lines:
                 annotated_out.write(stack_line + "\n")
+            for debug_line in jsr_assoc_log:
+                annotated_out.write(debug_line + "\n")
+            for debug_line in rts_miss_log:
+                annotated_out.write(debug_line + "\n")
             annotated_out.write(line_out + "\n")
             for stack_line in trace_entry.post_stack_lines:
                 annotated_out.write(stack_line + "\n")
@@ -1741,14 +1986,21 @@ def run_alignment(args: argparse.Namespace) -> int:
         discovered,
         existing_symbols,
     )
+    runtime_events_written, runtime_event_duplicates = write_runtime_label_report(
+        args.runtime_label_report,
+        runtime_label_events,
+    )
 
     print("\nAlignment summary")
     print(f"  processed trace instructions: {processed}")
     print(f"  stop reason: {stop_reason}")
     print(f"  annotated log: {args.annotated_log}")
     print(f"  new labels file: {args.new_labels}")
+    print(f"  runtime-label report (TSV): {args.runtime_label_report}")
     print(f"  inserted-ready entries: {entries_written}")
     print(f"  alias entries (same address, additional names): {aliases_written}")
+    print(f"  runtime-label entries: {runtime_events_written}")
+    print(f"  runtime-label duplicates removed: {runtime_event_duplicates}")
 
     if stop_reason not in {"eof", "max-lines"}:
         print("  NOTE: stopped at unresolved sync point (help required).")
@@ -2074,6 +2326,7 @@ Labeled LDA #$01
             0,
             call_source,
             call_labels,
+            runtime_label_events=[],
         )
         assert next_pos == 3
 
@@ -2093,8 +2346,24 @@ Labeled LDA #$01
             0,
             call_source,
             call_labels,
+            runtime_label_events=[],
         )
         assert no_step_pos == 1
+
+        # Non-runtime JSR should not emit any runtime label events or push a return frame.
+        jsr_no_step_frames: list[tuple[int, int | None]] = []
+        jsr_no_step_events: list[dict[str, object]] = []
+        no_step_pos_with_events = advance_source_position(
+            jsr_no_step_trace,
+            0,
+            call_source,
+            call_labels,
+            return_frames=jsr_no_step_frames,
+            runtime_label_events=jsr_no_step_events,
+        )
+        assert no_step_pos_with_events == 1
+        assert jsr_no_step_frames == []
+        assert jsr_no_step_events == []
 
         rts_trace = TraceEntry(
             index=11,
@@ -2106,13 +2375,90 @@ Labeled LDA #$01
             pre_pc=0x3001,
             post_pc=0x2003,
         )
+        return_frames: list[tuple[int, int | None]] = []
+        jsr_non_runtime_events: list[dict[str, object]] = []
+        next_pos = advance_source_position(
+            jsr_trace,
+            0,
+            call_source,
+            call_labels,
+            return_frames=return_frames,
+            runtime_label_events=jsr_non_runtime_events,
+        )
+        assert next_pos == 3
+        assert return_frames == [(1, 0x2003)]
+        assert jsr_non_runtime_events == []
+
+        # JSR should record a stack-top association and assoc diagnostic line.
+        jsr_assoc_map: dict[int, int] = {}
+        jsr_assoc_lines: list[str] = []
+        _ = advance_source_position(
+            jsr_trace,
+            0,
+            call_source,
+            call_labels,
+            return_frames=[],
+            runtime_label_events=[],
+            jsr_stack_associations=jsr_assoc_map,
+            jsr_assoc_log=jsr_assoc_lines,
+        )
+        assert jsr_assoc_map.get(0x2002) == 1
+        assert any("assoc:" in line for line in jsr_assoc_lines)
+
+        rts_non_runtime_events: list[dict[str, object]] = []
         next_pos = advance_source_position(
             rts_trace,
             4,
             call_source,
             call_labels,
+            return_frames=return_frames,
+            runtime_label_events=rts_non_runtime_events,
         )
         assert next_pos == 1
+        assert return_frames == []
+        assert rts_non_runtime_events == []
+
+        # RTS should use stack-top association before fallback label logic.
+        rts_assoc_pos = advance_source_position(
+            TraceEntry(
+                index=18,
+                pc=0x3001,
+                opcode=0x60,
+                mnemonic="RTS",
+                operand="",
+                full_line="@18 PC=$3001 OP=$60 RTS",
+                pre_pc=0x3001,
+                post_pc=0x9999,
+                pre_stack_bytes=(0x02, 0x20),
+            ),
+            4,
+            call_source,
+            call_labels,
+            jsr_stack_associations={0x2002: 1},
+        )
+        assert rts_assoc_pos == 1
+
+        # RTS should emit non-assoc diagnostics when association lookup misses.
+        rts_non_assoc_lines: list[str] = []
+        _ = advance_source_position(
+            TraceEntry(
+                index=19,
+                pc=0x3001,
+                opcode=0x60,
+                mnemonic="RTS",
+                operand="",
+                full_line="@19 PC=$3001 OP=$60 RTS",
+                pre_pc=0x3001,
+                post_pc=0x2003,
+                pre_stack_bytes=(0x03, 0x20),
+            ),
+            4,
+            call_source,
+            call_labels,
+            jsr_stack_associations={0x2002: 1},
+            rts_miss_log=rts_non_assoc_lines,
+        )
+        assert any("non-assoc:" in line for line in rts_non_assoc_lines)
 
         # If post_pc is present and cannot be resolved to a source label, keep linear advance.
         rts_unmatched_trace = TraceEntry(
@@ -2222,6 +2568,41 @@ Labeled LDA #$01
         )
         assert jsr_missing_post_step_pos == 3
 
+        # Phase 1: capture runtime-required JSR fallback success via runtime symbols.
+        jsr_runtime_fallback_trace = TraceEntry(
+            index=160,
+            pc=0x2000,
+            opcode=0x20,
+            mnemonic="JSR",
+            operand="$3000",
+            full_line="@160 PC=$2000 OP=$20 JSR $3000",
+            pre_pc=0x2000,
+            post_pc=0x3000,
+        )
+        jsr_runtime_fallback_source = [
+            SourceInstruction("jsr_runtime.s", 1, "Main", "JSR", "$3000"),
+            SourceInstruction("jsr_runtime.s", 2, "AfterMain", "NOP", ""),
+            SourceInstruction("jsr_runtime.s", 3, "Worker", "RTS", ""),
+        ]
+        jsr_runtime_fallback_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(jsr_runtime_fallback_source):
+            if inst.label:
+                jsr_runtime_fallback_labels[inst.label.upper()].append(idx)
+        jsr_runtime_events: list[dict[str, object]] = []
+        jsr_runtime_fallback_pos = advance_source_position(
+            jsr_runtime_fallback_trace,
+            0,
+            jsr_runtime_fallback_source,
+            jsr_runtime_fallback_labels,
+            runtime_symbols_by_addr={0x3000: ["Worker"]},
+            runtime_label_events=jsr_runtime_events,
+        )
+        assert jsr_runtime_fallback_pos == 2
+        assert len(jsr_runtime_events) == 1
+        assert jsr_runtime_events[0]["kind"] == "jsr-runtime-fallback"
+        assert jsr_runtime_events[0]["runtime_label"] == "Worker"
+        assert jsr_runtime_events[0]["target_source_index"] == 2
+
         # Phase 3: RTS fallback should match runtime label via observed next PC.
         rts_missing_post_trace = TraceEntry(
             index=17,
@@ -2241,6 +2622,21 @@ Labeled LDA #$01
             observed_next_pc=0x2003,
         )
         assert rts_missing_post_pos == 1
+
+        # Phase 1: capture runtime-required RTS fallback success when stack assoc miss.
+        rts_runtime_events: list[dict[str, object]] = []
+        rts_runtime_pos = advance_source_position(
+            rts_trace,
+            4,
+            call_source,
+            call_labels,
+            runtime_label_events=rts_runtime_events,
+        )
+        assert rts_runtime_pos == 1
+        assert len(rts_runtime_events) == 1
+        assert rts_runtime_events[0]["kind"] == "rts-runtime-fallback"
+        assert rts_runtime_events[0]["runtime_label"] == "L2003"
+        assert rts_runtime_events[0]["target_source_index"] == 1
 
         # Phase 2: advance_source_position RTS path uses trace stack bytes over observed
         # post_pc when pre_stack_bytes is available.
@@ -2629,6 +3025,7 @@ Labeled LDA #$01
             pc_symbol_source,
             pc_symbol_labels,
             current_source_index=0,
+            runtime_label_events=[],
         )
         assert pc_symbol_idx == 1
 
@@ -2658,8 +3055,59 @@ Labeled LDA #$01
             pc_addr_source,
             pc_addr_labels,
             current_source_index=0,
+            runtime_label_events=[],
         )
         assert pc_addr_idx == 1
+
+        # Phase 1: capture runtime-required mismatch PC-symbol resync.
+        pc_symbol_runtime_events: list[dict[str, object]] = []
+        pc_symbol_runtime_idx = attempt_pc_symbol_resync(
+            pc_symbol_entry,
+            pc_symbol_source,
+            pc_symbol_labels,
+            current_source_index=0,
+            runtime_label_events=pc_symbol_runtime_events,
+        )
+        assert pc_symbol_runtime_idx == 1
+        assert len(pc_symbol_runtime_events) == 1
+        assert pc_symbol_runtime_events[0]["kind"] == "pc-symbol-resync"
+        assert pc_symbol_runtime_events[0]["runtime_label"] == "Far"
+        assert pc_symbol_runtime_events[0]["target_source_index"] == 1
+
+        # No event should be recorded if candidate equals current source index.
+        pc_symbol_same_events: list[dict[str, object]] = []
+        pc_symbol_same_idx = attempt_pc_symbol_resync(
+            pc_symbol_entry,
+            pc_symbol_source,
+            pc_symbol_labels,
+            current_source_index=1,
+            runtime_label_events=pc_symbol_same_events,
+        )
+        assert pc_symbol_same_idx == 1
+        assert pc_symbol_same_events == []
+
+        # No event should be recorded when runtime and pc_symbol lookups fail.
+        pc_symbol_miss_events: list[dict[str, object]] = []
+        pc_symbol_miss_entry = TraceEntry(
+            index=42,
+            pc=0xB222,
+            opcode=0xEA,
+            mnemonic="NOP",
+            operand="",
+            full_line="@42 PC=$B222 OP=$EA NOP",
+            pre_pc=None,
+            post_pc=None,
+            pc_symbol="NoMatch",
+        )
+        pc_symbol_miss_idx = attempt_pc_symbol_resync(
+            pc_symbol_miss_entry,
+            pc_symbol_source,
+            pc_symbol_labels,
+            current_source_index=0,
+            runtime_label_events=pc_symbol_miss_events,
+        )
+        assert pc_symbol_miss_idx is None
+        assert pc_symbol_miss_events == []
 
         indirect_jmp_source = [
             SourceInstruction("ijmp.s", 1, "LB3D9", "CMP", "#$E0"),
@@ -2700,8 +3148,38 @@ Labeled LDA #$01
             indirect_jmp_source,
             indirect_jmp_labels,
             current_source_index=0,
+            runtime_label_events=[],
         )
         assert indirect_jmp_idx == 0
+
+        # No event should be recorded if indirect-JMP candidate equals current index.
+        indirect_jmp_same_events: list[dict[str, object]] = []
+        indirect_jmp_same_idx = attempt_indirect_jmp_next_trace_resync(
+            pending_indirect_jmp,
+            indirect_jmp_source,
+            indirect_jmp_labels,
+            current_source_index=0,
+            runtime_label_events=indirect_jmp_same_events,
+        )
+        assert indirect_jmp_same_idx == 0
+        assert indirect_jmp_same_events == []
+
+        # Phase 1: capture runtime-required mismatch indirect-JMP resync.
+        indirect_jmp_runtime_events: list[dict[str, object]] = []
+        indirect_jmp_runtime_idx = attempt_indirect_jmp_next_trace_resync(
+            pending_indirect_jmp,
+            indirect_jmp_source,
+            indirect_jmp_labels,
+            current_source_index=1,
+            runtime_label_events=indirect_jmp_runtime_events,
+        )
+        assert indirect_jmp_runtime_idx == 0
+        assert len(indirect_jmp_runtime_events) == 1
+        assert (
+            indirect_jmp_runtime_events[0]["kind"] == "indirect-jmp-next-trace-resync"
+        )
+        assert indirect_jmp_runtime_events[0]["runtime_label"] == "LB3D9"
+        assert indirect_jmp_runtime_events[0]["target_source_index"] == 0
 
         # Xhhhh and Lhhhh labels should resolve to the same source target.
         xmap_source = [
@@ -2715,6 +3193,66 @@ Labeled LDA #$01
 
         assert choose_source_label_target("XA75B", 1, xmap_source, xmap_labels) == 0
         assert choose_source_label_target("LA75B", 1, xmap_source, xmap_labels) == 0
+
+        # Runtime-label report should be TSV and dedupe duplicate runtime events.
+        runtime_report = root / "runtime_labels_needed.tsv"
+        report_events = [
+            {
+                "kind": "rts-runtime-fallback",
+                "trace_index": 11,
+                "trace_pc": 0x3001,
+                "runtime_label": "L2003",
+                "target_source_index": 1,
+                "target_source_file": "main.s",
+                "target_source_line": 2,
+            },
+            {
+                "kind": "rts-runtime-fallback",
+                "trace_index": 11,
+                "trace_pc": 0x3001,
+                "runtime_label": "L2003",
+                "target_source_index": 1,
+                "target_source_file": "main.s",
+                "target_source_line": 2,
+            },
+            {
+                "kind": "jsr-runtime-fallback",
+                "trace_index": 160,
+                "trace_pc": 0x2000,
+                "runtime_label": "Worker",
+                "target_source_index": 2,
+                "target_source_file": "jsr_runtime.s",
+                "target_source_line": 3,
+            },
+        ]
+        report_written, report_duplicates = write_runtime_label_report(
+            runtime_report,
+            report_events,
+        )
+        report_lines = runtime_report.read_text(encoding="utf-8").splitlines()
+        assert report_written == 2
+        assert report_duplicates == 1
+        assert report_lines[0].startswith("kind\ttrace_index\ttrace_pc\t")
+        assert len(report_lines) == 3
+        assert (
+            "rts-runtime-fallback\t11\t$3001\tL2003\tL2003\t$2003\t1\tmain.s\t2"
+            in report_lines
+        )
+        assert (
+            "jsr-runtime-fallback\t160\t$2000\tWorker\tWORKER\t\t2\tjsr_runtime.s\t3"
+            in report_lines
+        )
+
+        empty_runtime_report = root / "runtime_labels_needed.empty.tsv"
+        empty_written, empty_duplicates = write_runtime_label_report(
+            empty_runtime_report,
+            [],
+        )
+        empty_lines = empty_runtime_report.read_text(encoding="utf-8").splitlines()
+        assert empty_written == 0
+        assert empty_duplicates == 0
+        assert len(empty_lines) == 1
+        assert empty_lines[0].startswith("kind\ttrace_index\ttrace_pc\t")
 
     rts_recent = [
         TraceEntry(200, 0x3000, 0x20, "JSR", "$4000", "@200", None, None),
@@ -2733,6 +3271,10 @@ Labeled LDA #$01
             6,
         )
     assert "Emulated stack before last shown RTS" not in rts_out.getvalue()
+
+    with patch("sys.argv", ["disassembly_log_analyzer.py"]):
+        parsed_defaults = parse_args()
+    assert parsed_defaults.runtime_label_report == Path("runtime_labels_needed.tsv")
 
     print("self-check passed")
 
@@ -2806,6 +3348,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("new_labels_kMonitorSymbols.txt"),
         help="Path to write insertion-ready kMonitorSymbols lines.",
+    )
+    parser.add_argument(
+        "--runtime-label-report",
+        type=Path,
+        default=Path("runtime_labels_needed.tsv"),
+        help="Path to write runtime-label-required source-recovery TSV.",
     )
     parser.add_argument(
         "--sync-window",

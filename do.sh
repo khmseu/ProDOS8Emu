@@ -5,6 +5,7 @@
 #   d - Build and run disassembler
 #   m - Run external script from PEAdisasm project (requires ../PEAdisasm/work/am.sh)
 #   a - Run disassembly log analyzer
+#   v - Generate diff of annotated disassembly log
 #   h - Show this help message
 
 case "$1" in
@@ -24,11 +25,14 @@ m)
 a)
 	python3 tools/disassembly_log_analyzer.py
 	;;
+v)
+	./tools/diff_continuation_lines.py prodos8emu_disassembly_trace.log prodos8emu_disassembly_trace.annotated.log >prodos8emu_disassembly_trace.diff
+	;;
 h)
 	head -n 9 "$0" | tail -n +2
 	;;
 *)
-	echo "Usage: $0 {a|d|m|h}"
+	echo "Usage: $0 {a|d|m|v|h}"
 	echo "Run '$0 h' for help."
 	;;
 esac

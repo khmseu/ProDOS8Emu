@@ -5,8 +5,10 @@ Pipeline:
 1. Read each file and fold continuation lines using `|`.
     - For `STACK META[...]` lines, attach by `INSN`/`PHASE`.
     - For legacy untagged indented lines, attach to current line.
-2. Compute a diff of changed lines only.
-3. Sort by the first token after the diff marker, then by marker.
+2. Compute a diff stream.
+   - Prefer instruction-index keyed compare when lines are `@<n> ...` records.
+   - Fall back to SequenceMatcher for generic text.
+3. Sort by the first token after the diff marker (default).
 4. Split folded lines back on `|` and print to stdout.
 """
 
@@ -14,7 +16,7 @@ from __future__ import annotations
 
 import argparse
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -138,18 +140,103 @@ def fold_continuation_lines(path: Path) -> list[str]:
 
 
 def diff_changed_lines(left: list[str], right: list[str]) -> list[DiffEntry]:
-    """Return changed lines only, marked as left ('<') or right ('>')."""
+    """Return diff stream, including unchanged lines marked '='."""
 
     matcher = SequenceMatcher(a=left, b=right, autojunk=False)
     out: list[DiffEntry] = []
 
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            out.extend(DiffEntry("=", line) for line in left[i1:i2])
+            continue
         if tag in {"replace", "delete"}:
             out.extend(DiffEntry("<", line) for line in left[i1:i2])
         if tag in {"replace", "insert"}:
             out.extend(DiffEntry(">", line) for line in right[j1:j2])
 
     return out
+
+
+def instruction_index_from_line(line: str) -> int | None:
+    match = INSTRUCTION_INDEX_RE.match(line)
+    if match is None:
+        return None
+    return int(match.group("index"))
+
+
+def diff_changed_lines_by_instruction_index(
+    left: list[str],
+    right: list[str],
+) -> list[DiffEntry] | None:
+    """Return changed lines by keyed instruction index when possible.
+
+    This avoids degenerate tail replace blocks on large trace logs where
+    SequenceMatcher can produce low-quality alignment.
+    """
+
+    left_indexed: dict[int, str] = {}
+    right_indexed: dict[int, str] = {}
+    left_non_indexed: list[str] = []
+    right_non_indexed: list[str] = []
+
+    for line in left:
+        idx = instruction_index_from_line(line)
+        if idx is None:
+            left_non_indexed.append(line)
+            continue
+        if idx in left_indexed:
+            return None
+        left_indexed[idx] = line
+
+    for line in right:
+        idx = instruction_index_from_line(line)
+        if idx is None:
+            right_non_indexed.append(line)
+            continue
+        if idx in right_indexed:
+            return None
+        right_indexed[idx] = line
+
+    # If neither side looks instruction-indexed, caller should use generic diff.
+    if not left_indexed and not right_indexed:
+        return None
+
+    entries: list[DiffEntry] = []
+    for idx in sorted(set(left_indexed) | set(right_indexed)):
+        left_line = left_indexed.get(idx)
+        right_line = right_indexed.get(idx)
+        if left_line is None and right_line is not None:
+            entries.append(DiffEntry(">", right_line))
+            continue
+        if right_line is None and left_line is not None:
+            entries.append(DiffEntry("<", left_line))
+            continue
+        if left_line is None or right_line is None:
+            # Defensive guard for type narrowing; logically unreachable here.
+            continue
+        if left_line == right_line:
+            entries.append(DiffEntry("=", left_line))
+        else:
+            entries.append(DiffEntry("<", left_line))
+            entries.append(DiffEntry(">", right_line))
+
+    # Preserve visibility of non-indexed/orphan lines without disabling keyed diff.
+    left_counts = Counter(left_non_indexed)
+    right_counts = Counter(right_non_indexed)
+    for line in sorted(set(left_counts) | set(right_counts)):
+        l_count = left_counts.get(line, 0)
+        r_count = right_counts.get(line, 0)
+        common = min(l_count, r_count)
+        for _ in range(common):
+            entries.append(DiffEntry("=", line))
+        if l_count > r_count:
+            for _ in range(l_count - r_count):
+                entries.append(DiffEntry("<", line))
+        elif r_count > l_count:
+            for _ in range(r_count - l_count):
+                entries.append(DiffEntry(">", line))
+
+    return entries
 
 
 def first_token(text: str) -> str:
@@ -199,6 +286,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("left", type=Path, help="First input file")
     parser.add_argument("right", type=Path, help="Second input file")
+    parser.add_argument(
+        "--changes-only",
+        action="store_true",
+        help="Only emit differing lines (omit unchanged '=' records).",
+    )
+    parser.add_argument(
+        "--preserve-order",
+        action="store_true",
+        help="Preserve diff emission order instead of token sorting.",
+    )
     return parser.parse_args()
 
 
@@ -208,9 +305,16 @@ def main() -> int:
     left_lines = fold_continuation_lines(args.left)
     right_lines = fold_continuation_lines(args.right)
 
-    entries = diff_changed_lines(left_lines, right_lines)
-    sorted_entries = sort_entries(entries)
-    print_split_entries(sorted_entries)
+    entries = diff_changed_lines_by_instruction_index(left_lines, right_lines)
+    if entries is None:
+        entries = diff_changed_lines(left_lines, right_lines)
+
+    if args.changes_only:
+        entries = [entry for entry in entries if entry.marker != "="]
+
+    if not args.preserve_order:
+        entries = sort_entries(entries)
+    print_split_entries(entries)
 
     return 0
 
