@@ -111,12 +111,20 @@ MONITOR_SYMBOL_RE = re.compile(
     r"\{\s*0x(?P<addr>[0-9A-Fa-f]+)\s*,\s*\"(?P<name>[^\"]+)\""
 )
 
+SIMPLE_LABEL_EXPR_RE = re.compile(
+    r"^(?P<label>[A-Za-z_][A-Za-z0-9_\.]*)" r"(?:\s*(?P<op>[+-])\s*(?P<const>[^\s]+))?$"
+)
+
 EQU_STAR_RE = re.compile(
     r"^(?P<label>[^\s:;]+)\s+EQU\s+\*$",
     re.IGNORECASE,
 )
 
 RUNTIME_LABEL_ADDR_RE = re.compile(r"^[LX]([0-9A-F]{4})$")
+
+# Matches a $-prefixed hex address of 4 or 2 digits that is not part of a longer hex run.
+# 4-digit alternative is listed first so absolute addresses win over ZP prefixes.
+OPERAND_ADDR_ANY_RE = re.compile(r"\$([0-9A-Fa-f]{4}|[0-9A-Fa-f]{2})(?![0-9A-Fa-f])")
 
 
 def parse_trace_state_fields(section: str) -> dict[str, int]:
@@ -556,6 +564,101 @@ def parse_source_tree(source_root: Path) -> list[SourceInstruction]:
     return instructions
 
 
+def _eval_preprocessor_condition(expr: str) -> bool:
+    cleaned = expr.split("//", 1)[0].strip()
+    if not cleaned:
+        return True
+    if cleaned.startswith("defined"):
+        # Macro-aware evaluation is out of scope; default to active.
+        return True
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = cleaned[1:-1].strip()
+    try:
+        return int(cleaned, 0) != 0
+    except ValueError:
+        return True
+
+
+def strip_inactive_preprocessor_blocks(text: str) -> str:
+    out_lines: list[str] = []
+    stack: list[dict[str, bool]] = []
+    active = True
+
+    directive_re = re.compile(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$")
+
+    for line in text.splitlines(keepends=True):
+        match = directive_re.match(line)
+        if match is None:
+            if active:
+                out_lines.append(line)
+            continue
+
+        kind = match.group(1)
+        tail = match.group(2).strip()
+
+        if kind == "if":
+            parent_active = active
+            cond = _eval_preprocessor_condition(tail)
+            branch_active = parent_active and cond
+            stack.append(
+                {
+                    "parent_active": parent_active,
+                    "seen_true": cond,
+                    "branch_active": branch_active,
+                }
+            )
+            active = branch_active
+            continue
+
+        if kind in {"ifdef", "ifndef"}:
+            parent_active = active
+            branch_active = parent_active
+            stack.append(
+                {
+                    "parent_active": parent_active,
+                    "seen_true": True,
+                    "branch_active": branch_active,
+                }
+            )
+            active = branch_active
+            continue
+
+        if kind == "elif":
+            if not stack:
+                continue
+            frame = stack[-1]
+            parent_active = frame["parent_active"]
+            if not parent_active or frame["seen_true"]:
+                frame["branch_active"] = False
+                active = False
+            else:
+                cond = _eval_preprocessor_condition(tail)
+                frame["branch_active"] = parent_active and cond
+                frame["seen_true"] = cond
+                active = frame["branch_active"]
+            continue
+
+        if kind == "else":
+            if not stack:
+                continue
+            frame = stack[-1]
+            parent_active = frame["parent_active"]
+            branch_active = parent_active and not frame["seen_true"]
+            frame["branch_active"] = branch_active
+            frame["seen_true"] = True
+            active = branch_active
+            continue
+
+        if kind == "endif":
+            if not stack:
+                continue
+            frame = stack.pop()
+            active = frame["parent_active"]
+            continue
+
+    return "".join(out_lines)
+
+
 def parse_existing_monitor_symbols(symbols_file: Path) -> dict[int, list[str]]:
     text = symbols_file.read_text(encoding="utf-8", errors="replace")
 
@@ -571,7 +674,7 @@ def parse_existing_monitor_symbols(symbols_file: Path) -> dict[int, list[str]]:
     if block_end < 0:
         block_end = len(text)
 
-    block = text[block_start:block_end]
+    block = strip_inactive_preprocessor_blocks(text[block_start:block_end])
 
     symbols: dict[int, list[str]] = defaultdict(list)
     for match in MONITOR_SYMBOL_RE.finditer(block):
@@ -691,9 +794,10 @@ def branch_label_from_source(inst: SourceInstruction) -> str | None:
 
     # For BBR/BBS branch label is usually the last operand; for other branches it is first.
     token = pieces[-1] if inst.mnemonic in {"BBR", "BBS"} else pieces[0]
-    if token.startswith("$") or token.startswith("#"):
+    parsed = parse_simple_label_expression(token)
+    if parsed is None:
         return None
-    return token.rstrip(":")
+    return parsed[0]
 
 
 def call_label_from_source(inst: SourceInstruction) -> str | None:
@@ -703,9 +807,10 @@ def call_label_from_source(inst: SourceInstruction) -> str | None:
     token = inst.operand.split(",", 1)[0].strip().split(" ", 1)[0]
     if not token:
         return None
-    if token.startswith("$") or token.startswith("#") or token[0].isdigit():
+    parsed = parse_simple_label_expression(token)
+    if parsed is None:
         return None
-    return token.rstrip(":")
+    return parsed[0]
 
 
 def jump_label_from_source(inst: SourceInstruction) -> str | None:
@@ -717,9 +822,212 @@ def jump_label_from_source(inst: SourceInstruction) -> str | None:
         return None
     if token.startswith("("):
         return None
-    if token.startswith("$") or token.startswith("#") or token[0].isdigit():
+    parsed = parse_simple_label_expression(token)
+    if parsed is None:
         return None
-    return token.rstrip(":")
+    return parsed[0]
+
+
+def parse_numeric_constant(token: str) -> int | None:
+    text = token.strip()
+    if not text:
+        return None
+
+    if text.startswith("$"):
+        digits = text[1:]
+        if not digits or not all(ch in "0123456789ABCDEFabcdef" for ch in digits):
+            return None
+        return int(digits, 16)
+
+    if text.startswith("0x") or text.startswith("0X"):
+        try:
+            return int(text, 16)
+        except ValueError:
+            return None
+
+    if text.isdigit():
+        return int(text, 10)
+
+    return None
+
+
+def parse_simple_label_expression(expr: str) -> tuple[str, int] | None:
+    """Parse `LABEL` or `LABEL +/- constant`.
+
+    Returns `(label, signed_offset)` where the source expression means:
+        resolved_address = label + signed_offset
+    """
+    text = expr.strip().rstrip(":")
+    if not text:
+        return None
+    if text.startswith("$") or text.startswith("#") or text[0].isdigit():
+        return None
+
+    match = SIMPLE_LABEL_EXPR_RE.fullmatch(text)
+    if match is None:
+        return None
+
+    label = match.group("label")
+    op = match.group("op")
+    const_raw = match.group("const")
+
+    if op is None:
+        return label, 0
+    if const_raw is None:
+        return None
+
+    const_value = parse_numeric_constant(const_raw)
+    if const_value is None:
+        return None
+
+    signed_offset = const_value if op == "+" else -const_value
+    return label, signed_offset
+
+
+def extract_symbolic_operand_expression(operand: str) -> tuple[str, int] | None:
+    """Extract symbolic core expression from addressing wrappers.
+
+    Examples handled:
+    - `LABEL`
+    - `LABEL+1,X`
+    - `(LABEL-1),Y`
+    """
+    stripped = operand.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+
+    if stripped.startswith("("):
+        close = stripped.find(")")
+        if close == -1:
+            return None
+        inner = stripped[1:close].strip()
+        core = inner.split(",", 1)[0].strip()
+    else:
+        core = stripped.split(",", 1)[0].strip()
+
+    if not core:
+        return None
+
+    return parse_simple_label_expression(core)
+
+
+def operand_symbolic_token(operand: str) -> str | None:
+    """Extract the single symbolic (non-numeric, non-hex) label from a source operand.
+
+    Returns None for immediates (#...), already-numeric operands ($hex), or
+    operands with no recognisable label token.
+    """
+    parsed = extract_symbolic_operand_expression(operand)
+    if parsed is None:
+        return None
+    return parsed[0]
+
+
+def operand_numeric_address_info(operand: str) -> tuple[int, int] | None:
+    """Extract resolved address and width from trace operand.
+
+    Returns `(address, bits)` where `bits` is 8 for `$HH` and 16 for `$HHHH`.
+    """
+    stripped = operand.strip()
+    if stripped.startswith("#"):
+        return None  # immediate constant, not an address
+    m = OPERAND_ADDR_ANY_RE.search(stripped)
+    if m is None:
+        return None
+
+    token = m.group(1)
+    bits = 16 if len(token) == 4 else 8
+    return int(token, 16), bits
+
+
+def operand_numeric_address(operand: str) -> int | None:
+    """Extract the resolved numeric address from a trace operand.
+
+    Returns None for immediate operands (#$XX) or operands containing no hex
+    address.  Prefers 4-digit (absolute) matches; falls back to 2-digit (ZP).
+    """
+    info = operand_numeric_address_info(operand)
+    if info is None:
+        return None
+    return info[0]
+
+
+def derive_base_label_address(
+    resolved_addr: int,
+    addr_bits: int,
+    label_offset: int,
+) -> int:
+    mask = 0xFFFF if addr_bits > 8 else 0x00FF
+    # source expression semantics: resolved_addr = label + label_offset
+    return (resolved_addr - label_offset) & mask
+
+
+def extract_operand_label_pair(
+    source_inst: SourceInstruction,
+    trace_entry: TraceEntry,
+) -> tuple[str, int, str] | None:
+    """Given a matched (source_inst, trace_entry) pair, attempt to extract an
+    (operand_label, resolved_address, flag_string) tuple.
+
+    Returns None when the source operand has no symbolic label or the address
+    cannot be determined from the trace operand.
+    """
+    mnemonic = source_inst.mnemonic
+
+    # Branch instructions: destination is a PC target.
+    if mnemonic in BRANCH_MNEMONICS:
+        pieces = [
+            part.strip() for part in source_inst.operand.split(",") if part.strip()
+        ]
+        if not pieces:
+            return None
+        branch_token = pieces[-1] if mnemonic in {"BBR", "BBS"} else pieces[0]
+        parsed = parse_simple_label_expression(branch_token)
+        if parsed is None:
+            return None
+        label, offset = parsed
+        addr = branch_target_from_trace(trace_entry)
+        if label is not None and addr is not None:
+            base_addr = derive_base_label_address(addr, 16, offset)
+            return label, base_addr, "MonitorSymbolPc"
+        return None
+
+    # JSR: call destination is a PC target.
+    if mnemonic == "JSR":
+        token = source_inst.operand.split(",", 1)[0].strip().split(" ", 1)[0]
+        parsed = parse_simple_label_expression(token)
+        if parsed is not None:
+            label, offset = parsed
+            addrs = operand_addresses_16(trace_entry.operand)
+            if len(addrs) == 1:
+                base_addr = derive_base_label_address(next(iter(addrs)), 16, offset)
+                return label, base_addr, "MonitorSymbolPc"
+        return None
+
+    # JMP: direct forms are PC targets; indirect vectors fall through.
+    if mnemonic == "JMP":
+        token = source_inst.operand.split(",", 1)[0].strip().split(" ", 1)[0]
+        parsed = parse_simple_label_expression(token)
+        if parsed is not None:
+            label, offset = parsed
+            addrs = operand_addresses_16(trace_entry.operand)
+            if len(addrs) == 1:
+                base_addr = derive_base_label_address(next(iter(addrs)), 16, offset)
+                return label, base_addr, "MonitorSymbolPc"
+            return None
+        # Indirect JMP: the operand is the vector address (data) – fall through.
+
+    # General case: single symbolic token in source vs resolved address in trace.
+    expr = extract_symbolic_operand_expression(source_inst.operand)
+    if expr is None:
+        return None
+    label, offset = expr
+    addr_info = operand_numeric_address_info(trace_entry.operand)
+    if addr_info is None:
+        return None
+    resolved_addr, addr_bits = addr_info
+    base_addr = derive_base_label_address(resolved_addr, addr_bits, offset)
+    return label, base_addr, "MonitorSymbolRead | MonitorSymbolWrite"
 
 
 def normalize_operand_text(operand: str) -> str:
@@ -1517,10 +1825,13 @@ def attempt_indirect_jmp_next_trace_resync(
 def build_annotated_line(
     base_line: str,
     new_names_here: list[str],
+    new_operand_labels: list[str] | None = None,
 ) -> str:
     suffixes: list[str] = []
     if new_names_here:
         suffixes.append(f"NEW_PC_LABELS: {', '.join(new_names_here)}")
+    if new_operand_labels:
+        suffixes.append(f"NEW_OP_LABELS: {', '.join(new_operand_labels)}")
 
     if not suffixes:
         return base_line
@@ -1532,9 +1843,11 @@ def write_discovered_labels(
     out_path: Path,
     discovered: dict[int, set[str]],
     existing: dict[int, list[str]],
-) -> tuple[int, int]:
+    discovered_data: dict[int, set[str]] | None = None,
+) -> tuple[int, int, int]:
     entries_written = 0
     aliases_written = 0
+    data_entries_written = 0
 
     lines: list[str] = []
     for addr in sorted(discovered.keys()):
@@ -1550,8 +1863,31 @@ def write_discovered_labels(
             if len(new_names) > 1:
                 aliases_written += 1
 
+    if discovered_data:
+        data_lines: list[str] = []
+        for addr in sorted(discovered_data.keys()):
+            existing_names = set(existing.get(addr, []))
+            # Skip names already emitted as PC labels at the same address.
+            pc_names = {n for n in discovered.get(addr, set())}
+            new_names = sorted(
+                name
+                for name in discovered_data[addr]
+                if name not in existing_names and name not in pc_names
+            )
+            if not new_names:
+                continue
+            for name in new_names:
+                data_lines.append(
+                    f'{{0x{addr:04X}, "{name}", MonitorSymbolRead | MonitorSymbolWrite}},'
+                )
+                data_entries_written += 1
+        if data_lines:
+            if lines:
+                lines.append("// --- operand data labels ---")
+            lines.extend(data_lines)
+
     out_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    return entries_written, aliases_written
+    return entries_written, aliases_written, data_entries_written
 
 
 def runtime_label_to_addr(runtime_label: object) -> int | None:
@@ -1692,6 +2028,7 @@ def run_alignment(args: argparse.Namespace) -> int:
         return 1
 
     discovered: dict[int, set[str]] = defaultdict(set)
+    discovered_data: dict[int, set[str]] = defaultdict(set)
     processed = 0
     source_pos: int | None = None
     pending: Deque[TraceEntry] = deque()
@@ -1938,6 +2275,25 @@ def run_alignment(args: argparse.Namespace) -> int:
                     discovered[trace_entry.pc].add(source_inst.label)
                     new_names_here = [source_inst.label]
 
+            # Operand label discovery: extract a label from the source operand and
+            # map it to the resolved numeric address in the trace operand.
+            new_operand_label_strs: list[str] = []
+            op_pair = extract_operand_label_pair(source_inst, trace_entry)
+            if op_pair is not None:
+                op_label, op_addr, op_flag = op_pair
+                op_token = normalize_label_token(op_label)
+                existing_at = existing_symbol_tokens_by_addr.get(op_addr, set())
+                target_discovered = (
+                    discovered if op_flag == "MonitorSymbolPc" else discovered_data
+                )
+                discovered_at = {
+                    normalize_label_token(n)
+                    for n in target_discovered.get(op_addr, set())
+                }
+                if op_token not in existing_at and op_token not in discovered_at:
+                    target_discovered[op_addr].add(op_label)
+                    new_operand_label_strs = [f"{op_label}=${op_addr:04X}"]
+
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
             recent_source_indexes.append(source_pos)
@@ -1962,6 +2318,7 @@ def run_alignment(args: argparse.Namespace) -> int:
             line_out = build_annotated_line(
                 trace_entry.full_line,
                 new_names_here,
+                new_operand_label_strs,
             )
             for stack_line in trace_entry.pre_stack_lines:
                 annotated_out.write(stack_line + "\n")
@@ -1981,10 +2338,11 @@ def run_alignment(args: argparse.Namespace) -> int:
     finally:
         annotated_out.close()
 
-    entries_written, aliases_written = write_discovered_labels(
+    entries_written, aliases_written, data_entries_written = write_discovered_labels(
         args.new_labels,
         discovered,
         existing_symbols,
+        discovered_data,
     )
     runtime_events_written, runtime_event_duplicates = write_runtime_label_report(
         args.runtime_label_report,
@@ -1999,6 +2357,7 @@ def run_alignment(args: argparse.Namespace) -> int:
     print(f"  runtime-label report (TSV): {args.runtime_label_report}")
     print(f"  inserted-ready entries: {entries_written}")
     print(f"  alias entries (same address, additional names): {aliases_written}")
+    print(f"  operand data label entries: {data_entries_written}")
     print(f"  runtime-label entries: {runtime_events_written}")
     print(f"  runtime-label duplicates removed: {runtime_event_duplicates}")
 
@@ -2781,6 +3140,22 @@ Labeled LDA #$01
         assert symbols[0x0079] == ["SrcP", "UnsortedP"]
         assert symbols[0x00AF] == ["Accum"]
 
+        symbols_if0_file = root / "cpu65c02_if0.cpp"
+        symbols_if0_file.write_text(
+            """static const MonitorSymbol kMonitorSymbols[] = {
+#if 0
+    {0x1234, "DisabledSymbol"},
+#else
+    {0x2345, "EnabledSymbol"},
+#endif
+};
+""",
+            encoding="utf-8",
+        )
+        symbols_if0 = parse_existing_monitor_symbols(symbols_if0_file)
+        assert symbols_if0.get(0x1234) is None
+        assert symbols_if0[0x2345] == ["EnabledSymbol"]
+
         ng = build_ngram_index(parsed_source, window=2)
         key = tuple(inst.mnemonic for inst in parsed_source[:2])
         assert key in ng
@@ -3275,6 +3650,76 @@ Labeled LDA #$01
     with patch("sys.argv", ["disassembly_log_analyzer.py"]):
         parsed_defaults = parse_args()
     assert parsed_defaults.runtime_label_report == Path("runtime_labels_needed.tsv")
+
+    # operand_symbolic_token
+    assert operand_symbolic_token("HOME") == "HOME"
+    assert operand_symbolic_token("HOME,X") == "HOME"
+    assert operand_symbolic_token("(HOME),Y") == "HOME"
+    assert operand_symbolic_token("(HOME,X)") == "HOME"
+    assert operand_symbolic_token("#SPACE") is None
+    assert operand_symbolic_token("$FC58") is None
+    assert operand_symbolic_token("#$20") is None
+    assert operand_symbolic_token("SomeLbl-1,X") == "SomeLbl"
+    assert operand_symbolic_token("SomeLbl+Other,X") is None
+    assert operand_symbolic_token("") is None
+
+    # operand_numeric_address
+    assert operand_numeric_address("$FC58") == 0xFC58
+    assert operand_numeric_address("$FC58,X") == 0xFC58
+    assert operand_numeric_address("($FC58),Y") == 0xFC58
+    assert operand_numeric_address("$20") == 0x20
+    assert operand_numeric_address("$20,X") == 0x20
+    assert operand_numeric_address("#$20") is None
+    assert operand_numeric_address("#$FC58") is None
+
+    # extract_operand_label_pair: JSR symbolic target → MonitorSymbolPc
+    _jsr_src = SourceInstruction("f.s", 1, None, "JSR", "HOME")
+    _jsr_tr = TraceEntry(10, 0x2047, 0x20, "JSR", "$FC58", "@10", None, None)
+    _op = extract_operand_label_pair(_jsr_src, _jsr_tr)
+    assert _op == ("HOME", 0xFC58, "MonitorSymbolPc")
+
+    # extract_operand_label_pair: JSR target with +offset infers base label address
+    _jsr_off_src = SourceInstruction("f.s", 1, None, "JSR", "HOME+$03")
+    _jsr_off_tr = TraceEntry(10, 0x2047, 0x20, "JSR", "$FC5B", "@10", None, None)
+    _op_off = extract_operand_label_pair(_jsr_off_src, _jsr_off_tr)
+    assert _op_off == ("HOME", 0xFC58, "MonitorSymbolPc")
+
+    # extract_operand_label_pair: branch symbolic target → MonitorSymbolPc
+    _bne_src = SourceInstruction("f.s", 2, None, "BNE", "Loop")
+    _bne_tr = TraceEntry(11, 0x2005, 0xD0, "BNE", "$2000", "@11", 0x2005, 0x2000)
+    _op2 = extract_operand_label_pair(_bne_src, _bne_tr)
+    assert _op2 == ("Loop", 0x2000, "MonitorSymbolPc")
+
+    # extract_operand_label_pair: data operand → MonitorSymbolRead | MonitorSymbolWrite
+    _lda_src = SourceInstruction("f.s", 3, None, "LDA", "SomeVar")
+    _lda_tr = TraceEntry(12, 0x2000, 0xAD, "LDA", "$3000", "@12", 0x2000, 0x2003)
+    _op3 = extract_operand_label_pair(_lda_src, _lda_tr)
+    assert _op3 == ("SomeVar", 0x3000, "MonitorSymbolRead | MonitorSymbolWrite")
+
+    # extract_operand_label_pair: data operand with +offset infers base label address
+    _lda_off_src = SourceInstruction("f.s", 3, None, "LDA", "SomeVar+1")
+    _lda_off_tr = TraceEntry(12, 0x2000, 0xAD, "LDA", "$3001", "@12", 0x2000, 0x2003)
+    _op4 = extract_operand_label_pair(_lda_off_src, _lda_off_tr)
+    assert _op4 == ("SomeVar", 0x3000, "MonitorSymbolRead | MonitorSymbolWrite")
+
+    # Zero-page width should wrap/derive in 8-bit space.
+    _zp_off_src = SourceInstruction("f.s", 3, None, "LDA", "ZPVAR+1")
+    _zp_off_tr = TraceEntry(12, 0x2000, 0xA5, "LDA", "$20", "@12", 0x2000, 0x2002)
+    _op5 = extract_operand_label_pair(_zp_off_src, _zp_off_tr)
+    assert _op5 == ("ZPVAR", 0x1F, "MonitorSymbolRead | MonitorSymbolWrite")
+
+    # extract_operand_label_pair: immediate source → None
+    _imm_src = SourceInstruction("f.s", 4, None, "LDA", "#SPACE")
+    _imm_tr = TraceEntry(13, 0x2003, 0xA9, "LDA", "#$20", "@13", 0x2003, 0x2005)
+    assert extract_operand_label_pair(_imm_src, _imm_tr) is None
+
+    # extract_operand_label_pair: already-numeric source operand → None
+    _num_src = SourceInstruction("f.s", 5, None, "LDA", "$3000")
+    assert extract_operand_label_pair(_num_src, _lda_tr) is None
+
+    # extract_operand_label_pair: complex expressions are intentionally ignored
+    _complex_src = SourceInstruction("f.s", 6, None, "LDA", "SomeVar+Other")
+    assert extract_operand_label_pair(_complex_src, _lda_tr) is None
 
     print("self-check passed")
 
