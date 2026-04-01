@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# nosec B101
+# trunk-ignore(bandit/B101)
 """Interactive analyzer to align disassembly trace with EDASM source.
 
 This tool:
@@ -966,12 +968,23 @@ def extract_operand_label_pair(
     source_inst: SourceInstruction,
     trace_entry: TraceEntry,
 ) -> tuple[str, int, str] | None:
-    """Given a matched (source_inst, trace_entry) pair, attempt to extract an
-    (operand_label, resolved_address, flag_string) tuple.
+    """Compatibility wrapper returning at most one extracted operand label pair."""
+    pairs = extract_operand_label_pairs(source_inst, trace_entry)
+    if not pairs:
+        return None
+    return pairs[0]
 
-    Returns None when the source operand has no symbolic label or the address
-    cannot be determined from the trace operand.
+
+def extract_operand_label_pairs(
+    source_inst: SourceInstruction,
+    trace_entry: TraceEntry,
+) -> list[tuple[str, int, str]]:
+    """Given a matched (source_inst, trace_entry) pair, extract operand labels.
+
+    Returns zero or more tuples: (operand_label, resolved_address, flag_string).
+    Use an empty flag string for unflagged data labels.
     """
+    out: list[tuple[str, int, str]] = []
     mnemonic = source_inst.mnemonic
 
     # Branch instructions: destination is a PC target.
@@ -980,17 +993,17 @@ def extract_operand_label_pair(
             part.strip() for part in source_inst.operand.split(",") if part.strip()
         ]
         if not pieces:
-            return None
+            return out
         branch_token = pieces[-1] if mnemonic in {"BBR", "BBS"} else pieces[0]
         parsed = parse_simple_label_expression(branch_token)
         if parsed is None:
-            return None
+            return out
         label, offset = parsed
         addr = branch_target_from_trace(trace_entry)
         if label is not None and addr is not None:
             base_addr = derive_base_label_address(addr, 16, offset)
-            return label, base_addr, "MonitorSymbolPc"
-        return None
+            out.append((label, base_addr, "MonitorSymbolPc"))
+        return out
 
     # JSR: call destination is a PC target.
     if mnemonic == "JSR":
@@ -998,11 +1011,41 @@ def extract_operand_label_pair(
         parsed = parse_simple_label_expression(token)
         if parsed is not None:
             label, offset = parsed
+            if trace_entry.mnemonic == "MLI":
+                # MLI pseudo-op carries call metadata in operands; call target is still $BF00.
+                base_addr = derive_base_label_address(0xBF00, 16, offset)
+                out.append((label, base_addr, "MonitorSymbolPc"))
+                return out
             addrs = operand_addresses_16(trace_entry.operand)
             if len(addrs) == 1:
                 base_addr = derive_base_label_address(next(iter(addrs)), 16, offset)
-                return label, base_addr, "MonitorSymbolPc"
-        return None
+                out.append((label, base_addr, "MonitorSymbolPc"))
+        return out
+
+    # MLI pseudo-op: treat as two-address instruction where source provides
+    # `call_target, param_block`.
+    if mnemonic == "MLI":
+        pieces = [
+            part.strip() for part in source_inst.operand.split(",") if part.strip()
+        ]
+
+        if pieces:
+            call_parsed = parse_simple_label_expression(pieces[0])
+            if call_parsed is not None:
+                call_label, call_offset = call_parsed
+                call_addr = derive_base_label_address(0xBF00, 16, call_offset)
+                out.append((call_label, call_addr, "MonitorSymbolPc"))
+
+        if len(pieces) >= 2:
+            parsed = parse_simple_label_expression(pieces[1])
+            if parsed is None:
+                return out
+            label, offset = parsed
+            addrs = operand_addresses_16(trace_entry.operand)
+            if len(addrs) == 1:
+                base_addr = derive_base_label_address(next(iter(addrs)), 16, offset)
+                out.append((label, base_addr, ""))
+        return out
 
     # JMP: direct forms are PC targets; indirect vectors fall through.
     if mnemonic == "JMP":
@@ -1013,21 +1056,23 @@ def extract_operand_label_pair(
             addrs = operand_addresses_16(trace_entry.operand)
             if len(addrs) == 1:
                 base_addr = derive_base_label_address(next(iter(addrs)), 16, offset)
-                return label, base_addr, "MonitorSymbolPc"
-            return None
+                out.append((label, base_addr, "MonitorSymbolPc"))
+                return out
+            return out
         # Indirect JMP: the operand is the vector address (data) – fall through.
 
     # General case: single symbolic token in source vs resolved address in trace.
     expr = extract_symbolic_operand_expression(source_inst.operand)
     if expr is None:
-        return None
+        return out
     label, offset = expr
     addr_info = operand_numeric_address_info(trace_entry.operand)
     if addr_info is None:
-        return None
+        return out
     resolved_addr, addr_bits = addr_info
     base_addr = derive_base_label_address(resolved_addr, addr_bits, offset)
-    return label, base_addr, "MonitorSymbolRead | MonitorSymbolWrite"
+    out.append((label, base_addr, ""))
+    return out
 
 
 def normalize_operand_text(operand: str) -> str:
@@ -1858,7 +1903,7 @@ def write_discovered_labels(
         if not new_names:
             continue
         for name in new_names:
-            lines.append(f'{{0x{addr:04X}, "{name}", MonitorSymbolPc}},')
+            lines.append(f'{{0x{addr:04X}, "{name}", MonitorSymbolPc}},//')
             entries_written += 1
             if len(new_names) > 1:
                 aliases_written += 1
@@ -1877,9 +1922,7 @@ def write_discovered_labels(
             if not new_names:
                 continue
             for name in new_names:
-                data_lines.append(
-                    f'{{0x{addr:04X}, "{name}", MonitorSymbolRead | MonitorSymbolWrite}},'
-                )
+                data_lines.append(f'{{0x{addr:04X}, "{name}" }},//')
                 data_entries_written += 1
         if data_lines:
             if lines:
@@ -2278,9 +2321,8 @@ def run_alignment(args: argparse.Namespace) -> int:
             # Operand label discovery: extract a label from the source operand and
             # map it to the resolved numeric address in the trace operand.
             new_operand_label_strs: list[str] = []
-            op_pair = extract_operand_label_pair(source_inst, trace_entry)
-            if op_pair is not None:
-                op_label, op_addr, op_flag = op_pair
+            op_pairs = extract_operand_label_pairs(source_inst, trace_entry)
+            for op_label, op_addr, op_flag in op_pairs:
                 op_token = normalize_label_token(op_label)
                 existing_at = existing_symbol_tokens_by_addr.get(op_addr, set())
                 target_discovered = (
@@ -2292,7 +2334,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                 }
                 if op_token not in existing_at and op_token not in discovered_at:
                     target_discovered[op_addr].add(op_label)
-                    new_operand_label_strs = [f"{op_label}=${op_addr:04X}"]
+                    new_operand_label_strs.append(f"{op_label}=${op_addr:04X}")
 
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
@@ -3675,6 +3717,8 @@ Labeled LDA #$01
     # extract_operand_label_pair: JSR symbolic target → MonitorSymbolPc
     _jsr_src = SourceInstruction("f.s", 1, None, "JSR", "HOME")
     _jsr_tr = TraceEntry(10, 0x2047, 0x20, "JSR", "$FC58", "@10", None, None)
+    _ops = extract_operand_label_pairs(_jsr_src, _jsr_tr)
+    assert _ops == [("HOME", 0xFC58, "MonitorSymbolPc")]
     _op = extract_operand_label_pair(_jsr_src, _jsr_tr)
     assert _op == ("HOME", 0xFC58, "MonitorSymbolPc")
 
@@ -3684,29 +3728,62 @@ Labeled LDA #$01
     _op_off = extract_operand_label_pair(_jsr_off_src, _jsr_off_tr)
     assert _op_off == ("HOME", 0xFC58, "MonitorSymbolPc")
 
+    # extract_operand_label_pairs: MLI source emits both JSR target (PC) and param block (data)
+    _mli_src = SourceInstruction("f.s", 1, None, "MLI", "PRODOS8,PBLOCK")
+    _mli_tr = TraceEntry(
+        10,
+        0x2047,
+        0x20,
+        "MLI",
+        ".byte $C8 .word $1234 (OPEN)",
+        "@10",
+        None,
+        None,
+    )
+    _mli_ops = extract_operand_label_pairs(_mli_src, _mli_tr)
+    assert _mli_ops == [
+        ("PRODOS8", 0xBF00, "MonitorSymbolPc"),
+        ("PBLOCK", 0x1234, ""),
+    ]
+
+    # extract_operand_label_pairs: data half of MLI is symbolic-only (no synthetic from trace)
+    _mli_num_src = SourceInstruction("f.s", 1, None, "MLI", "PRODOS8,$1234")
+    _mli_num_ops = extract_operand_label_pairs(_mli_num_src, _mli_tr)
+    assert _mli_num_ops == [("PRODOS8", 0xBF00, "MonitorSymbolPc")]
+
+    # extract_operand_label_pairs: MLI trace matched with JSR source keeps target as PC label
+    _mli_jsr_src = SourceInstruction("f.s", 1, None, "JSR", "PRODOS8")
+    _mli_jsr_ops = extract_operand_label_pairs(_mli_jsr_src, _mli_tr)
+    assert _mli_jsr_ops == [("PRODOS8", 0xBF00, "MonitorSymbolPc")]
+    assert extract_operand_label_pair(_mli_jsr_src, _mli_tr) == (
+        "PRODOS8",
+        0xBF00,
+        "MonitorSymbolPc",
+    )
+
     # extract_operand_label_pair: branch symbolic target → MonitorSymbolPc
     _bne_src = SourceInstruction("f.s", 2, None, "BNE", "Loop")
     _bne_tr = TraceEntry(11, 0x2005, 0xD0, "BNE", "$2000", "@11", 0x2005, 0x2000)
     _op2 = extract_operand_label_pair(_bne_src, _bne_tr)
     assert _op2 == ("Loop", 0x2000, "MonitorSymbolPc")
 
-    # extract_operand_label_pair: data operand → MonitorSymbolRead | MonitorSymbolWrite
+    # extract_operand_label_pair: data operand → no flags
     _lda_src = SourceInstruction("f.s", 3, None, "LDA", "SomeVar")
     _lda_tr = TraceEntry(12, 0x2000, 0xAD, "LDA", "$3000", "@12", 0x2000, 0x2003)
     _op3 = extract_operand_label_pair(_lda_src, _lda_tr)
-    assert _op3 == ("SomeVar", 0x3000, "MonitorSymbolRead | MonitorSymbolWrite")
+    assert _op3 == ("SomeVar", 0x3000, "")
 
     # extract_operand_label_pair: data operand with +offset infers base label address
     _lda_off_src = SourceInstruction("f.s", 3, None, "LDA", "SomeVar+1")
     _lda_off_tr = TraceEntry(12, 0x2000, 0xAD, "LDA", "$3001", "@12", 0x2000, 0x2003)
     _op4 = extract_operand_label_pair(_lda_off_src, _lda_off_tr)
-    assert _op4 == ("SomeVar", 0x3000, "MonitorSymbolRead | MonitorSymbolWrite")
+    assert _op4 == ("SomeVar", 0x3000, "")
 
     # Zero-page width should wrap/derive in 8-bit space.
     _zp_off_src = SourceInstruction("f.s", 3, None, "LDA", "ZPVAR+1")
     _zp_off_tr = TraceEntry(12, 0x2000, 0xA5, "LDA", "$20", "@12", 0x2000, 0x2002)
     _op5 = extract_operand_label_pair(_zp_off_src, _zp_off_tr)
-    assert _op5 == ("ZPVAR", 0x1F, "MonitorSymbolRead | MonitorSymbolWrite")
+    assert _op5 == ("ZPVAR", 0x1F, "")
 
     # extract_operand_label_pair: immediate source → None
     _imm_src = SourceInstruction("f.s", 4, None, "LDA", "#SPACE")

@@ -44,6 +44,7 @@ EDASM.SRC/
 inputs/
 new_labels_kMonitorSymbols.txt
 runtime_labels_needed.tsv
+src/cpu65c02-old.cpp.x
 third_party_docs/
 typescript
 work/
