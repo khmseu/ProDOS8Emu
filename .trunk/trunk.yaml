@@ -24,7 +24,7 @@ lint:
     - bandit@1.9.4
     - black@26.3.1
     - isort@8.0.1
-    - ruff@0.15.8
+    - ruff@0.15.9
     - clang-format@16.0.3
     - yamllint@1.38.0
     - checkov@3.2.513
@@ -33,7 +33,11 @@ lint:
     - oxipng@10.1.0
     - prettier@3.8.1
     - svgo@4.0.1
-    - trufflehog@3.94.1
+    - trufflehog@3.94.2
+  ignore:
+    - linters: [ALL]
+      paths:
+        - plans/**
 actions:
   disabled:
     - trunk-announce
