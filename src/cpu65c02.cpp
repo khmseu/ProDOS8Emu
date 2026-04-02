@@ -1085,7 +1085,7 @@ namespace prodos8emu {
         {0xB35F, "LB35F", MonitorSymbolPc},                           //
         {0xB3A4, "LB3A4", MonitorSymbolPc},                           //
         {0xB3AC, "LB3AC", MonitorSymbolPc},                           //
-        {0xB3D9, "COUT1", MonitorSymbolPc},                           //
+        {0xB3D9, "LB3D9", MonitorSymbolPc},                           //
         {0xB3E8, "LB3E8", MonitorSymbolPc},                           //
         {0xB3E8, "LFDF6", MonitorSymbolPc},                           //
         {0xB3F6, "LB3F6", MonitorSymbolPc},                           //

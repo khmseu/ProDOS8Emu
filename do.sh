@@ -15,12 +15,12 @@ d)
 	;;
 m)
 	AM_SCRIPT="${PRODOS8EMU_AM_SCRIPT:-../PEAdisasm/work/am.sh}"
-	if [ ! -x "$AM_SCRIPT" ]; then
-		echo "Error: am.sh script not found or not executable at '$AM_SCRIPT'." >&2
+	if [[ ! -x ${AM_SCRIPT} ]]; then
+		echo "Error: am.sh script not found or not executable at '${AM_SCRIPT}'." >&2
 		echo "Set PRODOS8EMU_AM_SCRIPT to override the default path if needed." >&2
 		exit 1
 	fi
-	"$AM_SCRIPT"
+	"${AM_SCRIPT}"
 	;;
 a)
 	python3 tools/disassembly_log_analyzer.py

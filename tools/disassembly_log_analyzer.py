@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # nosec B101
-# trunk-ignore(bandit/B101)
 """Interactive analyzer to align disassembly trace with EDASM source.
 
 This tool:
@@ -954,6 +953,14 @@ def operand_numeric_address(operand: str) -> int | None:
     return info[0]
 
 
+def runtime_label_fixed_address(label: str) -> int | None:
+    """Return fixed hex address for runtime labels like L1234/X1234, else None."""
+    match = RUNTIME_LABEL_ADDR_RE.fullmatch(normalize_label_token(label))
+    if match is None:
+        return None
+    return int(match.group(1), 16)
+
+
 def derive_base_label_address(
     resolved_addr: int,
     addr_bits: int,
@@ -1319,6 +1326,65 @@ def detect_rts_alignment_issue(
     )
 
 
+def format_source_location(source: list[SourceInstruction], source_index: int) -> str:
+    if 0 <= source_index < len(source):
+        inst = source[source_index]
+        return f"{inst.file_path}:{inst.line_number}"
+    return f"src[{source_index}]"
+
+
+def build_rts_assoc_diagnostics(
+    trace_entry: TraceEntry,
+    jsr_stack_associations: dict[int, int],
+    source: list[SourceInstruction],
+) -> list[str]:
+    if trace_entry.mnemonic != "RTS":
+        return []
+
+    stack_top_addr = derive_stack_top_addr_from_trace_stack(trace_entry.pre_stack_bytes)
+    looked_for = f"${stack_top_addr:04X}" if stack_top_addr is not None else "none"
+    looked_for_position = (
+        jsr_stack_associations.get(stack_top_addr)
+        if stack_top_addr is not None
+        else None
+    )
+    known_positions_text = (
+        ", ".join(
+            f"${stack_addr:04X}->{format_source_location(source, pos)}"
+            for stack_addr, pos in sorted(jsr_stack_associations.items())
+        )
+        if jsr_stack_associations
+        else "(empty)"
+    )
+    assoc_entries = (
+        ", ".join(
+            f"{format_source_location(source, source_index)}<-${stack_addr:04X}"
+            for stack_addr, source_index in sorted(
+                jsr_stack_associations.items(),
+                key=lambda item: (item[1], item[0]),
+            )
+        )
+        or "(empty)"
+    )
+
+    mode = "assoc-hit" if looked_for_position is not None else "non-assoc"
+    looked_for_position_text = (
+        format_source_location(source, looked_for_position)
+        if looked_for_position is not None
+        else "none"
+    )
+
+    return [
+        (
+            f"  RTS @{trace_entry.index} PC=${trace_entry.pc:04X} "
+            f"{mode}: looked-for={looked_for} "
+            f"looked-for-pos={looked_for_position_text} "
+            f"known-positions=[{known_positions_text}]"
+        ),
+        f"    known-assocs-by-position: {{{assoc_entries}}}",
+    ]
+
+
 def record_runtime_label_event(
     runtime_label_events: list[dict[str, object]] | None,
     kind: str,
@@ -1454,7 +1520,7 @@ def advance_source_position(
         if jsr_assoc_log is not None:
             jsr_assoc_log.append(
                 f"  JSR @{trace_entry.index} PC=${trace_entry.pc:04X} "
-                f"assoc: ${pushed_return_addr:04X}->src[{source_pos + 1}]"
+                f"assoc: ${pushed_return_addr:04X}->{format_source_location(source, source_pos + 1)}"
             )
 
     if mnemonic == "RTS":
@@ -1468,34 +1534,40 @@ def advance_source_position(
             trace_derived_pc if trace_derived_pc is not None else observed_post_pc
         )
 
-        if stack_top_addr is not None and stack_top_addr in jsr_stack_associations:
-            return jsr_stack_associations.pop(stack_top_addr)
-
         if rts_miss_log is not None:
-            looked_for = (
-                f"${stack_top_addr:04X}" if stack_top_addr is not None else "none"
+            rts_miss_log.extend(
+                build_rts_assoc_diagnostics(trace_entry, jsr_stack_associations, source)
             )
-            assoc_entries = (
-                ", ".join(
-                    f"${k:04X}->src[{v}]"
-                    for k, v in sorted(jsr_stack_associations.items())
+
+        if stack_top_addr is not None and stack_top_addr in jsr_stack_associations:
+            assoc_target = jsr_stack_associations[stack_top_addr]
+            if rts_miss_log is not None:
+                rts_miss_log.append(
+                    f"    RTS decision: method=assoc-map "
+                    f"params={{stack-top=${stack_top_addr:04X}, target={format_source_location(source, assoc_target)}}}"
                 )
-                or "(empty)"
-            )
-            rts_miss_log.append(
-                f"  RTS @{trace_entry.index} PC=${trace_entry.pc:04X} "
-                f"non-assoc: looked-for={looked_for} assocs={{{assoc_entries}}}"
-            )
+            return assoc_target
 
         if return_frames:
             if effective_post_pc is not None:
                 for i in range(len(return_frames) - 1, -1, -1):
                     return_index, return_pc = return_frames[i]
                     if return_pc == effective_post_pc:
+                        if rts_miss_log is not None:
+                            rts_miss_log.append(
+                                f"    RTS decision: method=return-frames-pc-match "
+                                f"params={{effective-post-pc=${effective_post_pc:04X}, "
+                                f"matched-frame={i}, target={format_source_location(source, return_index)}}}"
+                            )
                         del return_frames[i:]
                         return return_index
             else:
                 return_index, _ = return_frames.pop()
+                if rts_miss_log is not None:
+                    rts_miss_log.append(
+                        f"    RTS decision: method=return-frames-lifo-fallback "
+                        f"params={{effective-post-pc=none, target={format_source_location(source, return_index)}}}"
+                    )
                 return return_index
 
         if effective_post_pc is not None:
@@ -1521,9 +1593,26 @@ def advance_source_position(
                         runtime_target_idx,
                         source,
                     )
+                    if rts_miss_log is not None:
+                        rts_miss_log.append(
+                            f"    RTS decision: method=runtime-label-fallback "
+                            f"params={{effective-post-pc=${effective_post_pc:04X}, "
+                            f"label={candidate_label}, target={format_source_location(source, runtime_target_idx)}}}"
+                        )
                     return runtime_target_idx
+            if rts_miss_log is not None:
+                rts_miss_log.append(
+                    f"    RTS decision: method=linear-fallback "
+                    f"params={{effective-post-pc=${effective_post_pc:04X}, "
+                    f"next-source={format_source_location(source, next_source_pos)}}}"
+                )
             return next_source_pos
 
+        if rts_miss_log is not None:
+            rts_miss_log.append(
+                f"    RTS decision: method=linear-fallback "
+                f"params={{effective-post-pc=none, next-source={format_source_location(source, next_source_pos)}}}"
+            )
         return next_source_pos
 
     return next_source_pos
@@ -2148,7 +2237,7 @@ def run_alignment(args: argparse.Namespace) -> int:
                 )
 
             # Synced mode: consume one trace instruction at a time.
-            assert source_pos is not None
+            assert source_pos is not None  # nosec B101
             if source_pos >= len(source):
                 issue = SyncIssue(
                     "source-exhausted", "Reached end of source instruction stream."
@@ -2189,6 +2278,11 @@ def run_alignment(args: argparse.Namespace) -> int:
                 source_pos,
             )
             if rts_alignment_issue is not None:
+                for debug_line in build_rts_assoc_diagnostics(
+                    trace_entry, jsr_stack_associations, source
+                ):
+                    annotated_out.write(debug_line + "\n")
+
                 if args.non_interactive:
                     print(
                         f"Stopping: {rts_alignment_issue.reason}: {rts_alignment_issue.detail}"
@@ -2322,7 +2416,21 @@ def run_alignment(args: argparse.Namespace) -> int:
             # map it to the resolved numeric address in the trace operand.
             new_operand_label_strs: list[str] = []
             op_pairs = extract_operand_label_pairs(source_inst, trace_entry)
+            operand_sync_issue: SyncIssue | None = None
             for op_label, op_addr, op_flag in op_pairs:
+                fixed_addr = runtime_label_fixed_address(op_label)
+                if fixed_addr is not None and fixed_addr != op_addr:
+                    operand_sync_issue = SyncIssue(
+                        "operand-label-address-mismatch",
+                        (
+                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} matched "
+                            f"source[{source_pos}] {source_inst.file_path}:{source_inst.line_number}, "
+                            f"but NEW_OP_LABELS candidate {op_label} resolved to ${op_addr:04X} "
+                            f"(expected ${fixed_addr:04X} from label token)."
+                        ),
+                    )
+                    break
+
                 op_token = normalize_label_token(op_label)
                 existing_at = existing_symbol_tokens_by_addr.get(op_addr, set())
                 target_discovered = (
@@ -2335,6 +2443,38 @@ def run_alignment(args: argparse.Namespace) -> int:
                 if op_token not in existing_at and op_token not in discovered_at:
                     target_discovered[op_addr].add(op_label)
                     new_operand_label_strs.append(f"{op_label}=${op_addr:04X}")
+
+            if operand_sync_issue is not None:
+                if args.non_interactive:
+                    print(
+                        f"Stopping: {operand_sync_issue.reason}: {operand_sync_issue.detail}"
+                    )
+                    stop_reason = operand_sync_issue.reason
+                    break
+
+                action, value = prompt_for_help(
+                    operand_sync_issue,
+                    list(pending),
+                    source,
+                    source_pos,
+                    label_to_source_indexes,
+                    list(recent_trace),
+                    last_matched_source_index,
+                    list(recent_source_indexes),
+                )
+                if action == "quit":
+                    stop_reason = operand_sync_issue.reason
+                    break
+                if action == "skip":
+                    recent_trace.append(pending.popleft())
+                    recent_source_indexes.append(None)
+                    processed += 1
+                    continue
+                if action == "jump" and value is not None:
+                    source_pos = value
+                    source_return_frames.clear()
+                    continue
+                continue
 
             last_matched_source_index = source_pos
             recent_trace.append(trace_entry)
@@ -2415,44 +2555,44 @@ def run_self_check() -> None:
         "SP=$FF P=$24 POST PC=$2002 A=$01 X=$00 Y=$00 SP=$FF P=$24"
     )
     parsed_trace = parse_log_line(sample_trace)
-    assert parsed_trace is not None
-    assert parsed_trace.index == 123
-    assert parsed_trace.pc == 0x2000
-    assert parsed_trace.opcode == 0xA9
-    assert parsed_trace.mnemonic == "LDA"
-    assert parsed_trace.operand == "#$01"
-    assert parsed_trace.pre_pc == 0x2000
-    assert parsed_trace.post_pc == 0x2002
-    assert parsed_trace.pre_a == 0x00
-    assert parsed_trace.pre_x == 0x00
-    assert parsed_trace.pre_y == 0x00
-    assert parsed_trace.pre_sp == 0xFF
-    assert parsed_trace.pre_p == 0x24
+    assert parsed_trace is not None  # nosec B101
+    assert parsed_trace.index == 123  # nosec B101
+    assert parsed_trace.pc == 0x2000  # nosec B101
+    assert parsed_trace.opcode == 0xA9  # nosec B101
+    assert parsed_trace.mnemonic == "LDA"  # nosec B101
+    assert parsed_trace.operand == "#$01"  # nosec B101
+    assert parsed_trace.pre_pc == 0x2000  # nosec B101
+    assert parsed_trace.post_pc == 0x2002  # nosec B101
+    assert parsed_trace.pre_a == 0x00  # nosec B101
+    assert parsed_trace.pre_x == 0x00  # nosec B101
+    assert parsed_trace.pre_y == 0x00  # nosec B101
+    assert parsed_trace.pre_sp == 0xFF  # nosec B101
+    assert parsed_trace.pre_p == 0x24  # nosec B101
 
     mli_trace = parse_log_line(
         "@1 PC=$1000 OP=$20 MLI .byte $C8 .word $1234 (OPEN) ; PRE X POST X"
     )
-    assert mli_trace is not None
-    assert mli_trace.mnemonic == "MLI"
+    assert mli_trace is not None  # nosec B101
+    assert mli_trace.mnemonic == "MLI"  # nosec B101
 
     no_operand_trace = parse_log_line(
         "@7 PC=$2002 OP=$9A TXS ; PRE PC=$2002 POST PC=$2003"
     )
-    assert no_operand_trace is not None
-    assert no_operand_trace.operand == ""
+    assert no_operand_trace is not None  # nosec B101
+    assert no_operand_trace.operand == ""  # nosec B101
 
     pc_symbol_trace = parse_log_line(
         "@8 PC=$FC22 (LFC22) OP=$A5 LDA $25 ; PRE PC=$FC22 POST PC=$FC24"
     )
-    assert pc_symbol_trace is not None
-    assert pc_symbol_trace.pc == 0xFC22
-    assert pc_symbol_trace.mnemonic == "LDA"
-    assert pc_symbol_trace.pc_symbol == "LFC22"
+    assert pc_symbol_trace is not None  # nosec B101
+    assert pc_symbol_trace.pc == 0xFC22  # nosec B101
+    assert pc_symbol_trace.mnemonic == "LDA"  # nosec B101
+    assert pc_symbol_trace.pc_symbol == "LFC22"  # nosec B101
 
-    assert is_pc_label_already_known("LFC22", pc_symbol_trace, set())
-    assert is_pc_label_already_known("XFC22", pc_symbol_trace, set())
-    assert not is_pc_label_already_known("LFC23", pc_symbol_trace, set())
-    assert is_pc_label_already_known(
+    assert is_pc_label_already_known("LFC22", pc_symbol_trace, set())  # nosec B101
+    assert is_pc_label_already_known("XFC22", pc_symbol_trace, set())  # nosec B101
+    assert not is_pc_label_already_known("LFC23", pc_symbol_trace, set())  # nosec B101
+    assert is_pc_label_already_known(  # nosec B101
         "DelayLup",
         TraceEntry(
             index=9,
@@ -2470,24 +2610,24 @@ def run_self_check() -> None:
     parsed_stack_dump = parse_stack_dump_line(
         "  STACK SP=$FD USED=2: $01FE=$12 $01FF=$25"
     )
-    assert parsed_stack_dump is not None
-    assert parsed_stack_dump.stack_bytes == (0x12, 0x25)
-    assert parsed_stack_dump.phase is None
+    assert parsed_stack_dump is not None  # nosec B101
+    assert parsed_stack_dump.stack_bytes == (0x12, 0x25)  # nosec B101
+    assert parsed_stack_dump.phase is None  # nosec B101
     empty_stack_dump = parse_stack_dump_line("  STACK SP=$FF EMPTY")
-    assert empty_stack_dump is not None
-    assert empty_stack_dump.stack_bytes == ()
+    assert empty_stack_dump is not None  # nosec B101
+    assert empty_stack_dump.stack_bytes == ()  # nosec B101
 
     tagged_stack_dump = parse_stack_dump_line(
         "  STACK META[INSN=3 PHASE=PRE OP=$60 PC=$4001 SP=$FD] SP=$FD USED=2: "
         "$01FE=$02 $01FF=$30"
     )
-    assert tagged_stack_dump is not None
-    assert tagged_stack_dump.instruction_index == 3
-    assert tagged_stack_dump.phase == "PRE"
-    assert tagged_stack_dump.opcode == 0x60
-    assert tagged_stack_dump.pc == 0x4001
-    assert tagged_stack_dump.sp == 0xFD
-    assert tagged_stack_dump.stack_bytes == (0x02, 0x30)
+    assert tagged_stack_dump is not None  # nosec B101
+    assert tagged_stack_dump.instruction_index == 3  # nosec B101
+    assert tagged_stack_dump.phase == "PRE"  # nosec B101
+    assert tagged_stack_dump.opcode == 0x60  # nosec B101
+    assert tagged_stack_dump.pc == 0x4001  # nosec B101
+    assert tagged_stack_dump.sp == 0xFD  # nosec B101
+    assert tagged_stack_dump.stack_bytes == (0x02, 0x30)  # nosec B101
 
     with tempfile.TemporaryDirectory() as temp_dir:
         log_file = Path(temp_dir) / "trace.log"
@@ -2507,26 +2647,26 @@ def run_self_check() -> None:
             encoding="utf-8",
         )
         parsed_entries = list(trace_entries(log_file))
-        assert len(parsed_entries) == 3
-        assert parsed_entries[0].mnemonic == "JSR"
-        assert parsed_entries[0].pre_stack_bytes is None
-        assert parsed_entries[0].post_stack_bytes == (0x02, 0x30)
-        assert parsed_entries[0].pre_stack_lines == ()
-        assert parsed_entries[0].post_stack_lines == (
+        assert len(parsed_entries) == 3  # nosec B101
+        assert parsed_entries[0].mnemonic == "JSR"  # nosec B101
+        assert parsed_entries[0].pre_stack_bytes is None  # nosec B101
+        assert parsed_entries[0].post_stack_bytes == (0x02, 0x30)  # nosec B101
+        assert parsed_entries[0].pre_stack_lines == ()  # nosec B101
+        assert parsed_entries[0].post_stack_lines == (  # nosec B101
             "  STACK META[INSN=1 PHASE=POST OP=$20 PC=$3000 SP=$FD] SP=$FD USED=2: "
             "$01FE=$02 $01FF=$30",
         )
-        assert parsed_entries[1].mnemonic == "NOP"
-        assert parsed_entries[1].pre_stack_bytes is None
-        assert parsed_entries[1].pre_stack_lines == ()
-        assert parsed_entries[1].post_stack_lines == ()
-        assert parsed_entries[2].mnemonic == "RTS"
-        assert parsed_entries[2].pre_stack_bytes == (0x02, 0x30)
-        assert parsed_entries[2].pre_stack_lines == (
+        assert parsed_entries[1].mnemonic == "NOP"  # nosec B101
+        assert parsed_entries[1].pre_stack_bytes is None  # nosec B101
+        assert parsed_entries[1].pre_stack_lines == ()  # nosec B101
+        assert parsed_entries[1].post_stack_lines == ()  # nosec B101
+        assert parsed_entries[2].mnemonic == "RTS"  # nosec B101
+        assert parsed_entries[2].pre_stack_bytes == (0x02, 0x30)  # nosec B101
+        assert parsed_entries[2].pre_stack_lines == (  # nosec B101
             "  STACK META[INSN=3 PHASE=PRE OP=$60 PC=$4001 SP=$FD] SP=$FD USED=2: "
             "$01FE=$02 $01FF=$30",
         )
-        assert parsed_entries[2].post_stack_lines == ()
+        assert parsed_entries[2].post_stack_lines == ()  # nosec B101
 
     fallback_entry = TraceEntry(
         index=9,
@@ -2540,7 +2680,7 @@ def run_self_check() -> None:
     )
     fallback_symbols = {0xFC22: ["LFC22", "ALIAS"]}
     enriched = with_fallback_pc_symbol(fallback_entry, fallback_symbols)
-    assert enriched.pc_symbol == "LFC22"
+    assert enriched.pc_symbol == "LFC22"  # nosec B101
 
     help_issue = SyncIssue("mnemonic-mismatch", "Need operator review")
     help_recent_trace = [
@@ -2582,34 +2722,34 @@ def run_self_check() -> None:
             help_recent_trace,
             6,
         )
-    assert action == "quit"
-    assert value is None
+    assert action == "quit"  # nosec B101
+    assert value is None  # nosec B101
 
     prompt_text = prompt_output.getvalue()
-    assert prompt_text.count("\nLegend:\n") == 1
+    assert prompt_text.count("\nLegend:\n") == 1  # nosec B101
     legend_pos = prompt_text.index("=> current trace/source candidate")
     pending_pos = prompt_text.index("Pending trace entries:")
-    assert legend_pos < pending_pos
-    assert (
+    assert legend_pos < pending_pos  # nosec B101
+    assert (  # nosec B101
         prompt_text.count(">> previous trace entry / last matched source instruction")
         == 1
     )
-    assert prompt_text.count(">> @100 PC=$1FF6 OP=$A9 LDA #$00") == 1
-    assert prompt_text.count(">> @101 PC=$1FF8 OP=$8D STA $3000") == 1
-    assert prompt_text.count(">> @102 PC=$1FFB OP=$EA NOP") == 1
-    assert prompt_text.count(">> @103 PC=$1FFC OP=$A2 LDX #$04") == 1
-    assert prompt_text.count(">> @104 PC=$1FFE OP=$86 STX $20") == 1
-    assert prompt_text.count(">> @105 PC=$2000 OP=$A0 LDY #$01") == 1
-    assert prompt_text.count("=> @106 PC=$2006 OP=$C9 CMP #$10") == 1
-    assert "[0] Monitor.S:905 Older0 CLC" not in prompt_text
-    assert "[1] Monitor.S:906 LDA #$00" not in prompt_text
-    assert "[2] Monitor.S:907 STA $3000" in prompt_text
-    assert "[5] Monitor.S:910 LDY #$01" in prompt_text
-    assert ">> [6] Monitor.S:911 LastGood CMP #$08" in prompt_text
-    assert "=> [8] Monitor.S:913 Next STY $20" in prompt_text
-    assert "(prev)" not in prompt_text
-    assert "=> current source candidate" not in prompt_text
-    assert ">> last matched source instruction" not in prompt_text
+    assert prompt_text.count(">> @100 PC=$1FF6 OP=$A9 LDA #$00") == 1  # nosec B101
+    assert prompt_text.count(">> @101 PC=$1FF8 OP=$8D STA $3000") == 1  # nosec B101
+    assert prompt_text.count(">> @102 PC=$1FFB OP=$EA NOP") == 1  # nosec B101
+    assert prompt_text.count(">> @103 PC=$1FFC OP=$A2 LDX #$04") == 1  # nosec B101
+    assert prompt_text.count(">> @104 PC=$1FFE OP=$86 STX $20") == 1  # nosec B101
+    assert prompt_text.count(">> @105 PC=$2000 OP=$A0 LDY #$01") == 1  # nosec B101
+    assert prompt_text.count("=> @106 PC=$2006 OP=$C9 CMP #$10") == 1  # nosec B101
+    assert "[0] Monitor.S:905 Older0 CLC" not in prompt_text  # nosec B101
+    assert "[1] Monitor.S:906 LDA #$00" not in prompt_text  # nosec B101
+    assert "[2] Monitor.S:907 STA $3000" in prompt_text  # nosec B101
+    assert "[5] Monitor.S:910 LDY #$01" in prompt_text  # nosec B101
+    assert ">> [6] Monitor.S:911 LastGood CMP #$08" in prompt_text  # nosec B101
+    assert "=> [8] Monitor.S:913 Next STY $20" in prompt_text  # nosec B101
+    assert "(prev)" not in prompt_text  # nosec B101
+    assert "=> current source candidate" not in prompt_text  # nosec B101
+    assert ">> last matched source instruction" not in prompt_text  # nosec B101
 
     prompt_output_with_prev = io.StringIO()
     with patch("builtins.input", side_effect=["q"]), redirect_stdout(
@@ -2626,37 +2766,48 @@ def run_self_check() -> None:
             recent_source_indexes=[0, 1, 2, 3, 4, 5],
         )
     prompt_text_with_prev = prompt_output_with_prev.getvalue()
-    assert ">> [0] Monitor.S:905 Older0 CLC [previous-match]" in prompt_text_with_prev
-    assert ">> [1] Monitor.S:906 LDA #$00 [previous-match]" in prompt_text_with_prev
+    assert (
+        ">> [0] Monitor.S:905 Older0 CLC [previous-match]" in prompt_text_with_prev
+    )  # nosec B101
+    assert (
+        ">> [1] Monitor.S:906 LDA #$00 [previous-match]" in prompt_text_with_prev
+    )  # nosec B101
 
     retained_recent_trace: Deque[TraceEntry] = deque(maxlen=6)
     for index in range(7):
         retained_recent_trace.append(
             TraceEntry(index, 0x2000 + index, 0xEA, "NOP", "", "", None, None)
         )
-    assert [entry.index for entry in retained_recent_trace] == [1, 2, 3, 4, 5, 6]
+    assert [entry.index for entry in retained_recent_trace] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]  # nosec B101
 
-    assert derive_rts_return_pc_from_trace_stack(None) is None
-    assert derive_rts_return_pc_from_trace_stack([0x99]) is None
-    assert derive_rts_return_pc_from_trace_stack([0xD5, 0x99]) == 0x99D6
+    assert derive_rts_return_pc_from_trace_stack(None) is None  # nosec B101
+    assert derive_rts_return_pc_from_trace_stack([0x99]) is None  # nosec B101
+    assert derive_rts_return_pc_from_trace_stack([0xD5, 0x99]) == 0x99D6  # nosec B101
 
     annotated_plain = build_annotated_line(
         "@1 PC=$3000 OP=$EA NOP",
         [],
     )
-    assert annotated_plain == "@1 PC=$3000 OP=$EA NOP"
+    assert annotated_plain == "@1 PC=$3000 OP=$EA NOP"  # nosec B101
 
     annotated_rts = build_annotated_line(
         "@2 PC=$3001 OP=$60 RTS",
         ["LB001"],
     )
-    assert "NEW_PC_LABELS: LB001" in annotated_rts
+    assert "NEW_PC_LABELS: LB001" in annotated_rts  # nosec B101
 
     annotated_push = build_annotated_line(
         "@3 PC=$3002 OP=$20 JSR $4000",
         [],
     )
-    assert annotated_push == "@3 PC=$3002 OP=$20 JSR $4000"
+    assert annotated_push == "@3 PC=$3002 OP=$20 JSR $4000"  # nosec B101
 
     # NEW_PC_LABELS should only include labels discovered on this instruction,
     # not all labels ever discovered for this PC (avoids loop spam).
@@ -2664,7 +2815,7 @@ def run_self_check() -> None:
         "@4 PC=$FCA9 OP=$48 PHA",
         [],
     )
-    assert "NEW_PC_LABELS:" not in annotated_repeat_pc
+    assert "NEW_PC_LABELS:" not in annotated_repeat_pc  # nosec B101
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -2682,12 +2833,12 @@ Next RTS
         )
 
         parsed_source = parse_source_tree(src_dir)
-        assert len(parsed_source) == 4
-        assert parsed_source[0].label == "Start"
-        assert parsed_source[2].mnemonic == "BBR"
+        assert len(parsed_source) == 4  # nosec B101
+        assert parsed_source[0].label == "Start"  # nosec B101
+        assert parsed_source[2].mnemonic == "BBR"  # nosec B101
 
         branch_label = branch_label_from_source(parsed_source[2])
-        assert branch_label == "Next"
+        assert branch_label == "Next"  # nosec B101
 
         equ_file = src_dir / "EQUSTAR.S"
         equ_file.write_text(
@@ -2698,7 +2849,7 @@ Labeled LDA #$01
         )
         parsed_source = parse_source_tree(src_dir)
         equ_inst = next(inst for inst in parsed_source if inst.label == "Labeled")
-        assert "Alias" in equ_inst.aliases
+        assert "Alias" in equ_inst.aliases  # nosec B101
 
         call_source = [
             SourceInstruction("main.s", 1, "Main", "JSR", "Worker"),
@@ -2729,7 +2880,7 @@ Labeled LDA #$01
             call_labels,
             runtime_label_events=[],
         )
-        assert next_pos == 3
+        assert next_pos == 3  # nosec B101
 
         # Do not step into callee when JSR appears to return immediately.
         jsr_no_step_trace = TraceEntry(
@@ -2749,7 +2900,7 @@ Labeled LDA #$01
             call_labels,
             runtime_label_events=[],
         )
-        assert no_step_pos == 1
+        assert no_step_pos == 1  # nosec B101
 
         # Non-runtime JSR should not emit any runtime label events or push a return frame.
         jsr_no_step_frames: list[tuple[int, int | None]] = []
@@ -2762,9 +2913,9 @@ Labeled LDA #$01
             return_frames=jsr_no_step_frames,
             runtime_label_events=jsr_no_step_events,
         )
-        assert no_step_pos_with_events == 1
-        assert jsr_no_step_frames == []
-        assert jsr_no_step_events == []
+        assert no_step_pos_with_events == 1  # nosec B101
+        assert jsr_no_step_frames == []  # nosec B101
+        assert jsr_no_step_events == []  # nosec B101
 
         rts_trace = TraceEntry(
             index=11,
@@ -2786,9 +2937,9 @@ Labeled LDA #$01
             return_frames=return_frames,
             runtime_label_events=jsr_non_runtime_events,
         )
-        assert next_pos == 3
-        assert return_frames == [(1, 0x2003)]
-        assert jsr_non_runtime_events == []
+        assert next_pos == 3  # nosec B101
+        assert return_frames == [(1, 0x2003)]  # nosec B101
+        assert jsr_non_runtime_events == []  # nosec B101
 
         # JSR should record a stack-top association and assoc diagnostic line.
         jsr_assoc_map: dict[int, int] = {}
@@ -2803,8 +2954,8 @@ Labeled LDA #$01
             jsr_stack_associations=jsr_assoc_map,
             jsr_assoc_log=jsr_assoc_lines,
         )
-        assert jsr_assoc_map.get(0x2002) == 1
-        assert any("assoc:" in line for line in jsr_assoc_lines)
+        assert jsr_assoc_map.get(0x2002) == 1  # nosec B101
+        assert any("assoc:" in line for line in jsr_assoc_lines)  # nosec B101
 
         rts_non_runtime_events: list[dict[str, object]] = []
         next_pos = advance_source_position(
@@ -2815,11 +2966,12 @@ Labeled LDA #$01
             return_frames=return_frames,
             runtime_label_events=rts_non_runtime_events,
         )
-        assert next_pos == 1
-        assert return_frames == []
-        assert rts_non_runtime_events == []
+        assert next_pos == 1  # nosec B101
+        assert return_frames == []  # nosec B101
+        assert rts_non_runtime_events == []  # nosec B101
 
         # RTS should use stack-top association before fallback label logic.
+        persistent_assoc_map = {0x2002: 1}
         rts_assoc_pos = advance_source_position(
             TraceEntry(
                 index=18,
@@ -2835,9 +2987,10 @@ Labeled LDA #$01
             4,
             call_source,
             call_labels,
-            jsr_stack_associations={0x2002: 1},
+            jsr_stack_associations=persistent_assoc_map,
         )
-        assert rts_assoc_pos == 1
+        assert rts_assoc_pos == 1  # nosec B101
+        assert persistent_assoc_map.get(0x2002) == 1  # nosec B101
 
         # RTS should emit non-assoc diagnostics when association lookup misses.
         rts_non_assoc_lines: list[str] = []
@@ -2856,10 +3009,23 @@ Labeled LDA #$01
             4,
             call_source,
             call_labels,
-            jsr_stack_associations={0x2002: 1},
+            jsr_stack_associations={0x2002: 1, 0x2005: 3, 0x2001: 3},
             rts_miss_log=rts_non_assoc_lines,
         )
-        assert any("non-assoc:" in line for line in rts_non_assoc_lines)
+        assert any("non-assoc:" in line for line in rts_non_assoc_lines)  # nosec B101
+        assert any(
+            "looked-for=$2003" in line for line in rts_non_assoc_lines
+        )  # nosec B101
+        assert any(  # nosec B101
+            "known-positions=[$2001->worker.s:1, $2002->main.s:2, $2005->worker.s:1]"
+            in line
+            for line in rts_non_assoc_lines
+        )
+        assert any(  # nosec B101
+            "known-assocs-by-position: {main.s:2<-$2002, worker.s:1<-$2001, worker.s:1<-$2005}"
+            in line
+            for line in rts_non_assoc_lines
+        )
 
         # If post_pc is present and cannot be resolved to a source label, keep linear advance.
         rts_unmatched_trace = TraceEntry(
@@ -2878,7 +3044,7 @@ Labeled LDA #$01
             call_source,
             call_labels,
         )
-        assert unmatched_pos == 5
+        assert unmatched_pos == 5  # nosec B101
 
         # Phase 3: branch fallback should use observed next PC when post_pc is missing.
         loop_source = [
@@ -2909,7 +3075,7 @@ Labeled LDA #$01
             loop_labels,
             observed_next_pc=0x2007,
         )
-        assert taken_pos == 0
+        assert taken_pos == 0  # nosec B101
 
         branch_not_taken_missing_post = TraceEntry(
             index=14,
@@ -2928,7 +3094,7 @@ Labeled LDA #$01
             loop_labels,
             observed_next_pc=0x200D,
         )
-        assert not_taken_pos == 3
+        assert not_taken_pos == 3  # nosec B101
 
         # Phase 3: JSR fallback should use observed next PC when post_pc is missing.
         jsr_missing_post_return = TraceEntry(
@@ -2948,7 +3114,7 @@ Labeled LDA #$01
             call_labels,
             observed_next_pc=0x2003,
         )
-        assert jsr_missing_post_pos == 1
+        assert jsr_missing_post_pos == 1  # nosec B101
 
         jsr_missing_post_step = TraceEntry(
             index=16,
@@ -2967,7 +3133,7 @@ Labeled LDA #$01
             call_labels,
             observed_next_pc=0x3000,
         )
-        assert jsr_missing_post_step_pos == 3
+        assert jsr_missing_post_step_pos == 3  # nosec B101
 
         # Phase 1: capture runtime-required JSR fallback success via runtime symbols.
         jsr_runtime_fallback_trace = TraceEntry(
@@ -2998,11 +3164,11 @@ Labeled LDA #$01
             runtime_symbols_by_addr={0x3000: ["Worker"]},
             runtime_label_events=jsr_runtime_events,
         )
-        assert jsr_runtime_fallback_pos == 2
-        assert len(jsr_runtime_events) == 1
-        assert jsr_runtime_events[0]["kind"] == "jsr-runtime-fallback"
-        assert jsr_runtime_events[0]["runtime_label"] == "Worker"
-        assert jsr_runtime_events[0]["target_source_index"] == 2
+        assert jsr_runtime_fallback_pos == 2  # nosec B101
+        assert len(jsr_runtime_events) == 1  # nosec B101
+        assert jsr_runtime_events[0]["kind"] == "jsr-runtime-fallback"  # nosec B101
+        assert jsr_runtime_events[0]["runtime_label"] == "Worker"  # nosec B101
+        assert jsr_runtime_events[0]["target_source_index"] == 2  # nosec B101
 
         # Phase 3: RTS fallback should match runtime label via observed next PC.
         rts_missing_post_trace = TraceEntry(
@@ -3022,7 +3188,7 @@ Labeled LDA #$01
             call_labels,
             observed_next_pc=0x2003,
         )
-        assert rts_missing_post_pos == 1
+        assert rts_missing_post_pos == 1  # nosec B101
 
         # Phase 1: capture runtime-required RTS fallback success when stack assoc miss.
         rts_runtime_events: list[dict[str, object]] = []
@@ -3033,11 +3199,11 @@ Labeled LDA #$01
             call_labels,
             runtime_label_events=rts_runtime_events,
         )
-        assert rts_runtime_pos == 1
-        assert len(rts_runtime_events) == 1
-        assert rts_runtime_events[0]["kind"] == "rts-runtime-fallback"
-        assert rts_runtime_events[0]["runtime_label"] == "L2003"
-        assert rts_runtime_events[0]["target_source_index"] == 1
+        assert rts_runtime_pos == 1  # nosec B101
+        assert len(rts_runtime_events) == 1  # nosec B101
+        assert rts_runtime_events[0]["kind"] == "rts-runtime-fallback"  # nosec B101
+        assert rts_runtime_events[0]["runtime_label"] == "L2003"  # nosec B101
+        assert rts_runtime_events[0]["target_source_index"] == 1  # nosec B101
 
         # Phase 2: advance_source_position RTS path uses trace stack bytes over observed
         # post_pc when pre_stack_bytes is available.
@@ -3058,7 +3224,7 @@ Labeled LDA #$01
             call_source,
             call_labels,
         )
-        assert rts_stack_priority_pos == 1
+        assert rts_stack_priority_pos == 1  # nosec B101
 
         # Phase 2: detect_rts_alignment_issue returns mismatch-significant issue when
         # trace stack bytes are missing or insufficient.
@@ -3078,8 +3244,10 @@ Labeled LDA #$01
             rts_source[0],
             0,
         )
-        assert rts_stack_mismatch_issue is not None
-        assert rts_stack_mismatch_issue.reason == "rts-insufficient-trace-stack"
+        assert rts_stack_mismatch_issue is not None  # nosec B101
+        assert (
+            rts_stack_mismatch_issue.reason == "rts-insufficient-trace-stack"
+        )  # nosec B101
 
         rts_trace_stack_match_issue = detect_rts_alignment_issue(
             TraceEntry(
@@ -3096,7 +3264,7 @@ Labeled LDA #$01
             rts_source[0],
             0,
         )
-        assert rts_trace_stack_match_issue is None
+        assert rts_trace_stack_match_issue is None  # nosec B101
 
         rts_trace_stack_mismatch_issue = detect_rts_alignment_issue(
             TraceEntry(
@@ -3113,9 +3281,11 @@ Labeled LDA #$01
             rts_source[0],
             0,
         )
-        assert rts_trace_stack_mismatch_issue is not None
-        assert rts_trace_stack_mismatch_issue.reason == "rts-return-mismatch"
-        assert "$7EEA" in rts_trace_stack_mismatch_issue.detail
+        assert rts_trace_stack_mismatch_issue is not None  # nosec B101
+        assert (
+            rts_trace_stack_mismatch_issue.reason == "rts-return-mismatch"
+        )  # nosec B101
+        assert "$7EEA" in rts_trace_stack_mismatch_issue.detail  # nosec B101
 
         pull_source = [SourceInstruction("pull.s", 1, None, "PLA", "")]
         pull_labels: dict[str, list[int]] = defaultdict(list)
@@ -3135,7 +3305,7 @@ Labeled LDA #$01
             pull_source,
             pull_labels,
         )
-        assert pla_pos == 1
+        assert pla_pos == 1  # nosec B101
 
         # Follow unconditional JMP labels.
         jmp_source = [
@@ -3165,7 +3335,7 @@ Labeled LDA #$01
             jmp_labels,
             observed_next_pc=0x2000,
         )
-        assert jmp_pos == 2
+        assert jmp_pos == 2  # nosec B101
 
         symbols_file = root / "cpu65c02.cpp"
         symbols_file.write_text(
@@ -3179,8 +3349,8 @@ Labeled LDA #$01
         )
 
         symbols = parse_existing_monitor_symbols(symbols_file)
-        assert symbols[0x0079] == ["SrcP", "UnsortedP"]
-        assert symbols[0x00AF] == ["Accum"]
+        assert symbols[0x0079] == ["SrcP", "UnsortedP"]  # nosec B101
+        assert symbols[0x00AF] == ["Accum"]  # nosec B101
 
         symbols_if0_file = root / "cpu65c02_if0.cpp"
         symbols_if0_file.write_text(
@@ -3195,14 +3365,18 @@ Labeled LDA #$01
             encoding="utf-8",
         )
         symbols_if0 = parse_existing_monitor_symbols(symbols_if0_file)
-        assert symbols_if0.get(0x1234) is None
-        assert symbols_if0[0x2345] == ["EnabledSymbol"]
+        assert symbols_if0.get(0x1234) is None  # nosec B101
+        assert symbols_if0[0x2345] == ["EnabledSymbol"]  # nosec B101
 
         ng = build_ngram_index(parsed_source, window=2)
         key = tuple(inst.mnemonic for inst in parsed_source[:2])
-        assert key in ng
+        assert key in ng  # nosec B101
 
         # Phase 2: resolve ambiguous mnemonic windows with operand/address hints.
+        assert runtime_label_fixed_address("L1234") == 0x1234  # nosec B101
+        assert runtime_label_fixed_address("x00FF") == 0x00FF  # nosec B101
+        assert runtime_label_fixed_address("Main") is None  # nosec B101
+
         ambiguous_source = [
             SourceInstruction("amb.s", 1, "PathA", "LDA", "#$11"),
             SourceInstruction("amb.s", 2, None, "STA", "$0200"),
@@ -3258,8 +3432,8 @@ Labeled LDA #$01
             ambiguous_labels,
             window=3,
         )
-        assert sync_issue is None
-        assert sync_idx == 3
+        assert sync_issue is None  # nosec B101
+        assert sync_idx == 3  # nosec B101
 
         # Phase 2: when already synced, try local auto-resync before prompting.
         local_source = [
@@ -3313,7 +3487,7 @@ Labeled LDA #$01
             window=3,
             search_radius=4,
         )
-        assert local_resync_idx == 0
+        assert local_resync_idx == 0  # nosec B101
 
         # Phase 2: do not auto-accept unique low-confidence sync candidates.
         weak_source = [
@@ -3369,8 +3543,8 @@ Labeled LDA #$01
             weak_labels,
             window=3,
         )
-        assert weak_sync_idx is None
-        assert weak_sync_issue is not None
+        assert weak_sync_idx is None  # nosec B101
+        assert weak_sync_issue is not None  # nosec B101
 
         pending_weak_local: Deque[TraceEntry] = deque(
             [
@@ -3415,7 +3589,7 @@ Labeled LDA #$01
             window=3,
             search_radius=8,
         )
-        assert weak_local_idx is None
+        assert weak_local_idx is None  # nosec B101
 
         pc_symbol_source = [
             SourceInstruction("s.s", 1, "Near", "NOP", ""),
@@ -3444,7 +3618,7 @@ Labeled LDA #$01
             current_source_index=0,
             runtime_label_events=[],
         )
-        assert pc_symbol_idx == 1
+        assert pc_symbol_idx == 1  # nosec B101
 
         # Prefer exact PC address label over ambiguous semantic pc symbol alias.
         pc_addr_source = [
@@ -3474,7 +3648,7 @@ Labeled LDA #$01
             current_source_index=0,
             runtime_label_events=[],
         )
-        assert pc_addr_idx == 1
+        assert pc_addr_idx == 1  # nosec B101
 
         # Phase 1: capture runtime-required mismatch PC-symbol resync.
         pc_symbol_runtime_events: list[dict[str, object]] = []
@@ -3485,11 +3659,11 @@ Labeled LDA #$01
             current_source_index=0,
             runtime_label_events=pc_symbol_runtime_events,
         )
-        assert pc_symbol_runtime_idx == 1
-        assert len(pc_symbol_runtime_events) == 1
-        assert pc_symbol_runtime_events[0]["kind"] == "pc-symbol-resync"
-        assert pc_symbol_runtime_events[0]["runtime_label"] == "Far"
-        assert pc_symbol_runtime_events[0]["target_source_index"] == 1
+        assert pc_symbol_runtime_idx == 1  # nosec B101
+        assert len(pc_symbol_runtime_events) == 1  # nosec B101
+        assert pc_symbol_runtime_events[0]["kind"] == "pc-symbol-resync"  # nosec B101
+        assert pc_symbol_runtime_events[0]["runtime_label"] == "Far"  # nosec B101
+        assert pc_symbol_runtime_events[0]["target_source_index"] == 1  # nosec B101
 
         # No event should be recorded if candidate equals current source index.
         pc_symbol_same_events: list[dict[str, object]] = []
@@ -3500,8 +3674,8 @@ Labeled LDA #$01
             current_source_index=1,
             runtime_label_events=pc_symbol_same_events,
         )
-        assert pc_symbol_same_idx == 1
-        assert pc_symbol_same_events == []
+        assert pc_symbol_same_idx == 1  # nosec B101
+        assert pc_symbol_same_events == []  # nosec B101
 
         # No event should be recorded when runtime and pc_symbol lookups fail.
         pc_symbol_miss_events: list[dict[str, object]] = []
@@ -3523,8 +3697,8 @@ Labeled LDA #$01
             current_source_index=0,
             runtime_label_events=pc_symbol_miss_events,
         )
-        assert pc_symbol_miss_idx is None
-        assert pc_symbol_miss_events == []
+        assert pc_symbol_miss_idx is None  # nosec B101
+        assert pc_symbol_miss_events == []  # nosec B101
 
         indirect_jmp_source = [
             SourceInstruction("ijmp.s", 1, "LB3D9", "CMP", "#$E0"),
@@ -3567,7 +3741,7 @@ Labeled LDA #$01
             current_source_index=0,
             runtime_label_events=[],
         )
-        assert indirect_jmp_idx == 0
+        assert indirect_jmp_idx == 0  # nosec B101
 
         # No event should be recorded if indirect-JMP candidate equals current index.
         indirect_jmp_same_events: list[dict[str, object]] = []
@@ -3578,8 +3752,8 @@ Labeled LDA #$01
             current_source_index=0,
             runtime_label_events=indirect_jmp_same_events,
         )
-        assert indirect_jmp_same_idx == 0
-        assert indirect_jmp_same_events == []
+        assert indirect_jmp_same_idx == 0  # nosec B101
+        assert indirect_jmp_same_events == []  # nosec B101
 
         # Phase 1: capture runtime-required mismatch indirect-JMP resync.
         indirect_jmp_runtime_events: list[dict[str, object]] = []
@@ -3590,13 +3764,13 @@ Labeled LDA #$01
             current_source_index=1,
             runtime_label_events=indirect_jmp_runtime_events,
         )
-        assert indirect_jmp_runtime_idx == 0
-        assert len(indirect_jmp_runtime_events) == 1
-        assert (
+        assert indirect_jmp_runtime_idx == 0  # nosec B101
+        assert len(indirect_jmp_runtime_events) == 1  # nosec B101
+        assert (  # nosec B101
             indirect_jmp_runtime_events[0]["kind"] == "indirect-jmp-next-trace-resync"
         )
-        assert indirect_jmp_runtime_events[0]["runtime_label"] == "LB3D9"
-        assert indirect_jmp_runtime_events[0]["target_source_index"] == 0
+        assert indirect_jmp_runtime_events[0]["runtime_label"] == "LB3D9"  # nosec B101
+        assert indirect_jmp_runtime_events[0]["target_source_index"] == 0  # nosec B101
 
         # Xhhhh and Lhhhh labels should resolve to the same source target.
         xmap_source = [
@@ -3608,8 +3782,12 @@ Labeled LDA #$01
             if inst.label:
                 xmap_labels[normalize_label_token(inst.label)].append(idx)
 
-        assert choose_source_label_target("XA75B", 1, xmap_source, xmap_labels) == 0
-        assert choose_source_label_target("LA75B", 1, xmap_source, xmap_labels) == 0
+        assert (
+            choose_source_label_target("XA75B", 1, xmap_source, xmap_labels) == 0
+        )  # nosec B101
+        assert (
+            choose_source_label_target("LA75B", 1, xmap_source, xmap_labels) == 0
+        )  # nosec B101
 
         # Runtime-label report should be TSV and dedupe duplicate runtime events.
         runtime_report = root / "runtime_labels_needed.tsv"
@@ -3647,15 +3825,15 @@ Labeled LDA #$01
             report_events,
         )
         report_lines = runtime_report.read_text(encoding="utf-8").splitlines()
-        assert report_written == 2
-        assert report_duplicates == 1
-        assert report_lines[0].startswith("kind\ttrace_index\ttrace_pc\t")
-        assert len(report_lines) == 3
-        assert (
+        assert report_written == 2  # nosec B101
+        assert report_duplicates == 1  # nosec B101
+        assert report_lines[0].startswith("kind\ttrace_index\ttrace_pc\t")  # nosec B101
+        assert len(report_lines) == 3  # nosec B101
+        assert (  # nosec B101
             "rts-runtime-fallback\t11\t$3001\tL2003\tL2003\t$2003\t1\tmain.s\t2"
             in report_lines
         )
-        assert (
+        assert (  # nosec B101
             "jsr-runtime-fallback\t160\t$2000\tWorker\tWORKER\t\t2\tjsr_runtime.s\t3"
             in report_lines
         )
@@ -3666,10 +3844,10 @@ Labeled LDA #$01
             [],
         )
         empty_lines = empty_runtime_report.read_text(encoding="utf-8").splitlines()
-        assert empty_written == 0
-        assert empty_duplicates == 0
-        assert len(empty_lines) == 1
-        assert empty_lines[0].startswith("kind\ttrace_index\ttrace_pc\t")
+        assert empty_written == 0  # nosec B101
+        assert empty_duplicates == 0  # nosec B101
+        assert len(empty_lines) == 1  # nosec B101
+        assert empty_lines[0].startswith("kind\ttrace_index\ttrace_pc\t")  # nosec B101
 
     rts_recent = [
         TraceEntry(200, 0x3000, 0x20, "JSR", "$4000", "@200", None, None),
@@ -3687,46 +3865,50 @@ Labeled LDA #$01
             rts_recent,
             6,
         )
-    assert "Emulated stack before last shown RTS" not in rts_out.getvalue()
+    assert (
+        "Emulated stack before last shown RTS" not in rts_out.getvalue()
+    )  # nosec B101
 
     with patch("sys.argv", ["disassembly_log_analyzer.py"]):
         parsed_defaults = parse_args()
-    assert parsed_defaults.runtime_label_report == Path("runtime_labels_needed.tsv")
+    assert parsed_defaults.runtime_label_report == Path(
+        "runtime_labels_needed.tsv"
+    )  # nosec B101
 
     # operand_symbolic_token
-    assert operand_symbolic_token("HOME") == "HOME"
-    assert operand_symbolic_token("HOME,X") == "HOME"
-    assert operand_symbolic_token("(HOME),Y") == "HOME"
-    assert operand_symbolic_token("(HOME,X)") == "HOME"
-    assert operand_symbolic_token("#SPACE") is None
-    assert operand_symbolic_token("$FC58") is None
-    assert operand_symbolic_token("#$20") is None
-    assert operand_symbolic_token("SomeLbl-1,X") == "SomeLbl"
-    assert operand_symbolic_token("SomeLbl+Other,X") is None
-    assert operand_symbolic_token("") is None
+    assert operand_symbolic_token("HOME") == "HOME"  # nosec B101
+    assert operand_symbolic_token("HOME,X") == "HOME"  # nosec B101
+    assert operand_symbolic_token("(HOME),Y") == "HOME"  # nosec B101
+    assert operand_symbolic_token("(HOME,X)") == "HOME"  # nosec B101
+    assert operand_symbolic_token("#SPACE") is None  # nosec B101
+    assert operand_symbolic_token("$FC58") is None  # nosec B101
+    assert operand_symbolic_token("#$20") is None  # nosec B101
+    assert operand_symbolic_token("SomeLbl-1,X") == "SomeLbl"  # nosec B101
+    assert operand_symbolic_token("SomeLbl+Other,X") is None  # nosec B101
+    assert operand_symbolic_token("") is None  # nosec B101
 
     # operand_numeric_address
-    assert operand_numeric_address("$FC58") == 0xFC58
-    assert operand_numeric_address("$FC58,X") == 0xFC58
-    assert operand_numeric_address("($FC58),Y") == 0xFC58
-    assert operand_numeric_address("$20") == 0x20
-    assert operand_numeric_address("$20,X") == 0x20
-    assert operand_numeric_address("#$20") is None
-    assert operand_numeric_address("#$FC58") is None
+    assert operand_numeric_address("$FC58") == 0xFC58  # nosec B101
+    assert operand_numeric_address("$FC58,X") == 0xFC58  # nosec B101
+    assert operand_numeric_address("($FC58),Y") == 0xFC58  # nosec B101
+    assert operand_numeric_address("$20") == 0x20  # nosec B101
+    assert operand_numeric_address("$20,X") == 0x20  # nosec B101
+    assert operand_numeric_address("#$20") is None  # nosec B101
+    assert operand_numeric_address("#$FC58") is None  # nosec B101
 
     # extract_operand_label_pair: JSR symbolic target → MonitorSymbolPc
     _jsr_src = SourceInstruction("f.s", 1, None, "JSR", "HOME")
     _jsr_tr = TraceEntry(10, 0x2047, 0x20, "JSR", "$FC58", "@10", None, None)
     _ops = extract_operand_label_pairs(_jsr_src, _jsr_tr)
-    assert _ops == [("HOME", 0xFC58, "MonitorSymbolPc")]
+    assert _ops == [("HOME", 0xFC58, "MonitorSymbolPc")]  # nosec B101
     _op = extract_operand_label_pair(_jsr_src, _jsr_tr)
-    assert _op == ("HOME", 0xFC58, "MonitorSymbolPc")
+    assert _op == ("HOME", 0xFC58, "MonitorSymbolPc")  # nosec B101
 
     # extract_operand_label_pair: JSR target with +offset infers base label address
     _jsr_off_src = SourceInstruction("f.s", 1, None, "JSR", "HOME+$03")
     _jsr_off_tr = TraceEntry(10, 0x2047, 0x20, "JSR", "$FC5B", "@10", None, None)
     _op_off = extract_operand_label_pair(_jsr_off_src, _jsr_off_tr)
-    assert _op_off == ("HOME", 0xFC58, "MonitorSymbolPc")
+    assert _op_off == ("HOME", 0xFC58, "MonitorSymbolPc")  # nosec B101
 
     # extract_operand_label_pairs: MLI source emits both JSR target (PC) and param block (data)
     _mli_src = SourceInstruction("f.s", 1, None, "MLI", "PRODOS8,PBLOCK")
@@ -3741,7 +3923,7 @@ Labeled LDA #$01
         None,
     )
     _mli_ops = extract_operand_label_pairs(_mli_src, _mli_tr)
-    assert _mli_ops == [
+    assert _mli_ops == [  # nosec B101
         ("PRODOS8", 0xBF00, "MonitorSymbolPc"),
         ("PBLOCK", 0x1234, ""),
     ]
@@ -3749,13 +3931,13 @@ Labeled LDA #$01
     # extract_operand_label_pairs: data half of MLI is symbolic-only (no synthetic from trace)
     _mli_num_src = SourceInstruction("f.s", 1, None, "MLI", "PRODOS8,$1234")
     _mli_num_ops = extract_operand_label_pairs(_mli_num_src, _mli_tr)
-    assert _mli_num_ops == [("PRODOS8", 0xBF00, "MonitorSymbolPc")]
+    assert _mli_num_ops == [("PRODOS8", 0xBF00, "MonitorSymbolPc")]  # nosec B101
 
     # extract_operand_label_pairs: MLI trace matched with JSR source keeps target as PC label
     _mli_jsr_src = SourceInstruction("f.s", 1, None, "JSR", "PRODOS8")
     _mli_jsr_ops = extract_operand_label_pairs(_mli_jsr_src, _mli_tr)
-    assert _mli_jsr_ops == [("PRODOS8", 0xBF00, "MonitorSymbolPc")]
-    assert extract_operand_label_pair(_mli_jsr_src, _mli_tr) == (
+    assert _mli_jsr_ops == [("PRODOS8", 0xBF00, "MonitorSymbolPc")]  # nosec B101
+    assert extract_operand_label_pair(_mli_jsr_src, _mli_tr) == (  # nosec B101
         "PRODOS8",
         0xBF00,
         "MonitorSymbolPc",
@@ -3765,38 +3947,38 @@ Labeled LDA #$01
     _bne_src = SourceInstruction("f.s", 2, None, "BNE", "Loop")
     _bne_tr = TraceEntry(11, 0x2005, 0xD0, "BNE", "$2000", "@11", 0x2005, 0x2000)
     _op2 = extract_operand_label_pair(_bne_src, _bne_tr)
-    assert _op2 == ("Loop", 0x2000, "MonitorSymbolPc")
+    assert _op2 == ("Loop", 0x2000, "MonitorSymbolPc")  # nosec B101
 
     # extract_operand_label_pair: data operand → no flags
     _lda_src = SourceInstruction("f.s", 3, None, "LDA", "SomeVar")
     _lda_tr = TraceEntry(12, 0x2000, 0xAD, "LDA", "$3000", "@12", 0x2000, 0x2003)
     _op3 = extract_operand_label_pair(_lda_src, _lda_tr)
-    assert _op3 == ("SomeVar", 0x3000, "")
+    assert _op3 == ("SomeVar", 0x3000, "")  # nosec B101
 
     # extract_operand_label_pair: data operand with +offset infers base label address
     _lda_off_src = SourceInstruction("f.s", 3, None, "LDA", "SomeVar+1")
     _lda_off_tr = TraceEntry(12, 0x2000, 0xAD, "LDA", "$3001", "@12", 0x2000, 0x2003)
     _op4 = extract_operand_label_pair(_lda_off_src, _lda_off_tr)
-    assert _op4 == ("SomeVar", 0x3000, "")
+    assert _op4 == ("SomeVar", 0x3000, "")  # nosec B101
 
     # Zero-page width should wrap/derive in 8-bit space.
     _zp_off_src = SourceInstruction("f.s", 3, None, "LDA", "ZPVAR+1")
     _zp_off_tr = TraceEntry(12, 0x2000, 0xA5, "LDA", "$20", "@12", 0x2000, 0x2002)
     _op5 = extract_operand_label_pair(_zp_off_src, _zp_off_tr)
-    assert _op5 == ("ZPVAR", 0x1F, "")
+    assert _op5 == ("ZPVAR", 0x1F, "")  # nosec B101
 
     # extract_operand_label_pair: immediate source → None
     _imm_src = SourceInstruction("f.s", 4, None, "LDA", "#SPACE")
     _imm_tr = TraceEntry(13, 0x2003, 0xA9, "LDA", "#$20", "@13", 0x2003, 0x2005)
-    assert extract_operand_label_pair(_imm_src, _imm_tr) is None
+    assert extract_operand_label_pair(_imm_src, _imm_tr) is None  # nosec B101
 
     # extract_operand_label_pair: already-numeric source operand → None
     _num_src = SourceInstruction("f.s", 5, None, "LDA", "$3000")
-    assert extract_operand_label_pair(_num_src, _lda_tr) is None
+    assert extract_operand_label_pair(_num_src, _lda_tr) is None  # nosec B101
 
     # extract_operand_label_pair: complex expressions are intentionally ignored
     _complex_src = SourceInstruction("f.s", 6, None, "LDA", "SomeVar+Other")
-    assert extract_operand_label_pair(_complex_src, _lda_tr) is None
+    assert extract_operand_label_pair(_complex_src, _lda_tr) is None  # nosec B101
 
     print("self-check passed")
 
