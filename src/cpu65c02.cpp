@@ -1061,6 +1061,7 @@ namespace prodos8emu {
         {0xB263, "GetChar", MonitorSymbolPc},                         //
         {0xB273, "LB273", MonitorSymbolPc},                           //
         {0xB274, "GetNBChar", MonitorSymbolPc},                       //
+        {0xB274, "XB274", MonitorSymbolPc},                           //
         {0xB27E, "GetToken", MonitorSymbolPc},                        //
         {0xB286, "LB286", MonitorSymbolPc},                           //
         {0xB289, "LB289", MonitorSymbolPc},                           //
