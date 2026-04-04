@@ -2630,6 +2630,31 @@ namespace prodos8emu {
   }
 
   void CPU65C02::log_step_trace_marker(uint16_t pc) {
+    struct MarkerLabel {
+      uint16_t    address;
+      const char* label;
+    };
+    static const MarkerLabel kMarkerLabelMap[] = {
+        {0x7800, ">>> ENTER EdAsm.Asm"},
+        {0x7816, ">>> ENTER ExecAsm"},
+        {0x7E30, ">>> ENTER DoPass1"},
+        {0x7F0F, ">>> ENTER DoPass2"},
+        {0xD000, ">>> ENTER DoPass3"},
+        {0x7E45, ">>> FlushObj"},
+        {0x99DF, ">>> L99DF (flush obj code)"},
+        {0x8A82, ">>> ORG directive"},
+        {0x8A9A, ">>> ORG GenF check"},
+        {0x8AAE, ">>> ORG open file path"},
+        {0x9918, ">>> Open4RW"},
+        {0x7B13, ">>> InitASM"},
+        {0x7C98, ">>> PrtSetup"},
+        {0x7D07, ">>> ParseDCS"},
+        {0x7D2E, ">>> IsFileLst"},
+        {0x7D3A, ">>> Lst2File"},
+        {0xA70B, ">>> XA70B (get user cmd)"},
+        {0xB6E6, ">>> DoAsmbly (prep for ASM)"},
+    };
+
     if (m_traceLog == nullptr) {
       return;
     }
@@ -2637,6 +2662,15 @@ namespace prodos8emu {
     // JSR/RTS monitor mode owns transition logging and symbol annotation.
     if (m_jsrRtsTraceMonitorEnabled) {
       return;
+    }
+
+    for (const MarkerLabel& ml : kMarkerLabelMap) {
+      if (ml.address == pc) {
+        *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
+                    << std::setfill('0') << std::setw(4) << pc << std::dec << " " << ml.label
+                    << "\n";
+        return;
+      }
     }
 
     const MonitorSymbol* marker = find_monitor_symbol(pc, MonitorSymbolPc);
@@ -2652,7 +2686,7 @@ namespace prodos8emu {
     }
 
     *m_traceLog << "@" << m_instructionCount << " PC=$" << std::hex << std::uppercase
-                << std::setfill('0') << std::setw(4) << marker->address << std::dec << " "
+                << std::setfill('0') << std::setw(4) << marker->address << std::dec << " >>> "
                 << marker->name;
 
     *m_traceLog << "\n";
@@ -2672,7 +2706,7 @@ namespace prodos8emu {
 
     const MonitorSymbol* symbol = find_monitor_symbol(toPC, MonitorSymbolPc);
     if (symbol != nullptr) {
-      *m_traceLog << " " << symbol->name;
+      *m_traceLog << " >>> " << symbol->name;
     }
 
     *m_traceLog << "\n";
@@ -2709,6 +2743,9 @@ namespace prodos8emu {
 
     for (size_t i = 0; i < m_stepZpMonitorEventCount; ++i) {
       const ZpMonitorEvent& event       = m_stepZpMonitorEvents[i];
+      if (event.oldValue == event.newValue) {
+        continue;
+      }
       const MonitorSymbol*  fieldSymbol = find_monitor_symbol(event.address, MonitorSymbolWrite);
       if (fieldSymbol == nullptr) {
         continue;
@@ -2814,7 +2851,6 @@ namespace prodos8emu {
     os << "$";
     write_hex(os, addr, 2);
     os << trailing;
-    append_symbol_suffix_for_address(os, addr);
   }
 
   static std::string disassembly_text_for_opcode(const ConstMemoryBanks& banks, uint16_t pc,

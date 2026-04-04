@@ -288,8 +288,10 @@ namespace prodos8emu {
         {0x7CCE, "SkipLoop", MonitorSymbolPc},                        //
         {0x7CDF, "GoodObjPN", MonitorSymbolPc},                       //
         {0x7CE7, "MkObjPN", MonitorSymbolPc},                         //
+        {0x7D07, "ParseDCS", MonitorSymbolPc},                        //
         {0x7D28, "doRTS4", MonitorSymbolPc},                          //
         {0x7D29, "PrtSetup", MonitorSymbolPc},                        //
+        {0x7D2E, "IsFileLst", MonitorSymbolPc},                       //
         {0x7D33, "ValROM", MonitorSymbolPc},                          //
         {0x7E19, "L7E19", MonitorSymbolPc},                           //
         {0x7E1B, "L7E1B", MonitorSymbolPc},                           //
