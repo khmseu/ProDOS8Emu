@@ -15,7 +15,7 @@ The script must be run from the project root directory (where EDASM.SRC/ exists)
 ## What It Does
 
 1. **Recursively scans** all `.S` files in the EDASM.SRC directory tree
-2. **Detects RTN opcodes** using pattern matching: lines containing ` RTN` (with leading space) followed by either a space or end-of-line
+2. **Detects RTN opcodes** using pattern matching: lines containing `RTN` (with leading space) followed by either a space or end-of-line
 3. **Inserts tracking markers** immediately after each RTN in the format: `_FILENAME_LINENUMBER EQU *`
    - Example: RTN on line 15 of EDITOR1.S → inserts `_EDITOR1_15 EQU *`
 4. **Modifies files in-place** with safe temporary file handling (checks if changes were made before overwriting)
@@ -24,6 +24,7 @@ The script must be run from the project root directory (where EDASM.SRC/ exists)
 ## Output Format
 
 Each RTN instruction receives a marker line with:
+
 - Underscore prefix: `_`
 - Source filename (without .S extension): `FILENAME`
 - Underscore separator: `_`
@@ -31,6 +32,7 @@ Each RTN instruction receives a marker line with:
 - EQU directive: `EQU *`
 
 Example from EDITOR1.S:
+
 ```asm
 LD28A SET R4,XBD80 ;PN is in $BD80 buf
  RTN
@@ -40,6 +42,7 @@ _EDITOR1_15 EQU *
 ## Results (Latest Execution)
 
 When executed on EDASM.SRC, the script produces:
+
 - 93 total RTN tracking markers inserted
 - 5 assembly source files modified:
   - EDITOR1.S: 72 markers
@@ -52,7 +55,7 @@ When executed on EDASM.SRC, the script produces:
 
 - **Language**: Bash shell script
 - **Dependencies**: `find`, `awk`, `grep`, `cmp`, `mv`, `basename`
-- **Pattern matching**: Uses awk regex ` RTN( |$)` to match RTN opcodes with proper word boundaries
+- **Pattern matching**: Uses awk regex `RTN( |$)` to match RTN opcodes with proper word boundaries
 - **Safety**: Uses temporary files (.tmp) and compares before overwriting to avoid unnecessary changes
 - **Encoding**: Handles files with various character encodings; grep errors on encoding mismatches are non-fatal
 
@@ -66,6 +69,7 @@ When executed on EDASM.SRC, the script produces:
 ## Purpose
 
 These markers serve as tracking points for assembly analysis, allowing tools to:
+
 - Map return instructions to their source locations
 - Correlate execution traces back to specific assembly routines
 - Support disassembly log analysis and alignment debugging
