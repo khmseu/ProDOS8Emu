@@ -11,7 +11,7 @@ if [ ! -d "EDASM.SRC" ]; then
 fi
 
 # Process all .S files in EDASM.SRC recursively
-find EDASM.SRC -name "*.S" -type f | while read file; do
+find EDASM.SRC -name "*.S" -type f | while read -r file; do
     basename_no_ext=$(basename "$file" .S)
     
     # Use awk to process the file line by line
@@ -26,12 +26,12 @@ find EDASM.SRC -name "*.S" -type f | while read file; do
     ' "$file" > "$file.tmp"
     
     # Check if changes were made
-    if ! cmp -s "$file" "$file.tmp"; then
+    if ! cmp -s "$file" "$file.tmp" 2>/dev/null; then
         mv "$file.tmp" "$file"
-        markers=$(grep -c "^_${basename_no_ext}_[0-9]* EQU \*" "$file" || true)
+        markers=$(grep -c "^_${basename_no_ext}_[0-9]* EQU \*" "$file" 2>/dev/null || true)
         echo "Updated $file (+$markers markers)"
     else
-        rm "$file.tmp"
+        rm -f "$file.tmp"
     fi
 done
 
