@@ -61,7 +61,7 @@ while IFS= read -r src_file; do
 	rel_path="${src_file#"$EXTRACTED_SRC_DIR/"}"
 	dst_file="EDASM.SRC/$rel_path"
 	mkdir -p "$(dirname "$dst_file")"
-	tr -d '\r' <"$src_file" >"$dst_file"
+	perl -pe 's/\r\n/\n/g; s/\r/\n/g' <"$src_file" >"$dst_file"
 done < <(find "$EXTRACTED_SRC_DIR" -type f -name "*.S" | sort)
 
 echo "Running RTN marker insertion..."
