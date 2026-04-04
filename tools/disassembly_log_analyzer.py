@@ -1266,6 +1266,72 @@ def choose_source_label_target(
     return min(pool, key=lambda idx: abs(idx - current_source_index))
 
 
+def trace_operand_target_label(trace_entry: TraceEntry) -> str | None:
+    if trace_entry.mnemonic not in BRANCH_MNEMONICS and trace_entry.mnemonic not in {
+        "JSR",
+        "JMP",
+    }:
+        return None
+
+    if trace_entry.mnemonic == "JMP" and normalize_operand_text(
+        trace_entry.operand
+    ).startswith("("):
+        return None
+
+    matches = re.findall(r"\(([A-Za-z_][A-Za-z0-9_\.]*)\)", trace_entry.operand)
+    if not matches:
+        return None
+    return matches[-1]
+
+
+def resolve_control_target_index(
+    current_source_index: int,
+    source: list[SourceInstruction],
+    label_to_source_indexes: dict[str, list[int]],
+    target_addr: int | None,
+    source_label: str | None = None,
+    trace_label: str | None = None,
+    next_trace_pc_symbol: str | None = None,
+    jsr_stack_associations: dict[int, int] | None = None,
+) -> tuple[int | None, str | None]:
+    if jsr_stack_associations is None:
+        jsr_stack_associations = {}
+
+    candidate_labels: list[str] = []
+    for label in (source_label, trace_label, next_trace_pc_symbol):
+        if label:
+            candidate_labels.append(label)
+    if target_addr is not None:
+        candidate_labels.append(f"L{target_addr:04X}")
+
+    seen_tokens: set[str] = set()
+    for label in candidate_labels:
+        token = normalize_label_token(label)
+        if token in seen_tokens:
+            continue
+        seen_tokens.add(token)
+
+        target_idx = choose_source_label_target(
+            label,
+            current_source_index,
+            source,
+            label_to_source_indexes,
+        )
+        if target_idx is not None:
+            return target_idx, label
+
+    # Fallback: check JSR stack associations if no label resolved the target address
+    if target_addr is not None and target_addr in jsr_stack_associations:
+        target_idx = jsr_stack_associations[target_addr]
+        if 0 <= target_idx < len(source):
+            return (
+                target_idx,
+                f"jsr-assoc:${target_addr:04X}->{format_source_location(source, target_idx)}",
+            )
+
+    return None, None
+
+
 def derive_stack_top_addr_from_trace_stack(
     trace_stack_bytes: Sequence[int] | None,
 ) -> int | None:
@@ -1427,6 +1493,7 @@ def advance_source_position(
     jsr_assoc_log: list[str] | None = None,
     indirect_jmp_log: list[str] | None = None,
     control_flow_sync_issues: list[SyncIssue] | None = None,
+    observed_next_pc_symbol: str | None = None,
 ) -> int:
     if return_frames is None:
         return_frames = []
@@ -1434,166 +1501,123 @@ def advance_source_position(
         jsr_stack_associations = {}
 
     source_inst = source[source_pos]
-    mnemonic = source_inst.mnemonic
     next_source_pos = source_pos + 1
-    observed_post_pc = (
-        trace_entry.post_pc if trace_entry.post_pc is not None else observed_next_pc
+    observed_transfer_pc = (
+        observed_next_pc if observed_next_pc is not None else trace_entry.post_pc
     )
 
     if trace_entry.mnemonic in BRANCH_MNEMONICS:
         branch_target = branch_target_from_trace(trace_entry)
-        if branch_target is not None and observed_post_pc == branch_target:
+        if branch_target is not None and observed_transfer_pc == branch_target:
             branch_label = branch_label_from_source(source_inst)
-            if branch_label is not None:
-                target_idx = choose_source_label_target(
-                    branch_label,
-                    source_pos,
-                    source,
-                    label_to_source_indexes,
-                )
-                if target_idx is not None:
-                    next_source_pos = target_idx
-
-    if mnemonic == "JMP":
-        jump_label = jump_label_from_source(source_inst)
-        if jump_label is not None:
-            target_idx = choose_source_label_target(
-                jump_label,
+            target_idx, _ = resolve_control_target_index(
                 source_pos,
                 source,
                 label_to_source_indexes,
+                branch_target,
+                source_label=branch_label,
+                trace_label=trace_operand_target_label(trace_entry),
+                next_trace_pc_symbol=observed_next_pc_symbol,
+                jsr_stack_associations=jsr_stack_associations,
             )
             if target_idx is not None:
                 next_source_pos = target_idx
-            elif control_flow_sync_issues is not None:
+            elif control_flow_sync_issues is not None and branch_target is not None:
                 control_flow_sync_issues.append(
                     SyncIssue(
-                        "jmp-unresolved-target",
+                        "branch-unresolved-target",
                         (
-                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} JMP could not "
-                            f"resolve source target label {jump_label} "
+                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} branch could not "
+                            f"resolve taken target ${branch_target:04X} from source label "
+                            f"{branch_label or 'none'}, trace label "
+                            f"{trace_operand_target_label(trace_entry) or observed_next_pc_symbol or 'none'}, "
+                            f"or synthetic L{branch_target:04X} "
                             f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
                         ),
                     )
                 )
-        else:
-            runtime_label_candidates: list[str] = []
-            if observed_post_pc is not None:
-                runtime_label_candidates.append(f"L{observed_post_pc:04X}")
-                if runtime_symbols_by_addr is not None:
-                    runtime_label_candidates.extend(
-                        runtime_symbols_by_addr.get(observed_post_pc, [])
+        return next_source_pos
+
+    if trace_entry.mnemonic == "MLI":
+        return next_source_pos
+
+    if trace_entry.mnemonic == "JMP":
+        jump_label = jump_label_from_source(source_inst)
+        trace_label = (
+            trace_operand_target_label(trace_entry)
+            if jump_label is not None
+            else observed_next_pc_symbol
+        )
+        target_idx, resolved_label = resolve_control_target_index(
+            source_pos,
+            source,
+            label_to_source_indexes,
+            observed_transfer_pc,
+            source_label=jump_label,
+            trace_label=trace_label,
+            next_trace_pc_symbol=observed_next_pc_symbol,
+            jsr_stack_associations=jsr_stack_associations,
+        )
+        if target_idx is not None:
+            next_source_pos = target_idx
+            if jump_label is None and indirect_jmp_log is not None:
+                indirect_jmp_log.extend(
+                    build_indirect_jmp_follow_diagnostics(
+                        trace_entry,
+                        source,
+                        source_pos,
+                        observed_transfer_pc,
+                        target_idx,
+                        resolved_label,
                     )
-
-            seen_candidates: set[str] = set()
-            for candidate_label in runtime_label_candidates:
-                normalized_candidate = normalize_label_token(candidate_label)
-                if normalized_candidate in seen_candidates:
-                    continue
-                seen_candidates.add(normalized_candidate)
-
-                target_idx = choose_source_label_target(
-                    candidate_label,
-                    source_pos,
-                    source,
-                    label_to_source_indexes,
                 )
-                if target_idx is None:
-                    continue
-
-                next_source_pos = target_idx
-                if indirect_jmp_log is not None:
-                    indirect_jmp_log.extend(
-                        build_indirect_jmp_follow_diagnostics(
-                            trace_entry,
-                            source,
-                            source_pos,
-                            observed_post_pc,
-                            target_idx,
-                            candidate_label,
-                        )
-                    )
-                record_runtime_label_event(
-                    runtime_label_events,
-                    "jmp-indirect-runtime-fallback",
-                    trace_entry,
-                    candidate_label,
-                    target_idx,
-                    source,
-                )
-                break
-            else:
-                if indirect_jmp_log is not None:
-                    indirect_jmp_log.extend(
-                        build_indirect_jmp_follow_diagnostics(
-                            trace_entry,
-                            source,
-                            source_pos,
-                            observed_post_pc,
-                            None,
-                        )
-                    )
-                if control_flow_sync_issues is not None:
-                    control_flow_sync_issues.append(
-                        SyncIssue(
-                            "indirect-jmp-unresolved-target",
-                            (
-                                f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} indirect JMP could not "
-                                f"resolve continuation from effective target "
-                                f"{f'${observed_post_pc:04X}' if observed_post_pc is not None else 'none'} "
-                                f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
-                            ),
-                        )
-                    )
-
-    if mnemonic == "JSR":
-        if trace_entry.mnemonic == "MLI":
-            # Trace collapses JSR $BF00 plus inline MLI call metadata into a single
-            # pseudo-instruction, so source should advance past the JSR source line.
-            return next_source_pos
-
-        return_pc = (trace_entry.pc + 3) & 0xFFFF
-        call_label = call_label_from_source(source_inst)
-        stepped_into_callee = False
-        if call_label is not None and (
-            observed_post_pc is None or observed_post_pc != return_pc
-        ):
-            target_idx = choose_source_label_target(
-                call_label,
-                source_pos,
-                source,
-                label_to_source_indexes,
-            )
-            if target_idx is not None:
-                next_source_pos = target_idx
-                stepped_into_callee = True
-        elif (
-            observed_post_pc is not None
-            and observed_post_pc != return_pc
-            and runtime_symbols_by_addr is not None
-        ):
-            for candidate_label in runtime_symbols_by_addr.get(observed_post_pc, []):
-                target_idx = choose_source_label_target(
-                    candidate_label,
-                    source_pos,
-                    source,
-                    label_to_source_indexes,
-                )
-                if target_idx is not None:
-                    next_source_pos = target_idx
-                    stepped_into_callee = True
+                if resolved_label is not None:
                     record_runtime_label_event(
                         runtime_label_events,
-                        "jsr-runtime-fallback",
+                        "jmp-indirect-runtime-fallback",
                         trace_entry,
-                        candidate_label,
+                        resolved_label,
                         target_idx,
                         source,
                     )
-                    break
+        else:
+            if jump_label is None and indirect_jmp_log is not None:
+                indirect_jmp_log.extend(
+                    build_indirect_jmp_follow_diagnostics(
+                        trace_entry,
+                        source,
+                        source_pos,
+                        observed_transfer_pc,
+                        None,
+                    )
+                )
+            if control_flow_sync_issues is not None:
+                reason = (
+                    "jmp-unresolved-target"
+                    if jump_label is not None
+                    else "indirect-jmp-unresolved-target"
+                )
+                detail_kind = "JMP" if jump_label is not None else "indirect JMP"
+                control_flow_sync_issues.append(
+                    SyncIssue(
+                        reason,
+                        (
+                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} {detail_kind} could not "
+                            f"resolve target {f'${observed_transfer_pc:04X}' if observed_transfer_pc is not None else 'none'} "
+                            f"from source label {jump_label or 'none'}, trace label "
+                            f"{trace_label or observed_next_pc_symbol or 'none'}, or synthetic "
+                            f"{f'L{observed_transfer_pc:04X}' if observed_transfer_pc is not None else 'none'} "
+                            f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+                        ),
+                    )
+                )
+        return next_source_pos
 
-        if not stepped_into_callee and control_flow_sync_issues is not None:
-            if observed_post_pc == return_pc:
+    if trace_entry.mnemonic == "JSR":
+        return_pc = (trace_entry.pc + 3) & 0xFFFF
+        call_label = call_label_from_source(source_inst)
+        if observed_transfer_pc == return_pc:
+            if control_flow_sync_issues is not None:
                 control_flow_sync_issues.append(
                     SyncIssue(
                         "jsr-linear-fallback-rejected",
@@ -1604,25 +1628,53 @@ def advance_source_position(
                         ),
                     )
                 )
-            else:
+            return next_source_pos
+
+        target_idx, resolved_label = resolve_control_target_index(
+            source_pos,
+            source,
+            label_to_source_indexes,
+            observed_transfer_pc,
+            source_label=call_label,
+            trace_label=trace_operand_target_label(trace_entry),
+            next_trace_pc_symbol=observed_next_pc_symbol,
+            jsr_stack_associations=jsr_stack_associations,
+        )
+        if target_idx is None:
+            if control_flow_sync_issues is not None:
                 control_flow_sync_issues.append(
                     SyncIssue(
                         "jsr-unresolved-target",
                         (
                             f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} JSR could not resolve callee "
-                            f"from observed target {f'${observed_post_pc:04X}' if observed_post_pc is not None else 'none'} "
-                            f"and source operand {call_label or 'none'} "
+                            f"from observed target {f'${observed_transfer_pc:04X}' if observed_transfer_pc is not None else 'none'}, "
+                            f"source operand {call_label or 'none'}, trace label "
+                            f"{trace_operand_target_label(trace_entry) or observed_next_pc_symbol or 'none'}, or synthetic "
+                            f"{f'L{observed_transfer_pc:04X}' if observed_transfer_pc is not None else 'none'} "
                             f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
                         ),
                     )
                 )
             return next_source_pos
 
-        if stepped_into_callee:
-            dump_return_pc = derive_rts_return_pc_from_trace_stack(
-                trace_entry.post_stack_bytes
+        next_source_pos = target_idx
+        dump_return_pc = derive_rts_return_pc_from_trace_stack(
+            trace_entry.post_stack_bytes
+        )
+        return_frames.append((source_pos + 1, dump_return_pc or return_pc))
+        if resolved_label is not None and (
+            call_label is None
+            or normalize_label_token(resolved_label)
+            != normalize_label_token(call_label)
+        ):
+            record_runtime_label_event(
+                runtime_label_events,
+                "jsr-runtime-fallback",
+                trace_entry,
+                resolved_label,
+                target_idx,
+                source,
             )
-            return_frames.append((source_pos + 1, dump_return_pc or return_pc))
 
         pushed_return_addr = derive_stack_top_addr_from_trace_stack(
             trace_entry.post_stack_bytes
@@ -1635,114 +1687,77 @@ def advance_source_position(
                 f"  JSR @{trace_entry.index} PC=${trace_entry.pc:04X} "
                 f"assoc: ${pushed_return_addr:04X}->{format_source_location(source, source_pos + 1)}"
             )
+        return next_source_pos
 
-    if mnemonic == "RTS":
+    if trace_entry.mnemonic == "RTS":
         stack_top_addr = derive_stack_top_addr_from_trace_stack(
             trace_entry.pre_stack_bytes
         )
-        trace_derived_pc = derive_rts_return_pc_from_trace_stack(
-            trace_entry.pre_stack_bytes
-        )
-        effective_post_pc = (
-            trace_derived_pc if trace_derived_pc is not None else observed_post_pc
-        )
+        effective_post_pc = observed_transfer_pc
 
         if rts_miss_log is not None:
             rts_miss_log.extend(
                 build_rts_assoc_diagnostics(trace_entry, jsr_stack_associations, source)
             )
 
+        # Try JSR stack association lookup using the actual stack value (key)
+        # before trying other resolution methods with effective_post_pc
+        runtime_target_idx = None
+        resolved_label = None
         if stack_top_addr is not None and stack_top_addr in jsr_stack_associations:
-            assoc_target = jsr_stack_associations[stack_top_addr]
-            if rts_miss_log is not None:
-                rts_miss_log.append(
-                    f"    RTS decision: method=assoc-map "
-                    f"params={{stack-top=${stack_top_addr:04X}, target={format_source_location(source, assoc_target)}}}"
-                )
-            return assoc_target
+            runtime_target_idx = jsr_stack_associations[stack_top_addr]
+            if 0 <= runtime_target_idx < len(source):
+                resolved_label = f"jsr-assoc:${stack_top_addr:04X}->{format_source_location(source, runtime_target_idx)}"
+            else:
+                runtime_target_idx = None
 
-        if return_frames:
-            if effective_post_pc is not None:
+        if runtime_target_idx is None and effective_post_pc is not None:
+            runtime_target_idx, resolved_label = resolve_control_target_index(
+                source_pos,
+                source,
+                label_to_source_indexes,
+                effective_post_pc,
+                trace_label=observed_next_pc_symbol,
+                next_trace_pc_symbol=observed_next_pc_symbol,
+                jsr_stack_associations=jsr_stack_associations,
+            )
+
+        if runtime_target_idx is not None:
+            if return_frames:
                 for i in range(len(return_frames) - 1, -1, -1):
                     return_index, return_pc = return_frames[i]
                     if return_pc == effective_post_pc:
-                        if rts_miss_log is not None:
-                            rts_miss_log.append(
-                                f"    RTS decision: method=return-frames-pc-match "
-                                f"params={{effective-post-pc=${effective_post_pc:04X}, "
-                                f"matched-frame={i}, target={format_source_location(source, return_index)}}}"
-                            )
                         del return_frames[i:]
-                        return return_index
-            else:
-                return_index, _ = return_frames.pop()
-                if rts_miss_log is not None:
-                    rts_miss_log.append(
-                        f"    RTS decision: method=return-frames-lifo-fallback "
-                        f"params={{effective-post-pc=none, target={format_source_location(source, return_index)}}}"
-                    )
-                return return_index
-
-        if effective_post_pc is not None:
-            runtime_label_candidates = [f"L{effective_post_pc:04X}"]
-            if runtime_symbols_by_addr is not None:
-                runtime_label_candidates.extend(
-                    runtime_symbols_by_addr.get(effective_post_pc, [])
-                )
-
-            for candidate_label in runtime_label_candidates:
-                runtime_target_idx = choose_source_label_target(
-                    candidate_label,
-                    source_pos,
-                    source,
-                    label_to_source_indexes,
-                )
-                if runtime_target_idx is not None:
-                    record_runtime_label_event(
-                        runtime_label_events,
-                        "rts-runtime-fallback",
-                        trace_entry,
-                        candidate_label,
-                        runtime_target_idx,
-                        source,
-                    )
-                    if rts_miss_log is not None:
-                        rts_miss_log.append(
-                            f"    RTS decision: method=runtime-label-fallback "
-                            f"params={{effective-post-pc=${effective_post_pc:04X}, "
-                            f"label={candidate_label}, target={format_source_location(source, runtime_target_idx)}}}"
-                        )
-                    return runtime_target_idx
+                        break
+            record_runtime_label_event(
+                runtime_label_events,
+                "rts-runtime-fallback",
+                trace_entry,
+                resolved_label or f"L{effective_post_pc:04X}",
+                runtime_target_idx,
+                source,
+            )
             if rts_miss_log is not None:
                 rts_miss_log.append(
-                    f"    RTS decision: method=linear-fallback-rejected "
+                    f"    RTS decision: method=runtime-label-fallback "
                     f"params={{effective-post-pc=${effective_post_pc:04X}, "
-                    f"next-source={format_source_location(source, next_source_pos)}}}"
+                    f"label={resolved_label or f'L{effective_post_pc:04X}'}, target={format_source_location(source, runtime_target_idx)}}}"
                 )
-            if control_flow_sync_issues is not None:
-                control_flow_sync_issues.append(
-                    SyncIssue(
-                        "rts-linear-fallback-rejected",
-                        (
-                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS could not resolve return "
-                            f"target for effective post PC ${effective_post_pc:04X} "
-                            f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
-                        ),
-                    )
-                )
-            return next_source_pos
-
+            return runtime_target_idx
         if rts_miss_log is not None:
             rts_miss_log.append(
                 f"    RTS decision: method=linear-fallback-rejected "
-                f"params={{effective-post-pc=none, next-source={format_source_location(source, next_source_pos)}}}"
+                f"params={{effective-post-pc=${effective_post_pc:04X}, "
+                f"next-source={format_source_location(source, next_source_pos)}}}"
             )
         if control_flow_sync_issues is not None:
             control_flow_sync_issues.append(
                 SyncIssue(
                     "rts-linear-fallback-rejected",
                     (
-                        f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS has no resolvable return target "
+                        f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS could not resolve return "
+                        f"target for effective post PC ${effective_post_pc:04X} using trace label "
+                        f"{observed_next_pc_symbol or 'none'} or synthetic L{effective_post_pc:04X} "
                         f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
                     ),
                 )
@@ -2778,6 +2793,9 @@ def run_alignment(args: argparse.Namespace) -> int:
                 jsr_assoc_log,
                 indirect_jmp_log,
                 control_flow_sync_issues,
+                observed_next_pc_symbol=(
+                    pending[1].pc_symbol if len(pending) > 1 else None
+                ),
             )
 
             if control_flow_sync_issues:
@@ -3306,9 +3324,10 @@ Labeled LDA #$01
         )
         assert next_pos == 1  # nosec B101
         assert return_frames == []  # nosec B101
-        assert rts_non_runtime_events == []  # nosec B101
+        assert len(rts_non_runtime_events) == 1  # nosec B101
+        assert rts_non_runtime_events[0]["runtime_label"] == "L2003"  # nosec B101
 
-        # RTS should use stack-top association before fallback label logic.
+        # RTS should use the observed next trace PC to resolve continuation.
         persistent_assoc_map = {0x2002: 1}
         rts_assoc_pos = advance_source_position(
             TraceEntry(
@@ -3326,6 +3345,7 @@ Labeled LDA #$01
             call_source,
             call_labels,
             jsr_stack_associations=persistent_assoc_map,
+            observed_next_pc=0x2003,
         )
         assert rts_assoc_pos == 1  # nosec B101
         assert persistent_assoc_map.get(0x2002) == 1  # nosec B101
@@ -3491,8 +3511,8 @@ Labeled LDA #$01
             pc=0x2000,
             opcode=0x20,
             mnemonic="JSR",
-            operand="$3000",
-            full_line="@160 PC=$2000 OP=$20 JSR $3000",
+            operand="$3000 (Worker)",
+            full_line="@160 PC=$2000 OP=$20 JSR $3000 (Worker)",
             pre_pc=0x2000,
             post_pc=0x3000,
         )
@@ -3511,7 +3531,6 @@ Labeled LDA #$01
             0,
             jsr_runtime_fallback_source,
             jsr_runtime_fallback_labels,
-            runtime_symbols_by_addr={0x3000: ["Worker"]},
             runtime_label_events=jsr_runtime_events,
         )
         assert jsr_runtime_fallback_pos == 2  # nosec B101
@@ -3583,8 +3602,7 @@ Labeled LDA #$01
         assert rts_runtime_events[0]["runtime_label"] == "L2003"  # nosec B101
         assert rts_runtime_events[0]["target_source_index"] == 1  # nosec B101
 
-        # Phase 2: advance_source_position RTS path uses trace stack bytes over observed
-        # post_pc when pre_stack_bytes is available.
+        # Phase 2: advance_source_position RTS path uses the observed next trace PC.
         rts_trace_stack_priority_trace = TraceEntry(
             index=18,
             pc=0x3001,
@@ -3601,6 +3619,7 @@ Labeled LDA #$01
             4,
             call_source,
             call_labels,
+            observed_next_pc=0x2003,
         )
         assert rts_stack_priority_pos == 1  # nosec B101
 
@@ -4500,6 +4519,32 @@ Labeled LDA #$01
     # extract_operand_label_pair: complex expressions are intentionally ignored
     _complex_src = SourceInstruction("f.s", 6, None, "LDA", "SomeVar+Other")
     assert extract_operand_label_pair(_complex_src, _lda_tr) is None  # nosec B101
+
+    # resolve_control_target_index: JSR stack associations fallback
+    _src_list = [
+        SourceInstruction("test.s", 1, "Start", "JSR", "GetChar"),
+        SourceInstruction("test.s", 2, None, "RTS", ""),
+        SourceInstruction("test.s", 3, "GetChar", "LDA", "$C000"),
+        SourceInstruction("test.s", 4, None, "RTS", ""),
+    ]
+    _label_map = {
+        "START": [0],
+        "GETCHAR": [2],
+    }
+    # When target address $2050 has no source label, JSR assoc should resolve it
+    _assoc_dict = {0x2050: 1}  # 0x2050-based RTS should return to source[1]
+    _target_idx, _label = resolve_control_target_index(
+        current_source_index=0,
+        source=_src_list,
+        label_to_source_indexes=_label_map,
+        target_addr=0x2050,
+        source_label=None,
+        trace_label=None,
+        next_trace_pc_symbol=None,
+        jsr_stack_associations=_assoc_dict,
+    )
+    assert _target_idx == 1  # nosec B101
+    assert "jsr-assoc" in _label  # nosec B101
 
     print("self-check passed")
 

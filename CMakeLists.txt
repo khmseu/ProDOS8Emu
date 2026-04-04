@@ -28,6 +28,7 @@ add_library(prodos8emu
     src/xattr.cpp
     src/apple2mem.cpp
     src/cpu65c02.cpp
+    src/monitor_symbols.cpp
     src/system_loader.cpp
 )
 
