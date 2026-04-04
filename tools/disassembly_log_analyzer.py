@@ -1425,6 +1425,8 @@ def advance_source_position(
     jsr_stack_associations: dict[int, int] | None = None,
     rts_miss_log: list[str] | None = None,
     jsr_assoc_log: list[str] | None = None,
+    indirect_jmp_log: list[str] | None = None,
+    control_flow_sync_issues: list[SyncIssue] | None = None,
 ) -> int:
     if return_frames is None:
         return_frames = []
@@ -1463,8 +1465,93 @@ def advance_source_position(
             )
             if target_idx is not None:
                 next_source_pos = target_idx
+            elif control_flow_sync_issues is not None:
+                control_flow_sync_issues.append(
+                    SyncIssue(
+                        "jmp-unresolved-target",
+                        (
+                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} JMP could not "
+                            f"resolve source target label {jump_label} "
+                            f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+                        ),
+                    )
+                )
+        else:
+            runtime_label_candidates: list[str] = []
+            if observed_post_pc is not None:
+                runtime_label_candidates.append(f"L{observed_post_pc:04X}")
+                if runtime_symbols_by_addr is not None:
+                    runtime_label_candidates.extend(
+                        runtime_symbols_by_addr.get(observed_post_pc, [])
+                    )
+
+            seen_candidates: set[str] = set()
+            for candidate_label in runtime_label_candidates:
+                normalized_candidate = normalize_label_token(candidate_label)
+                if normalized_candidate in seen_candidates:
+                    continue
+                seen_candidates.add(normalized_candidate)
+
+                target_idx = choose_source_label_target(
+                    candidate_label,
+                    source_pos,
+                    source,
+                    label_to_source_indexes,
+                )
+                if target_idx is None:
+                    continue
+
+                next_source_pos = target_idx
+                if indirect_jmp_log is not None:
+                    indirect_jmp_log.extend(
+                        build_indirect_jmp_follow_diagnostics(
+                            trace_entry,
+                            source,
+                            source_pos,
+                            observed_post_pc,
+                            target_idx,
+                            candidate_label,
+                        )
+                    )
+                record_runtime_label_event(
+                    runtime_label_events,
+                    "jmp-indirect-runtime-fallback",
+                    trace_entry,
+                    candidate_label,
+                    target_idx,
+                    source,
+                )
+                break
+            else:
+                if indirect_jmp_log is not None:
+                    indirect_jmp_log.extend(
+                        build_indirect_jmp_follow_diagnostics(
+                            trace_entry,
+                            source,
+                            source_pos,
+                            observed_post_pc,
+                            None,
+                        )
+                    )
+                if control_flow_sync_issues is not None:
+                    control_flow_sync_issues.append(
+                        SyncIssue(
+                            "indirect-jmp-unresolved-target",
+                            (
+                                f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} indirect JMP could not "
+                                f"resolve continuation from effective target "
+                                f"{f'${observed_post_pc:04X}' if observed_post_pc is not None else 'none'} "
+                                f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+                            ),
+                        )
+                    )
 
     if mnemonic == "JSR":
+        if trace_entry.mnemonic == "MLI":
+            # Trace collapses JSR $BF00 plus inline MLI call metadata into a single
+            # pseudo-instruction, so source should advance past the JSR source line.
+            return next_source_pos
+
         return_pc = (trace_entry.pc + 3) & 0xFFFF
         call_label = call_label_from_source(source_inst)
         stepped_into_callee = False
@@ -1504,6 +1591,32 @@ def advance_source_position(
                         source,
                     )
                     break
+
+        if not stepped_into_callee and control_flow_sync_issues is not None:
+            if observed_post_pc == return_pc:
+                control_flow_sync_issues.append(
+                    SyncIssue(
+                        "jsr-linear-fallback-rejected",
+                        (
+                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} JSR would fall through to "
+                            f"its return PC ${return_pc:04X} instead of entering a callee "
+                            f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+                        ),
+                    )
+                )
+            else:
+                control_flow_sync_issues.append(
+                    SyncIssue(
+                        "jsr-unresolved-target",
+                        (
+                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} JSR could not resolve callee "
+                            f"from observed target {f'${observed_post_pc:04X}' if observed_post_pc is not None else 'none'} "
+                            f"and source operand {call_label or 'none'} "
+                            f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+                        ),
+                    )
+                )
+            return next_source_pos
 
         if stepped_into_callee:
             dump_return_pc = derive_rts_return_pc_from_trace_stack(
@@ -1602,16 +1715,37 @@ def advance_source_position(
                     return runtime_target_idx
             if rts_miss_log is not None:
                 rts_miss_log.append(
-                    f"    RTS decision: method=linear-fallback "
+                    f"    RTS decision: method=linear-fallback-rejected "
                     f"params={{effective-post-pc=${effective_post_pc:04X}, "
                     f"next-source={format_source_location(source, next_source_pos)}}}"
+                )
+            if control_flow_sync_issues is not None:
+                control_flow_sync_issues.append(
+                    SyncIssue(
+                        "rts-linear-fallback-rejected",
+                        (
+                            f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS could not resolve return "
+                            f"target for effective post PC ${effective_post_pc:04X} "
+                            f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+                        ),
+                    )
                 )
             return next_source_pos
 
         if rts_miss_log is not None:
             rts_miss_log.append(
-                f"    RTS decision: method=linear-fallback "
+                f"    RTS decision: method=linear-fallback-rejected "
                 f"params={{effective-post-pc=none, next-source={format_source_location(source, next_source_pos)}}}"
+            )
+        if control_flow_sync_issues is not None:
+            control_flow_sync_issues.append(
+                SyncIssue(
+                    "rts-linear-fallback-rejected",
+                    (
+                        f"Trace @{trace_entry.index} PC=${trace_entry.pc:04X} RTS has no resolvable return target "
+                        f"({source_inst.file_path}:{source_inst.line_number}, source[{source_pos}])."
+                    ),
+                )
             )
         return next_source_pos
 
@@ -1954,6 +2088,130 @@ def attempt_indirect_jmp_next_trace_resync(
         runtime_label_events=runtime_label_events,
         event_kind="indirect-jmp-next-trace-resync",
     )
+
+
+def build_indirect_jmp_resync_diagnostics(
+    pending: Deque[TraceEntry],
+    source: list[SourceInstruction],
+    current_source_index: int,
+    target_source_index: int,
+) -> list[str]:
+    if len(pending) < 2:
+        return []
+
+    current = pending[0]
+    next_entry = pending[1]
+    if current.mnemonic != "JMP" or not normalize_operand_text(
+        current.operand
+    ).startswith("("):
+        return []
+
+    method = (
+        "next-trace-runtime-label"
+        if f"L{next_entry.pc:04X}" == normalize_label_token(next_entry.pc_symbol or "")
+        else "next-trace-pc-symbol"
+    )
+    next_symbol = next_entry.pc_symbol if next_entry.pc_symbol is not None else "none"
+    return [
+        (
+            f"  IJMP @{current.index} PC=${current.pc:04X} non-linear-follow: "
+            f"current={format_source_location(source, current_source_index)}"
+        ),
+        (
+            f"    IJMP decision: method={method} "
+            f"params={{next-trace=@{next_entry.index} PC=${next_entry.pc:04X}, "
+            f"next-pc-symbol={next_symbol}, target={format_source_location(source, target_source_index)}}}"
+        ),
+    ]
+
+
+def build_indirect_jmp_conflict_diagnostics(
+    pending: Deque[TraceEntry],
+    source: list[SourceInstruction],
+    current_source_index: int,
+) -> list[str]:
+    if len(pending) < 2:
+        return []
+
+    current = pending[0]
+    next_entry = pending[1]
+    if current.mnemonic != "JMP" or not normalize_operand_text(
+        current.operand
+    ).startswith("("):
+        return []
+
+    next_runtime_label = f"L{next_entry.pc:04X}"
+    next_symbol = next_entry.pc_symbol if next_entry.pc_symbol is not None else "none"
+    return [
+        (
+            f"  IJMP @{current.index} PC=${current.pc:04X} sync-conflict: "
+            f"current={format_source_location(source, current_source_index)}"
+        ),
+        (
+            f"    IJMP conflict: method=next-trace-follow-failed "
+            f"params={{next-trace=@{next_entry.index} PC=${next_entry.pc:04X}, "
+            f"runtime-label={next_runtime_label}, next-pc-symbol={next_symbol}}}"
+        ),
+    ]
+
+
+def build_operand_label_mismatch_diagnostics(
+    trace_entry: TraceEntry,
+    source: list[SourceInstruction],
+    source_index: int,
+    operand_label: str,
+    resolved_addr: int,
+    expected_addr: int,
+) -> list[str]:
+    return [
+        (
+            f"  OP-LABEL @{trace_entry.index} PC=${trace_entry.pc:04X} sync-conflict: "
+            f"current={format_source_location(source, source_index)}"
+        ),
+        (
+            f"    OP-LABEL conflict: method=fixed-runtime-label-check "
+            f"params={{label={operand_label}, resolved=${resolved_addr:04X}, "
+            f"expected=${expected_addr:04X}}}"
+        ),
+    ]
+
+
+def build_indirect_jmp_follow_diagnostics(
+    trace_entry: TraceEntry,
+    source: list[SourceInstruction],
+    current_source_index: int,
+    effective_post_pc: int | None,
+    target_source_index: int | None,
+    label: str | None = None,
+) -> list[str]:
+    effective_post_pc_text = (
+        f"${effective_post_pc:04X}" if effective_post_pc is not None else "none"
+    )
+    if target_source_index is not None:
+        return [
+            (
+                f"  IJMP @{trace_entry.index} PC=${trace_entry.pc:04X} non-linear-follow: "
+                f"current={format_source_location(source, current_source_index)}"
+            ),
+            (
+                f"    IJMP decision: method=observed-target-pc "
+                f"params={{effective-post-pc={effective_post_pc_text}, "
+                f"label={label or 'none'}, "
+                f"target={format_source_location(source, target_source_index)}}}"
+            ),
+        ]
+
+    return [
+        (
+            f"  IJMP @{trace_entry.index} PC=${trace_entry.pc:04X} sync-conflict: "
+            f"current={format_source_location(source, current_source_index)}"
+        ),
+        (
+            f"    IJMP decision: method=linear-fallback "
+            f"params={{effective-post-pc={effective_post_pc_text}, "
+            f"next-source={format_source_location(source, current_source_index + 1)}}}"
+        ),
+    ]
 
 
 def build_annotated_line(
@@ -2322,7 +2580,19 @@ def run_alignment(args: argparse.Namespace) -> int:
                     source_pos,
                     runtime_label_events=runtime_label_events,
                 )
+                indirect_jmp_conflict_log = build_indirect_jmp_conflict_diagnostics(
+                    pending,
+                    source,
+                    source_pos,
+                )
                 if indirect_jmp_resync_idx is not None:
+                    for debug_line in build_indirect_jmp_resync_diagnostics(
+                        pending,
+                        source,
+                        source_pos,
+                        indirect_jmp_resync_idx,
+                    ):
+                        annotated_out.write(debug_line + "\n")
                     recent_trace.append(pending.popleft())
                     recent_source_indexes.append(None)
                     processed += 1
@@ -2366,6 +2636,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                         f"({source_inst.file_path}:{source_inst.line_number})."
                     ),
                 )
+                for debug_line in indirect_jmp_conflict_log:
+                    annotated_out.write(debug_line + "\n")
                 if args.non_interactive:
                     print(f"Stopping: {issue.reason}: {issue.detail}")
                     stop_reason = issue.reason
@@ -2417,6 +2689,7 @@ def run_alignment(args: argparse.Namespace) -> int:
             new_operand_label_strs: list[str] = []
             op_pairs = extract_operand_label_pairs(source_inst, trace_entry)
             operand_sync_issue: SyncIssue | None = None
+            operand_sync_log: list[str] = []
             for op_label, op_addr, op_flag in op_pairs:
                 fixed_addr = runtime_label_fixed_address(op_label)
                 if fixed_addr is not None and fixed_addr != op_addr:
@@ -2428,6 +2701,14 @@ def run_alignment(args: argparse.Namespace) -> int:
                             f"but NEW_OP_LABELS candidate {op_label} resolved to ${op_addr:04X} "
                             f"(expected ${fixed_addr:04X} from label token)."
                         ),
+                    )
+                    operand_sync_log = build_operand_label_mismatch_diagnostics(
+                        trace_entry,
+                        source,
+                        source_pos,
+                        op_label,
+                        op_addr,
+                        fixed_addr,
                     )
                     break
 
@@ -2445,6 +2726,8 @@ def run_alignment(args: argparse.Namespace) -> int:
                     new_operand_label_strs.append(f"{op_label}=${op_addr:04X}")
 
             if operand_sync_issue is not None:
+                for debug_line in operand_sync_log:
+                    annotated_out.write(debug_line + "\n")
                 if args.non_interactive:
                     print(
                         f"Stopping: {operand_sync_issue.reason}: {operand_sync_issue.detail}"
@@ -2476,14 +2759,12 @@ def run_alignment(args: argparse.Namespace) -> int:
                     continue
                 continue
 
-            last_matched_source_index = source_pos
-            recent_trace.append(trace_entry)
-            recent_source_indexes.append(source_pos)
-            pending.popleft()
-            observed_next_pc = pending[0].pc if pending else None
+            observed_next_pc = pending[1].pc if len(pending) > 1 else None
             rts_miss_log: list[str] = []
             jsr_assoc_log: list[str] = []
-            source_pos = advance_source_position(
+            indirect_jmp_log: list[str] = []
+            control_flow_sync_issues: list[SyncIssue] = []
+            next_source_pos = advance_source_position(
                 trace_entry,
                 source_pos,
                 source,
@@ -2495,7 +2776,53 @@ def run_alignment(args: argparse.Namespace) -> int:
                 jsr_stack_associations,
                 rts_miss_log,
                 jsr_assoc_log,
+                indirect_jmp_log,
+                control_flow_sync_issues,
             )
+
+            if control_flow_sync_issues:
+                for debug_line in jsr_assoc_log:
+                    annotated_out.write(debug_line + "\n")
+                for debug_line in indirect_jmp_log:
+                    annotated_out.write(debug_line + "\n")
+                for debug_line in rts_miss_log:
+                    annotated_out.write(debug_line + "\n")
+
+                issue = control_flow_sync_issues[0]
+                if args.non_interactive:
+                    print(f"Stopping: {issue.reason}: {issue.detail}")
+                    stop_reason = issue.reason
+                    break
+
+                action, value = prompt_for_help(
+                    issue,
+                    list(pending),
+                    source,
+                    source_pos,
+                    label_to_source_indexes,
+                    list(recent_trace),
+                    last_matched_source_index,
+                    list(recent_source_indexes),
+                )
+                if action == "quit":
+                    stop_reason = issue.reason
+                    break
+                if action == "skip":
+                    recent_trace.append(pending.popleft())
+                    recent_source_indexes.append(None)
+                    processed += 1
+                    continue
+                if action == "jump" and value is not None:
+                    source_pos = value
+                    source_return_frames.clear()
+                    continue
+                continue
+
+            last_matched_source_index = source_pos
+            recent_trace.append(trace_entry)
+            recent_source_indexes.append(source_pos)
+            pending.popleft()
+            source_pos = next_source_pos
 
             line_out = build_annotated_line(
                 trace_entry.full_line,
@@ -2505,6 +2832,8 @@ def run_alignment(args: argparse.Namespace) -> int:
             for stack_line in trace_entry.pre_stack_lines:
                 annotated_out.write(stack_line + "\n")
             for debug_line in jsr_assoc_log:
+                annotated_out.write(debug_line + "\n")
+            for debug_line in indirect_jmp_log:
                 annotated_out.write(debug_line + "\n")
             for debug_line in rts_miss_log:
                 annotated_out.write(debug_line + "\n")
@@ -2893,18 +3222,25 @@ Labeled LDA #$01
             pre_pc=0x2000,
             post_pc=0x2003,
         )
+        jsr_no_step_issues: list[SyncIssue] = []
         no_step_pos = advance_source_position(
             jsr_no_step_trace,
             0,
             call_source,
             call_labels,
             runtime_label_events=[],
+            control_flow_sync_issues=jsr_no_step_issues,
         )
         assert no_step_pos == 1  # nosec B101
+        assert len(jsr_no_step_issues) == 1  # nosec B101
+        assert (
+            jsr_no_step_issues[0].reason == "jsr-linear-fallback-rejected"
+        )  # nosec B101
 
         # Non-runtime JSR should not emit any runtime label events or push a return frame.
         jsr_no_step_frames: list[tuple[int, int | None]] = []
         jsr_no_step_events: list[dict[str, object]] = []
+        jsr_no_step_issue_with_events: list[SyncIssue] = []
         no_step_pos_with_events = advance_source_position(
             jsr_no_step_trace,
             0,
@@ -2912,10 +3248,12 @@ Labeled LDA #$01
             call_labels,
             return_frames=jsr_no_step_frames,
             runtime_label_events=jsr_no_step_events,
+            control_flow_sync_issues=jsr_no_step_issue_with_events,
         )
         assert no_step_pos_with_events == 1  # nosec B101
         assert jsr_no_step_frames == []  # nosec B101
         assert jsr_no_step_events == []  # nosec B101
+        assert len(jsr_no_step_issue_with_events) == 1  # nosec B101
 
         rts_trace = TraceEntry(
             index=11,
@@ -3038,13 +3376,19 @@ Labeled LDA #$01
             pre_pc=0x3001,
             post_pc=0x2222,
         )
+        rts_unmatched_issues: list[SyncIssue] = []
         unmatched_pos = advance_source_position(
             rts_unmatched_trace,
             4,
             call_source,
             call_labels,
+            control_flow_sync_issues=rts_unmatched_issues,
         )
         assert unmatched_pos == 5  # nosec B101
+        assert len(rts_unmatched_issues) == 1  # nosec B101
+        assert (
+            rts_unmatched_issues[0].reason == "rts-linear-fallback-rejected"
+        )  # nosec B101
 
         # Phase 3: branch fallback should use observed next PC when post_pc is missing.
         loop_source = [
@@ -3107,14 +3451,20 @@ Labeled LDA #$01
             pre_pc=0x2000,
             post_pc=None,
         )
+        jsr_missing_post_return_issues: list[SyncIssue] = []
         jsr_missing_post_pos = advance_source_position(
             jsr_missing_post_return,
             0,
             call_source,
             call_labels,
             observed_next_pc=0x2003,
+            control_flow_sync_issues=jsr_missing_post_return_issues,
         )
         assert jsr_missing_post_pos == 1  # nosec B101
+        assert len(jsr_missing_post_return_issues) == 1  # nosec B101
+        assert (
+            jsr_missing_post_return_issues[0].reason == "jsr-linear-fallback-rejected"
+        )  # nosec B101
 
         jsr_missing_post_step = TraceEntry(
             index=16,
@@ -3169,6 +3519,34 @@ Labeled LDA #$01
         assert jsr_runtime_events[0]["kind"] == "jsr-runtime-fallback"  # nosec B101
         assert jsr_runtime_events[0]["runtime_label"] == "Worker"  # nosec B101
         assert jsr_runtime_events[0]["target_source_index"] == 2  # nosec B101
+
+        mli_jsr_source = [
+            SourceInstruction("mli.s", 42, None, "JSR", "PRODOS8"),
+            SourceInstruction("mli.s", 46, None, "LDA", "ROMIN2"),
+        ]
+        mli_jsr_labels: dict[str, list[int]] = defaultdict(list)
+        mli_jsr_issues: list[SyncIssue] = []
+        mli_jsr_events: list[dict[str, object]] = []
+        mli_jsr_pos = advance_source_position(
+            TraceEntry(
+                index=969,
+                pc=0x2031,
+                opcode=0x20,
+                mnemonic="MLI",
+                operand=".byte $82 .word $2035 (GET_TIME)",
+                full_line="@969 PC=$2031 OP=$20 MLI .byte $82 .word $2035 (GET_TIME)",
+                pre_pc=0x2031,
+                post_pc=0x2037,
+            ),
+            0,
+            mli_jsr_source,
+            mli_jsr_labels,
+            runtime_label_events=mli_jsr_events,
+            control_flow_sync_issues=mli_jsr_issues,
+        )
+        assert mli_jsr_pos == 1  # nosec B101
+        assert mli_jsr_issues == []  # nosec B101
+        assert mli_jsr_events == []  # nosec B101
 
         # Phase 3: RTS fallback should match runtime label via observed next PC.
         rts_missing_post_trace = TraceEntry(
@@ -3336,6 +3714,100 @@ Labeled LDA #$01
             observed_next_pc=0x2000,
         )
         assert jmp_pos == 2  # nosec B101
+
+        indirect_follow_source = [
+            SourceInstruction("ijmp_follow.s", 1, "COUT", "JMP", "(CSWL)"),
+            SourceInstruction("ijmp_follow.s", 2, "COUT1", "CMP", "#$A0"),
+            SourceInstruction("ijmp_follow.s", 3, "LB3D9", "CMP", "#$E0"),
+        ]
+        indirect_follow_labels: dict[str, list[int]] = defaultdict(list)
+        for idx, inst in enumerate(indirect_follow_source):
+            if inst.label:
+                indirect_follow_labels[inst.label.upper()].append(idx)
+
+        indirect_follow_log: list[str] = []
+        indirect_follow_events: list[dict[str, object]] = []
+        indirect_follow_pos = advance_source_position(
+            TraceEntry(
+                index=109701,
+                pc=0xFDED,
+                opcode=0x6C,
+                mnemonic="JMP",
+                operand="(0036)",
+                full_line="@109701 PC=$FDED OP=$6C JMP (0036)",
+                pre_pc=0xFDED,
+                post_pc=0xB3D9,
+            ),
+            0,
+            indirect_follow_source,
+            indirect_follow_labels,
+            runtime_symbols_by_addr={0xB3D9: ["LB3D9"]},
+            runtime_label_events=indirect_follow_events,
+            indirect_jmp_log=indirect_follow_log,
+        )
+        assert indirect_follow_pos == 2  # nosec B101
+        assert any(
+            "IJMP decision: method=observed-target-pc" in line
+            for line in indirect_follow_log
+        )  # nosec B101
+        assert any("label=LB3D9" in line for line in indirect_follow_log)  # nosec B101
+        assert len(indirect_follow_events) == 1  # nosec B101
+        assert (
+            indirect_follow_events[0]["kind"] == "jmp-indirect-runtime-fallback"
+        )  # nosec B101
+        assert indirect_follow_events[0]["target_source_index"] == 2  # nosec B101
+
+        unresolved_indirect_log: list[str] = []
+        unresolved_indirect_issues: list[SyncIssue] = []
+        unresolved_indirect_pos = advance_source_position(
+            TraceEntry(
+                index=109702,
+                pc=0xFDED,
+                opcode=0x6C,
+                mnemonic="JMP",
+                operand="(0036)",
+                full_line="@109702 PC=$FDED OP=$6C JMP (0036)",
+                pre_pc=0xFDED,
+                post_pc=0xB3DA,
+            ),
+            0,
+            indirect_follow_source,
+            indirect_follow_labels,
+            indirect_jmp_log=unresolved_indirect_log,
+            control_flow_sync_issues=unresolved_indirect_issues,
+        )
+        assert unresolved_indirect_pos == 1  # nosec B101
+        assert len(unresolved_indirect_issues) == 1  # nosec B101
+        assert (
+            unresolved_indirect_issues[0].reason == "indirect-jmp-unresolved-target"
+        )  # nosec B101
+        assert any(
+            "IJMP decision: method=linear-fallback" in line
+            for line in unresolved_indirect_log
+        )  # nosec B101
+
+        unresolved_direct_jmp_issues: list[SyncIssue] = []
+        unresolved_direct_jmp_pos = advance_source_position(
+            TraceEntry(
+                index=19,
+                pc=0x1000,
+                opcode=0x4C,
+                mnemonic="JMP",
+                operand="$2000",
+                full_line="@19 PC=$1000 OP=$4C JMP $2000",
+                pre_pc=0x1000,
+                post_pc=0x2000,
+            ),
+            0,
+            [SourceInstruction("jmp_fail.s", 1, "L1000", "JMP", "MissingTarget")],
+            defaultdict(list, {"L1000": [0]}),
+            control_flow_sync_issues=unresolved_direct_jmp_issues,
+        )
+        assert unresolved_direct_jmp_pos == 1  # nosec B101
+        assert len(unresolved_direct_jmp_issues) == 1  # nosec B101
+        assert (
+            unresolved_direct_jmp_issues[0].reason == "jmp-unresolved-target"
+        )  # nosec B101
 
         symbols_file = root / "cpu65c02.cpp"
         symbols_file.write_text(
@@ -3771,6 +4243,55 @@ Labeled LDA #$01
         )
         assert indirect_jmp_runtime_events[0]["runtime_label"] == "LB3D9"  # nosec B101
         assert indirect_jmp_runtime_events[0]["target_source_index"] == 0  # nosec B101
+
+        indirect_jmp_diag = build_indirect_jmp_resync_diagnostics(
+            pending_indirect_jmp,
+            indirect_jmp_source,
+            current_source_index=1,
+            target_source_index=0,
+        )
+        assert len(indirect_jmp_diag) == 2  # nosec B101
+        assert "IJMP decision: method=next-trace-runtime-label" in indirect_jmp_diag[1]
+        assert "target=ijmp.s:1" in indirect_jmp_diag[1]
+
+        indirect_jmp_conflict_diag = build_indirect_jmp_conflict_diagnostics(
+            pending_indirect_jmp,
+            indirect_jmp_source,
+            current_source_index=1,
+        )
+        assert len(indirect_jmp_conflict_diag) == 2  # nosec B101
+        assert (
+            "IJMP conflict: method=next-trace-follow-failed"
+            in indirect_jmp_conflict_diag[1]
+        )
+        assert "runtime-label=LB3D9" in indirect_jmp_conflict_diag[1]
+
+        operand_label_diag = build_operand_label_mismatch_diagnostics(
+            TraceEntry(
+                index=77,
+                pc=0xB3DB,
+                opcode=0x90,
+                mnemonic="BCC",
+                operand="$B3E8",
+                full_line="@77 PC=$B3DB OP=$90 BCC $B3E8",
+                pre_pc=None,
+                post_pc=None,
+            ),
+            [
+                SourceInstruction("monitor.s", 911, None, "BCC", "LFDF6"),
+                SourceInstruction("monitor.s", 913, "LFDF6", "STY", "YSAV1"),
+            ],
+            source_index=0,
+            operand_label="LFDF6",
+            resolved_addr=0xB3E8,
+            expected_addr=0xFDF6,
+        )
+        assert len(operand_label_diag) == 2  # nosec B101
+        assert (
+            "OP-LABEL conflict: method=fixed-runtime-label-check"
+            in operand_label_diag[1]
+        )
+        assert "label=LFDF6, resolved=$B3E8, expected=$FDF6" in operand_label_diag[1]
 
         # Xhhhh and Lhhhh labels should resolve to the same source target.
         xmap_source = [
