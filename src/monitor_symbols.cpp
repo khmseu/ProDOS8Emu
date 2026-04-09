@@ -4,6 +4,7 @@ namespace prodos8emu {
   namespace {
     static const MonitorSymbol kMonitorSymbols[] = {
         {0x0000, "LOC0"},                                             //
+        {0x0000, "Reg0"},                                             //
         {0x0000, "Z00"},                                              //
         {0x0001, "LOC1"},                                             //
         {0x0004, "Z04"},                                              //
@@ -206,6 +207,7 @@ namespace prodos8emu {
         {0x2342, "L2342", MonitorSymbolPc},                           //
         {0x235A, "L235A", MonitorSymbolPc},                           //
         {0x237A, "L237A", MonitorSymbolPc},                           //
+        {0x7300, "LstDBuf"},                                          //
         {0x7800, "Assembler", MonitorSymbolPc},                       // must have
         {0x7800, "ColdStrt", MonitorSymbolPc},                        //
         {0x7800, "X7800", MonitorSymbolPc},                           //
@@ -293,6 +295,18 @@ namespace prodos8emu {
         {0x7D29, "PrtSetup", MonitorSymbolPc},                        //
         {0x7D2E, "IsFileLst", MonitorSymbolPc},                       //
         {0x7D33, "ValROM", MonitorSymbolPc},                          //
+        {0x7D3B, "IsDevOL", MonitorSymbolPc},                         //
+        {0x7D58, "AdjMem", MonitorSymbolPc},                          //
+        {0x7D6F, "ChkErr", MonitorSymbolPc},                          //
+        {0x7D8C, "ParseDCS", MonitorSymbolPc},                        //
+        {0x7D8E, "ParseLoop", MonitorSymbolPc},                       //
+        {0x7DA4, "IsPL", MonitorSymbolPc},                            //
+        {0x7DB0, "IsFileLst", MonitorSymbolPc},                       //
+        {0x7DC5, "Lst2File", MonitorSymbolPc},                        //
+        {0x7DC7, "ParseLoop2", MonitorSymbolPc},                      //
+        {0x7DD4, "SkipIt3", MonitorSymbolPc},                         //
+        {0x7DD7, "OpnLstFile", MonitorSymbolPc},                      //
+        {0x7DF2, "SendCR", MonitorSymbolPc},                          //
         {0x7E19, "L7E19", MonitorSymbolPc},                           //
         {0x7E1B, "L7E1B", MonitorSymbolPc},                           //
         {0x7E25, "ToUpper", MonitorSymbolPc},                         //
@@ -471,6 +485,8 @@ namespace prodos8emu {
         {0x92F8, "L92F8", MonitorSymbolPc},                           //
         {0x9306, "L9306", MonitorSymbolPc},                           //
         {0x9334, "L9334", MonitorSymbolPc},                           //
+        {0x9340, "L9340", MonitorSymbolPc},                           //
+        {0x9356, "L9356", MonitorSymbolPc},                           //
         {0x935F, "doRtn6", MonitorSymbolPc},                          //
         {0x9508, "ListCode", MonitorSymbolPc},                        //
         {0x9528, "doRtn8", MonitorSymbolPc},                          //
@@ -497,6 +513,7 @@ namespace prodos8emu {
         {0x9632, "L9632", MonitorSymbolPc},                           //
         {0x963A, "L963A", MonitorSymbolPc},                           //
         {0x9642, "L9642", MonitorSymbolPc},                           //
+        {0x964D, "L964D", MonitorSymbolPc},                           //
         {0x9652, "L9652", MonitorSymbolPc},                           //
         {0x9666, "L9666", MonitorSymbolPc},                           //
         {0x9671, "L9671", MonitorSymbolPc},                           //
@@ -518,6 +535,11 @@ namespace prodos8emu {
         {0x970C, "PrtChar", MonitorSymbolPc},                         //
         {0x9715, "L9715", MonitorSymbolPc},                           //
         {0x9721, "L9721", MonitorSymbolPc},                           //
+        {0x9739, "L9739", MonitorSymbolPc},                           //
+        {0x9761, "L9761", MonitorSymbolPc},                           //
+        {0x9765, "L9765", MonitorSymbolPc},                           //
+        {0x976F, "L976F", MonitorSymbolPc},                           //
+        {0x9777, "L9777", MonitorSymbolPc},                           //
         {0x9786, "L9786", MonitorSymbolPc},                           //
         {0x9797, "L9797", MonitorSymbolPc},                           //
         {0x979C, "L979C", MonitorSymbolPc},                           //
@@ -629,6 +651,8 @@ namespace prodos8emu {
         {0x9E86, "WrObjRN"},                                          //
         {0x9E87, "WrObjDB"},                                          //
         {0x9E89, "WrObjLen"},                                         //
+        {0x9E8E, "WrLstRN"},                                          //
+        {0x9E91, "WrLstLen"},                                         //
         {0x9E9A, "L9E9A", MonitorSymbolPc},                           //
         {0x9EA2, "GFInfoPB"},                                         //
         {0x9EA3, "GFIPN"},                                            //
@@ -640,10 +664,13 @@ namespace prodos8emu {
         {0x9ECB, "L9ECB", MonitorSymbolPc},                           //
         {0x9ECF, "DestroyPN"},                                        //
         {0x9ED2, "CloseRN"},                                          //
+        {0x9ED9, "OLUnit"},                                           //
+        {0x9EDA, "OLBufAdr"},                                         //
         {0x9EDC, "L9EDC"},                                            //
         {0x9F1D, "ObjPNB"},                                           //
         {0x9F5E, "ChnPNB"},                                           //
         {0x9F83, "X9F83"},                                            //
+        {0xA021, "LstPNB"},                                           //
         {0xA042, "ftypeT"},                                           //
         {0xA04C, "XA04C"},                                            //
         {0xA056, "XA056"},                                            //
@@ -793,6 +820,7 @@ namespace prodos8emu {
         {0xBC00, "SavCmdB"},                                          //
         {0xBC80, "ExecLineB"},                                        //
         {0xBD00, "ObjDataB"},                                         //
+        {0xBD00, "XBD00"},                                            //
         {0xBD80, "AsmParmB"},                                         //
         {0xBE00, "XBE00"},                                            //
         {0xBE40, "DevCtlS"},                                          //
@@ -805,6 +833,7 @@ namespace prodos8emu {
         {0xBF90, "P8DATE"},                                           //
         {0xBF92, "P8TIME"},                                           //
         {0xBF98, "MACHID"},                                           //
+        {0xBF99, "SLTBYT"},                                           //
         {0xC000, "IOADR"},                                            //
         {0xC000, "KBD"},                                              //
         {0xC00C, "CLR80VID"},                                         //
@@ -827,20 +856,32 @@ namespace prodos8emu {
         {0xD01A, "ChkLoop", MonitorSymbolPc},                         //
         {0xD025, "LD025", MonitorSymbolPc},                           //
         {0xD037, "ToBR", MonitorSymbolPc},                            //
+        {0xD03D, "ToBR2", MonitorSymbolPc},                           //
+        {0xD052, "SW16RTN", MonitorSymbolPc},                         //
         {0xD056, "LD056", MonitorSymbolPc},                           //
         {0xD05C, "LD05C", MonitorSymbolPc},                           //
         {0xD05F, "LD05F"},                                            //
+        {0xD060, "LD060"},                                            //
         {0xD06A, "LD06A", MonitorSymbolPc},                           //
         {0xD076, "LD076", MonitorSymbolPc},                           //
         {0xD078, "LD078", MonitorSymbolPc},                           //
         {0xD07F, "LD07F"},                                            //
+        {0xD080, "LD080"},                                            //
         {0xD081, "LD081", MonitorSymbolPc},                           //
         {0xD083, "LD083", MonitorSymbolPc},                           //
         {0xD096, "LD096", MonitorSymbolPc},                           //
         {0xD099, "LD099", MonitorSymbolPc},                           //
+        {0xD09F, "SW16LD", MonitorSymbolPc},                          //
+        {0xD0A1, "LD0A1", MonitorSymbolPc},                           //
         {0xD0A2, "LD0A2", MonitorSymbolPc},                           //
+        {0xD0AA, "SW16ST", MonitorSymbolPc},                          //
+        {0xD0AB, "LD0AB", MonitorSymbolPc},                           //
         {0xD0B1, "LD0B1", MonitorSymbolPc},                           //
+        {0xD0B5, "SW16STat", MonitorSymbolPc},                        //
+        {0xD0B6, "LD0B6", MonitorSymbolPc},                           //
+        {0xD0BD, "SW16INR", MonitorSymbolPc},                         //
         {0xD0BF, "LD0BF", MonitorSymbolPc},                           //
+        {0xD0C3, "LD0C3", MonitorSymbolPc},                           //
         {0xD0CE, "LD0CE", MonitorSymbolPc},                           //
         {0xD0E3, "LD0E3", MonitorSymbolPc},                           //
         {0xD0EB, "LD0EB", MonitorSymbolPc},                           //
@@ -850,7 +891,9 @@ namespace prodos8emu {
         {0xD12D, "LD12D", MonitorSymbolPc},                           //
         {0xD138, "LD138", MonitorSymbolPc},                           //
         {0xD14C, "LD14C", MonitorSymbolPc},                           //
+        {0xD162, "SW16DCR", MonitorSymbolPc},                         //
         {0xD163, "LD163", MonitorSymbolPc},                           //
+        {0xD168, "LD168", MonitorSymbolPc},                           //
         {0xD16E, "LD16E", MonitorSymbolPc},                           //
         {0xD172, "doRtn", MonitorSymbolPc},                           //
         {0xD198, "LD198", MonitorSymbolPc},                           //
@@ -862,7 +905,8 @@ namespace prodos8emu {
         {0xD1CE, "DoSort", MonitorSymbolPc},                          //
         {0xD1D6, "WhileLoop", MonitorSymbolPc},                       //
         {0xD1E1, "LD1E1", MonitorSymbolPc},                           //
-        {0xD222, "LD222", MonitorSymbolPc},                           //
+        {0xD222, "SW16SET", MonitorSymbolPc},                         //
+        {0xD235, "LD235", MonitorSymbolPc},                           //
         {0xD2D5, "PrSymTbl", MonitorSymbolPc},                        //
         {0xD2D8, "LD2D8", MonitorSymbolPc},                           //
         {0xD2E4, "LD2E4", MonitorSymbolPc},                           //
@@ -883,10 +927,15 @@ namespace prodos8emu {
         {0xD387, "AdvRecP", MonitorSymbolPc},                         //
         {0xD38F, "LD38F", MonitorSymbolPc},                           //
         {0xD397, "LD397", MonitorSymbolPc},                           //
+        {0xD3A0, "Chk4ROM", MonitorSymbolPc},                         //
+        {0xD3A3, "LD3A3", MonitorSymbolPc},                           //
+        {0xD3A9, "LD3A9", MonitorSymbolPc},                           //
+        {0xD3B1, "LD3B1", MonitorSymbolPc},                           //
         {0xD3D4, "ErrMsgT"},                                          //
         {0xD41E, "FileTxt"},                                          //
         {0xD425, "ASEndTxt"},                                         //
         {0xD501, "InLinTxt"},                                         //
+        {0xD7B7, "LD7B7"},                                            //
         {0xD835, "OpcodeT"},                                          //
         {0xD90A, "CycTimes"},                                         //
         {0xD9DF, "CharMap1"},                                         //
@@ -894,6 +943,12 @@ namespace prodos8emu {
         {0xDD41, "XDD41", MonitorSymbolPc},                           //
         {0xDD4A, "LDD4A", MonitorSymbolPc},                           //
         {0xDD53, "LDD53", MonitorSymbolPc},                           //
+        {0xDD5F, "_EDITOR2_98", MonitorSymbolPc},                     //
+        {0xDD6E, "LDD6E", MonitorSymbolPc},                           //
+        {0xDD74, "LDD74", MonitorSymbolPc},                           //
+        {0xDD7F, "LDD7F", MonitorSymbolPc},                           //
+        {0xDD8C, "LDD8C", MonitorSymbolPc},                           //
+        {0xDD99, "LDD99", MonitorSymbolPc},                           //
         {0xDDBE, "DefTabsT"},                                         //
         {0xDE18, "IRQV"},                                             //
         {0xDE19, "IRQV"},                                             //
@@ -1125,13 +1180,14 @@ namespace prodos8emu {
         {0xFB94, "LFB94", MonitorSymbolPc},                           //
         {0xFBC1, "LFBC1", MonitorSymbolPc},                           //
         {0xFBD0, "LFBD0", MonitorSymbolPc},                           //
-        {0xFBD9, "LFBD9", MonitorSymbolPc},                           //
+        {0xFBD9, "BELL1shouldreallybe", MonitorSymbolPc},             //
         {0xFBE4, "LFBE4", MonitorSymbolPc},                           //
         {0xFBEF, "LFBEF", MonitorSymbolPc},                           //
         {0xFBF0, "LFBF0", MonitorSymbolPc},                           //
         {0xFBF4, "LFBF4", MonitorSymbolPc},                           //
         {0xFBFC, "LFBFC", MonitorSymbolPc},                           //
         {0xFBFD, "LFBFD", MonitorSymbolPc},                           //
+        {0xFC10, "LFC10", MonitorSymbolPc},                           //
         {0xFC22, "LFC22", MonitorSymbolPc},                           //
         {0xFC24, "LFC24", MonitorSymbolPc},                           //
         {0xFC2B, "LFC2B", MonitorSymbolPc},                           //
@@ -1168,5 +1224,4 @@ namespace prodos8emu {
   std::span<const MonitorSymbol> get_monitor_symbols() {
     return kMonitorSymbols;
   }
-
 }  // namespace prodos8emu

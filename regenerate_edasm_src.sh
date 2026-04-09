@@ -64,6 +64,9 @@ while IFS= read -r src_file; do
 	perl -pe 's/\r\n/\n/g; s/\r/\n/g' <"$src_file" >"$dst_file"
 done < <(find "$EXTRACTED_SRC_DIR" -type f -name "*.S" | sort)
 
+mkdir -vp "$ROOT_DIR/EDASM.SRC/Monitor"
+ln -sfv ../../../PEAdisasm/work/am_output.txt "$ROOT_DIR/EDASM.SRC/Monitor/Monitor.S"
+
 echo "Running RTN marker insertion..."
 ./insert_rtn_markers.sh
 

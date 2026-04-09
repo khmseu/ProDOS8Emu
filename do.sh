@@ -23,7 +23,7 @@ m)
 	"${AM_SCRIPT}"
 	;;
 a)
-	python3 tools/disassembly_log_analyzer.py
+	echo q | python3 tools/disassembly_log_analyzer.py
 	;;
 v)
 	./tools/diff_continuation_lines.py prodos8emu_disassembly_trace.log prodos8emu_disassembly_trace.annotated.log >prodos8emu_disassembly_trace.diff
