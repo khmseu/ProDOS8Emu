@@ -178,6 +178,12 @@ add_test(NAME python_linux_to_prodos_text_test
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# Python unit test for prodos_text_to_linux.py
+add_test(NAME python_prodos_text_to_linux_test
+    COMMAND python3 -B -m unittest tests.python_prodos_text_to_linux_test
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # Python unit test for edasm_setup.py
 add_test(NAME python_edasm_setup_test
     COMMAND python3 -B -m unittest tests.python_edasm_setup_test

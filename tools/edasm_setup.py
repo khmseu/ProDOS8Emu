@@ -21,6 +21,7 @@ from typing import List, Optional, Tuple
 
 # Import from sibling tools
 sys.path.insert(0, str(Path(__file__).parent))
+import prodos_text_to_linux
 from linux_to_prodos_text import convert_file_in_place
 
 
@@ -101,6 +102,36 @@ def parse_text_mapping(spec: str) -> Tuple[str, str]:
         return src, uppercase_prodos_path(dest)
     else:
         # No dest specified, use uppercase basename of source
+        return spec, os.path.basename(spec).upper()
+
+
+def parse_out_text_mapping(spec: str) -> Tuple[str, str]:
+    """Parse --out-text HOST_DEST[:VOLUME_SRC] argument.
+
+    Args:
+        spec: Out-text mapping specification
+
+    Returns:
+        (host_dest_path, volume_src_path_uppercased) tuple
+
+    Raises:
+        ValueError: If spec format is invalid
+    """
+    if not spec or spec == ":":
+        raise ValueError("Invalid out-text mapping: empty destination")
+
+    if spec.startswith(":"):
+        raise ValueError("Invalid out-text mapping: missing destination")
+
+    if ":" in spec:
+        dest, src = spec.split(":", 1)
+        if not dest:
+            raise ValueError("Invalid out-text mapping: empty destination")
+        if not src:
+            raise ValueError("Invalid out-text mapping: empty source")
+        return dest, uppercase_prodos_path(src)
+    else:
+        # No src specified, use uppercase basename of dest
         return spec, os.path.basename(spec).upper()
 
 
@@ -554,6 +585,40 @@ def import_text_files(
         print(f"Imported and converted: {src} -> {dest_path}")
 
 
+def export_text_files(
+    out_text_mappings: List[Tuple[str, str]], volume_dir: str
+) -> None:
+    """Copy ProDOS TEXT files from volume to host and convert CR line endings to LF.
+
+    Args:
+        out_text_mappings: List of (host_dest, volume_src) tuples
+        volume_dir: Source volume directory
+
+    Raises:
+        RuntimeError: If export or conversion fails
+    """
+    for host_dest, volume_src in out_text_mappings:
+        src_path = Path(volume_dir) / volume_src
+        host_dest_path = Path(host_dest)
+
+        # Copy from volume to host destination
+        try:
+            host_dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src_path), str(host_dest_path))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to copy {src_path} to {host_dest_path}: {e}"
+            ) from e
+
+        # Convert the host copy from ProDOS CR to Linux LF
+        try:
+            prodos_text_to_linux.convert_file_in_place(str(host_dest_path))
+        except Exception as e:
+            raise RuntimeError(f"Failed to convert {host_dest_path}: {e}") from e
+
+        print(f"Exported and converted: {src_path} -> {host_dest_path}")
+
+
 def run_emulator(
     runner_path: str,
     rom_path: str,
@@ -673,6 +738,12 @@ Examples:
         "--lossy-text",
         action="store_true",
         help="Use lossy ASCII conversion for text files",
+    )
+    parser.add_argument(
+        "--out-text",
+        action="append",
+        dest="out_text_mappings",
+        help="Export ProDOS TEXT file after run as HOST_DEST[:VOLUME_SRC] (repeatable; CR->LF)",
     )
 
     # File rearrangement
@@ -801,6 +872,14 @@ def main():
                 args.disassembly_trace,
                 args.max_instructions,
             )
+
+            # Export and convert ProDOS TEXT files to Linux format
+            if args.out_text_mappings:
+                print("Exporting text files...")
+                out_text_mappings = [
+                    parse_out_text_mapping(spec) for spec in args.out_text_mappings
+                ]
+                export_text_files(out_text_mappings, str(volume_dir))
         else:
             print("Setup complete (--no-run specified)")
 
