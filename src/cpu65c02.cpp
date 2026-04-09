@@ -2634,6 +2634,7 @@ namespace prodos8emu {
       uint16_t    address;
       const char* label;
     };
+
     static const MarkerLabel kMarkerLabelMap[] = {
         {0x7800, ">>> ENTER EdAsm.Asm"},
         {0x7816, ">>> ENTER ExecAsm"},
@@ -2742,11 +2743,11 @@ namespace prodos8emu {
     const char* mutator = zp_monitor_mutator_name(opcode);
 
     for (size_t i = 0; i < m_stepZpMonitorEventCount; ++i) {
-      const ZpMonitorEvent& event       = m_stepZpMonitorEvents[i];
+      const ZpMonitorEvent& event = m_stepZpMonitorEvents[i];
       if (event.oldValue == event.newValue) {
         continue;
       }
-      const MonitorSymbol*  fieldSymbol = find_monitor_symbol(event.address, MonitorSymbolWrite);
+      const MonitorSymbol* fieldSymbol = find_monitor_symbol(event.address, MonitorSymbolWrite);
       if (fieldSymbol == nullptr) {
         continue;
       }
@@ -2851,6 +2852,7 @@ namespace prodos8emu {
     os << "$";
     write_hex(os, addr, 2);
     os << trailing;
+    append_symbol_suffix_for_address(os, addr);
   }
 
   static std::string disassembly_text_for_opcode(const ConstMemoryBanks& banks, uint16_t pc,

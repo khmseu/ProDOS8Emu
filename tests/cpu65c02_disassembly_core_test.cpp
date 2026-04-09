@@ -451,7 +451,7 @@ static void disassembly_emits_known_pc_symbol_in_trace_header(int& failures) {
   writeProgram(*mem, start,
                {
                    0xA5,
-                   0x25,
+                   0x26,
                });
   prodos8emu::write_u16_le(mem->banks(), 0xFFFC, start);
 
@@ -463,7 +463,7 @@ static void disassembly_emits_known_pc_symbol_in_trace_header(int& failures) {
   cpu.step();
 
   const std::string expected =
-      "@1 PC=$FC22 (LFC22) OP=$A5 LDA $25 ; PRE PC=$FC22 A=$00 X=$00 Y=$00 SP=$FF P=$24 "
+      "@1 PC=$FC22 (LFC22) OP=$A5 LDA $26 ; PRE PC=$FC22 A=$00 X=$00 Y=$00 SP=$FF P=$24 "
       "POST PC=$FC24 A=$00 X=$00 Y=$00 SP=$FF P=$26\n";
   const std::string actual = disassemblyLog.str();
 
