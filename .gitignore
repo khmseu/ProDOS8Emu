@@ -41,6 +41,7 @@ _codeql_detected_source_root
 *.diff
 *.log
 EDASM.SRC/
+inputs.bak/
 inputs/
 new_labels_kMonitorSymbols.txt
 runtime_labels_needed.tsv

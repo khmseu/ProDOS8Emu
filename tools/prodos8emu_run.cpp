@@ -107,6 +107,8 @@ ParseResult parse_args(int argc, char* argv[], CliOptions& opts) {
 }
 
 int main(int argc, char* argv[]) {
+  constexpr uint16_t kCout1Pc = 0xFDF0;
+
   CliOptions opts;
 
   ParseResult result = parse_args(argc, argv, opts);
@@ -140,6 +142,15 @@ int main(int argc, char* argv[]) {
     std::ofstream coutLogFile;
     std::ofstream traceLogFile;
     std::ofstream disassemblyTraceLogFile;
+    std::ofstream consoleOutputLogFile;
+
+    const std::string consoleOutputLogPath = "prodos8emu_console_output.log";
+    consoleOutputLogFile.open(consoleOutputLogPath);
+    if (!consoleOutputLogFile.is_open()) {
+      std::cerr << "Error: Could not open console output log file: " << consoleOutputLogPath
+                << "\n";
+      return 1;
+    }
 
     if (opts.disassembly_trace) {
       const std::string disassemblyTraceLogPath = "prodos8emu_disassembly_trace.log";
@@ -222,8 +233,26 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Starting CPU execution (max " << opts.max_instructions << " instructions)...\n\n";
 
-    // Run CPU with bounded instruction count
-    uint64_t instructionCount = cpu.run(opts.max_instructions);
+    // Run CPU with bounded instruction count and capture COUT1 characters.
+    uint64_t instructionCount = 0;
+    while (instructionCount < opts.max_instructions && !cpu.isStopped()) {
+      if (cpu.regs().pc == kCout1Pc) {
+        const uint8_t ch = static_cast<uint8_t>(cpu.regs().a & 0x7F);
+        if (ch == 0x0D) {
+          consoleOutputLogFile << '\n';
+        } else {
+          consoleOutputLogFile << static_cast<char>(ch);
+        }
+        consoleOutputLogFile.flush();
+      }
+
+      (void)cpu.step();
+      instructionCount++;
+
+      if (cpu.isWaiting()) {
+        break;
+      }
+    }
 
     // If we hit max instructions, dump stack and PC ring for debugging
     if (instructionCount >= opts.max_instructions && !cpu.isStopped() && !cpu.isWaiting()) {

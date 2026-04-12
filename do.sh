@@ -11,7 +11,7 @@
 case "$1" in
 d)
 	cmake --build build --config Debug --target all
-	./inputs/edasm.sh
+	./inputs.bak/edasm.sh
 	;;
 m)
 	AM_SCRIPT="${PRODOS8EMU_AM_SCRIPT:-../PEAdisasm/work/am.sh}"

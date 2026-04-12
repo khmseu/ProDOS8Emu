@@ -43,6 +43,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="work",
         help="Work directory to reset and use (default: work)",
     )
+    parser.add_argument(
+        "--max-instructions",
+        type=int,
+        help="Maximum instructions to execute (passed to emulator runner)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable emulator debug logs (passed to edasm_setup.py)",
+    )
     return parser.parse_args(argv)
 
 
@@ -51,8 +61,13 @@ def write_autost(
 ) -> None:
     """Write the EdAsm.AutoST command script."""
     autost_path.parent.mkdir(parents=True, exist_ok=True)
+    source_upper = source_file.upper()
+    listing_upper = listing_file.upper()
+    output_upper = output_file.upper()
     content = (
-        f"PR#1,/OUT/{listing_file}\n" f"ASM {source_file},/OUT/{output_file}\n" "END\n"
+        f"PR#1,/OUT/{listing_upper}\n"
+        f"ASM {source_upper},/OUT/{output_upper}\n"
+        "END\n"
     )
     autost_path.write_text(content, encoding="ascii")
 
@@ -66,7 +81,12 @@ def reset_work_dir(work_dir: Path) -> Path:
     return out_dir
 
 
-def run_edasm_setup(inputs: list[str], work_dir: Path) -> None:
+def run_edasm_setup(
+    inputs: list[str],
+    work_dir: Path,
+    max_instructions: int | None = None,
+    debug: bool = False,
+) -> None:
     """Invoke tools/edasm_setup.py with fixed required parameters."""
     repo_root = Path(__file__).resolve().parent.parent
     edasm_setup = repo_root / "tools" / "edasm_setup.py"
@@ -90,6 +110,12 @@ def run_edasm_setup(inputs: list[str], work_dir: Path) -> None:
 
     for path in inputs:
         cmd.extend(["--text", path])
+
+    if max_instructions is not None:
+        cmd.extend(["--max-instructions", str(max_instructions)])
+
+    if debug:
+        cmd.append("--debug")
 
     result = subprocess.run(cmd, cwd=repo_root, check=False)  # nosec B603
     if result.returncode != 0:
@@ -136,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         write_autost(autost_path, source_file, args.listing, args.output)
         out_dir = reset_work_dir(work_dir)
-        run_edasm_setup(args.input, work_dir)
+        run_edasm_setup(args.input, work_dir, args.max_instructions, args.debug)
         convert_out_text_files(out_dir)
         return 0
     except (OSError, RuntimeError) as e:
