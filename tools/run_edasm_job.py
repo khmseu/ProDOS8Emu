@@ -11,11 +11,99 @@ Workflow:
 from __future__ import annotations
 
 import argparse
+import datetime
+import io
 import os
 import shutil
 import subprocess  # nosec B404
 import sys
+import tarfile
 from pathlib import Path
+
+# Glob pattern matching all emulator-generated log files.
+_EMULATOR_LOG_GLOB = "prodos8emu_*.log"
+
+
+def remove_emulator_logs(repo_root: Path) -> None:
+    """Delete any pre-existing emulator log files so only fresh logs survive."""
+    for log_path in repo_root.glob(_EMULATOR_LOG_GLOB):
+        log_path.unlink(missing_ok=True)
+
+
+def _add_text_file_to_tar(tar: tarfile.TarFile, arcname: str, content: str) -> None:
+    """Add an in-memory UTF-8 text file to a tar archive."""
+    data = content.encode("utf-8")
+    tar_info = tarfile.TarInfo(name=arcname)
+    tar_info.size = len(data)
+    tar.addfile(tar_info, io.BytesIO(data))
+
+
+def _build_volumes_file_list(volumes_root: Path) -> str:
+    """Build a sorted list of all files under the volumes root."""
+    all_files = sorted(
+        path.relative_to(volumes_root).as_posix()
+        for path in volumes_root.rglob("*")
+        if path.is_file()
+    )
+    if not all_files:
+        return ""
+    return "\n".join(all_files) + "\n"
+
+
+def archive_job_outputs(
+    repo_root: Path, work_dir: Path, inputs: list[str], invocation_argv: list[str]
+) -> Path:
+    """Create a compressed tar archive of OUT volume, ProDOS-format inputs, and emulator logs.
+
+    The archive is placed in *repo_root* and named with a timestamp so successive
+    runs never overwrite each other.
+
+    Archive layout::
+
+        OUT/          -- all files from work/volumes/OUT/
+        inputs/       -- ProDOS-format input files from work/volumes/EDASM/
+        logs/         -- all prodos8emu_*.log files
+    """
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_path = repo_root / f"edasm_job_{timestamp}.tar.gz"
+
+    volumes_dir = work_dir / "volumes"
+    out_dir = volumes_dir / "OUT"
+    edasm_vol = work_dir / "volumes" / "EDASM"
+
+    with tarfile.open(archive_path, "w:gz") as tar:
+        # OUT volume
+        if out_dir.exists():
+            tar.add(out_dir, arcname="OUT")
+
+        # ProDOS-format input files (imported into the EDASM volume with uppercased names)
+        for input_path_str in inputs:
+            prodos_name = Path(input_path_str).name.upper()
+            prodos_file = edasm_vol / prodos_name
+            if prodos_file.exists():
+                tar.add(prodos_file, arcname=f"inputs/{prodos_name}")
+
+        # Emulator logs
+        for log_path in sorted(repo_root.glob(_EMULATOR_LOG_GLOB)):
+            tar.add(log_path, arcname=f"logs/{log_path.name}")
+
+        # Invocation arguments passed to run_edasm_job.py
+        invocation_lines = ["run_edasm_job.py invocation arguments:"]
+        invocation_lines.extend(invocation_argv)
+        _add_text_file_to_tar(
+            tar,
+            "metadata/run_edasm_job_arguments.txt",
+            "\n".join(invocation_lines) + "\n",
+        )
+
+        # Full sorted file list under work/volumes
+        _add_text_file_to_tar(
+            tar,
+            "metadata/volumes_file_list.txt",
+            _build_volumes_file_list(volumes_dir),
+        )
+
+    return archive_path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -154,15 +242,23 @@ def convert_out_text_files(out_dir: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    invocation_argv = list(sys.argv[1:] if argv is None else argv)
 
     source_file = Path(args.input[0]).name
     autost_path = Path("inputs") / "EdAsm.AutoST"
     work_dir = Path(args.work_dir)
 
+    repo_root = Path(__file__).resolve().parent.parent
+
     try:
         write_autost(autost_path, source_file, args.listing, args.output)
         out_dir = reset_work_dir(work_dir)
+        remove_emulator_logs(repo_root)
         run_edasm_setup(args.input, work_dir, args.max_instructions, args.debug)
+        archive_path = archive_job_outputs(
+            repo_root, work_dir, args.input, invocation_argv
+        )
+        print(f"Job archive: {archive_path}")
         convert_out_text_files(out_dir)
         return 0
     except (OSError, RuntimeError) as e:
